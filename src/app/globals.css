@@ -1,26 +1,79 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+  Design tokens.
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  This is an operations console that someone reads every morning, often with
+  money decisions attached. It is built for density and legibility rather than
+  decoration: a restrained neutral base, one accent, and semantic colours that
+  only ever mean one thing.
+*/
+
+@theme {
+  --color-canvas: oklch(0.985 0.002 250);
+  --color-surface: oklch(1 0 0);
+  --color-surface-muted: oklch(0.972 0.003 250);
+  --color-border: oklch(0.912 0.005 250);
+  --color-border-strong: oklch(0.84 0.008 250);
+
+  --color-ink: oklch(0.22 0.015 260);
+  --color-ink-muted: oklch(0.48 0.012 260);
+  --color-ink-subtle: oklch(0.62 0.01 260);
+
+  --color-accent: oklch(0.52 0.16 258);
+  --color-accent-soft: oklch(0.95 0.03 258);
+
+  --color-positive: oklch(0.55 0.14 152);
+  --color-positive-soft: oklch(0.95 0.04 152);
+  --color-caution: oklch(0.68 0.14 75);
+  --color-caution-soft: oklch(0.96 0.05 85);
+  --color-negative: oklch(0.55 0.19 25);
+  --color-negative-soft: oklch(0.95 0.04 25);
+  --color-demo: oklch(0.55 0.14 300);
+  --color-demo-soft: oklch(0.96 0.03 300);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  @theme {
+    --color-canvas: oklch(0.18 0.012 262);
+    --color-surface: oklch(0.22 0.014 262);
+    --color-surface-muted: oklch(0.26 0.014 262);
+    --color-border: oklch(0.32 0.014 262);
+    --color-border-strong: oklch(0.42 0.016 262);
+
+    --color-ink: oklch(0.96 0.004 260);
+    --color-ink-muted: oklch(0.76 0.01 260);
+    --color-ink-subtle: oklch(0.62 0.012 260);
+
+    --color-accent: oklch(0.72 0.14 258);
+    --color-accent-soft: oklch(0.3 0.06 258);
+
+    --color-positive: oklch(0.75 0.15 152);
+    --color-positive-soft: oklch(0.3 0.06 152);
+    --color-caution: oklch(0.8 0.14 80);
+    --color-caution-soft: oklch(0.32 0.06 80);
+    --color-negative: oklch(0.7 0.17 25);
+    --color-negative-soft: oklch(0.32 0.07 25);
+    --color-demo: oklch(0.75 0.13 300);
+    --color-demo-soft: oklch(0.3 0.06 300);
   }
 }
 
+html {
+  color-scheme: light dark;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Figures line up column to column when they are tabular. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }

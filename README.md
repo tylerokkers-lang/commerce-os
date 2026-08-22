@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Commerce OS
 
-## Getting Started
+An ecommerce operating system for a Shopify store and an Amazon UK seller
+account, run as one business with two independent sales channels.
 
-First, run the development server:
+It is not a storefront. It is the layer above the storefronts: research,
+sourcing, compliance, pricing, fulfilment, invoicing, VAT and cashflow, with
+automation that has to ask before it spends your money.
+
+## Running it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`. No credentials, no database and no setup are
+needed. The system starts in **demo mode** with a complete simulated business,
+and every screen is labelled as simulated.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Checks
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run check
+```
 
-## Learn More
+Runs the TypeScript compiler, ESLint, the unit tests, and the schema
+verification, which applies every migration to a real Postgres engine in memory
+and asserts the guarantees the application relies on.
 
-To learn more about Next.js, take a look at the following resources:
+## Going live
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Create a Supabase project and apply `supabase/migrations/*.sql` in order.
+2. Copy `.env.example` to `.env.local` and fill in the Supabase values.
+3. Set `COMMERCE_OS_MODE=live`.
+4. Add other integrations as you obtain them. Each one activates on its own;
+   the Integrations page shows exactly what is and is not connected.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+An integration is never reported as connected unless its credentials are
+genuinely present.
 
-## Deploy on Vercel
+## Documentation
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| File | What it covers |
+|---|---|
+| `docs/ARCHITECTURE.md` | How the system is put together and why |
+| `docs/DATABASE.md` | Schema, conventions and integrity rules |
+| `docs/COMPLIANCE.md` | Marketplace, tax and legal boundaries |
+| `docs/MILESTONES.md` | Build plan and current progress |
+| `HANDOVER.md` | Current state, for whoever picks this up next |
