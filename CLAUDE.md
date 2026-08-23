@@ -5,6 +5,11 @@ date as things change.
 `docs/ARCHITECTURE.md` explains the rules the code follows and why. Read it
 before adding a module.
 
+`docs/PRINCIPLES.md` governs every milestone from 3 onward (fact-first
+labelling, single source of truth, channel-aware status, compliance before
+automation, autonomy with guardrails, full auditability). Read it before
+starting any new milestone.
+
 Before pushing any change:
 
 ```bash

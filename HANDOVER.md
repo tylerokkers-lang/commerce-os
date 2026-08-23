@@ -5,7 +5,7 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026.
+Last updated: 23 August 2026 (re-verified, same day).
 
 ## 1. What this is
 
@@ -221,8 +221,51 @@ when a cheaper option was passed over and why.
   already exist (`saveSupplier`, `changeProductStage`) — the read side of
   live-mode product intelligence has no data source until a provider runs.
 - `changeProductStage` has not been exercised against a live Supabase project.
+- `changeProductStage` (`src/app/(dashboard)/opportunities/actions.ts`) has no
+  UI caller. It is fully unit-tested (`tests/lifecycle.test.ts`) and correct,
+  but no page currently renders a button or form that invokes it — there is
+  no "move to testing" / "reject" affordance anywhere in the app yet. This is
+  deliberate rather than an oversight: making the approval queue actionable is
+  explicitly Milestone 5/6 territory (catalogue automation, the automation
+  engine), and wiring a UI to it now would blur that boundary. Documented here
+  so it is not mistaken for a forgotten wire-up.
 
-## 12. Next step
+## 12. Re-verification (23 August 2026, same day, fresh session)
 
-Milestone 3, in `docs/MILESTONES.md`. Do not start Milestone 4 until Milestone 3
-is tested and working.
+A new session was asked to confirm Milestone 2 was genuinely complete before
+starting Milestone 3, rather than trust this file's claim. Every check was
+re-run independently and passed with no changes required:
+
+- `npx vitest run` — 203 tests, 13 files, all passing.
+- `npm run db:verify` — all 12 migrations apply cleanly to a fresh PGlite
+  instance; 54 tables, RLS/audit/money-type assertions all pass.
+- `npx tsc --noEmit` — clean.
+- `npm run lint` — clean.
+- `npm run build` — clean, all 19 routes compile.
+- Live browser walkthrough: all 19 routes return 200; `/api/health` correctly
+  reports every integration as unconfigured; `/research` correctly labels the
+  demo provider `healthy`/`Simulated` and every real provider `not configured`
+  with its exact missing environment variables; `/opportunities/demo-underdesk-footrest`
+  was read in full and confirmed the channel-divergence, remediability,
+  identifier-validation and score-explanation acceptance criteria all hold in
+  a live render, not just in tests.
+- A grep for `TODO`/`FIXME`/`not implemented`/stub markers across `src/`
+  turned up only the two intentional statements already documented (the
+  licensed-trends provider's "deliberately not implemented" note, and the
+  session guard's `throw new Error('Not authenticated')`).
+
+No regressions, no incomplete work beyond the two items in §11 (both
+deliberate, both now documented if they were not already). Nothing was
+changed in this session except documentation: `docs/PRINCIPLES.md` (new — the
+non-negotiable principles governing every future milestone) and
+`docs/MILESTONES.md` (Milestones 3–10 replaced with a revised, more detailed
+12-milestone roadmap; Milestones 1–2 untouched).
+
+## 13. Next step
+
+**The roadmap changed.** `docs/MILESTONES.md` Milestone 3 is now **Supplier
+intelligence** (a supplier connector framework, redundancy, and richer
+supplier scoring), not Shopify. Shopify and Amazon connector work moved to the
+new Milestone 4. Read `docs/PRINCIPLES.md` before starting it — every
+milestone from here on is governed by it. Do not start Milestone 4 until
+Milestone 3 is tested and working.

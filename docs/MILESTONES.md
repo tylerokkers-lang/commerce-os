@@ -93,38 +93,161 @@ was confirmed in the response; `npm run check` is clean.
   demo-mode-tested. The RLS split (history tables written via the service
   role) follows the same pattern as `saveSupplier`, which has been.
 
-## Milestone 3 — Shopify
+## Roadmap (revised)
 
-Products, inventory, orders, fulfilment, webhooks, reconciliation.
+The plan below supersedes the old Milestone 3–10 list further down this file's
+git history. It reflects the fuller vision for Commerce OS as an increasingly
+autonomous, multi-marketplace commerce operating system rather than a
+single-store dropshipping tool. Read `docs/PRINCIPLES.md` before starting any
+of these — every one of them is governed by it.
 
-## Milestone 4 — Amazon UK
+Build and verify each milestone before starting the next. Do not build ahead
+of verified data: a UI or engine for data that does not exist yet (a live
+provider, a connected marketplace) is exactly the kind of "mocked" work these
+milestones exist to avoid.
 
-SP-API auth and rate limiting, listings, inventory, pricing, orders, reports,
-and the compliance layer as a hard gate ahead of any listing call.
+## Milestone 3 — Supplier intelligence
 
-## Milestone 5 — Catalogue automation
+Build an extensible supplier connector framework: a common interface capable
+of supporting API suppliers, feed-based suppliers, CSV/manual suppliers, and
+future platforms, without hard-coding the application around one supplier.
+Each supplier/product relationship tracks cost, shipping, warehouse/country,
+stock and its freshness, dispatch/delivery estimates, tracking availability,
+cancellation rate, fulfilment success, price change history, and feed/API
+health, in addition to the branding and seller-of-record capability already
+built in Milestone 2.
 
-Testing protocol, winner and loser engines, automatic replacement, the approval
-queue made actionable.
+Extend supplier scoring with the connector-specific dimensions (integration
+quality, price stability, stock quality) alongside the existing reliability,
+delivery, quality, returns, tracking and compliance-capability dimensions, and
+keep it explainable exactly as it is today.
 
-## Milestone 6 — Supplier and fulfilment automation
+Build supplier redundancy: when a preferred supplier becomes unavailable, the
+system detects it, evaluates alternatives, recalculates profitability with the
+single profitability engine, re-checks compliance, and only switches
+automatically when the configured automation policy permits it — otherwise it
+requests approval. Do not claim a supplier integration exists unless an
+official API or a real, permitted feed backs it; a "connector" with no real
+credentials reports `not_configured`, exactly as the research providers do.
 
-Order routing, supplier submission with idempotency, tracking, exceptions.
+## Milestone 4 — Marketplace connector foundation
 
-## Milestone 7 — Invoicing
+Build the connector architecture before implementing every live marketplace.
+A common interface covers connection health, authentication status,
+product/listing sync, inventory sync, orders, fulfilment updates, returns
+where supported, fees, marketplace-specific compliance, webhooks, and
+scheduled reconciliation. Build Shopify first (modern Admin API), then Amazon
+UK (official Selling Partner API). Secrets live in environment variables only.
+Demo connectors are clearly marked as demo; live mode requires explicit
+configuration, exactly as `COMMERCE_OS_MODE=live` already requires it for the
+rest of the system.
 
-PDF generation, branding, numbering, Resend delivery with retry, credit notes.
+## Milestone 5 — Order and fulfilment orchestration
 
-## Milestone 8 — Finance
+The full order lifecycle: ingestion, validation, supplier selection, a
+profitability re-check against live order economics, a compliance re-check
+where the product's compliance basis has changed, fulfilment submission,
+supplier acknowledgement, tracking, marketplace update, delivery monitoring,
+returns and refunds, and financial reconciliation. Every retryable external
+action is idempotent — the `idempotency_key` pattern already used for
+`supplier_orders`, `invoices`, `refunds` and `inventory_movements` extends to
+every new retryable write. Handle timeouts, duplicate webhooks, supplier
+rejection, stock race conditions, missing tracking, partial fulfilment,
+cancellation and refund as first-class cases, not exceptions to a happy path.
+Build reconciliation jobs that detect when internal records disagree with a
+marketplace or supplier.
 
-Finance engine, VAT engine, threshold monitoring, Xero sync, accountant export.
+## Milestone 6 — Automation engine
 
-## Milestone 9 — AI CEO
+A formal trigger → conditions → rules → decision → permission check → action
+→ audit → monitoring pipeline, not automation logic scattered across cron
+files. Every decision this engine makes is subject to the automation levels
+in `docs/PRINCIPLES.md` §5 and produces an audit entry per §6. Job scheduling
+is frequency-appropriate and respects declared provider rate limits — near
+real-time for orders and inventory events where webhooks exist, 15–30 minutes
+for reconciliation, hourly for supplier checks, daily for scoring and the CEO
+briefing, weekly or slower for opportunity research. Frequency is configurable
+per job, not assumed to always be "faster is better."
 
-Daily report generation, recommendations grounded in system data only, the
-question-answering interface.
+## Milestone 7 — Analytics and business intelligence
 
-## Milestone 10 — Production hardening
+Revenue, orders, units, gross profit, contribution, contribution margin, ad
+spend, CAC, ROAS, MER, refunds, returns, supplier/delivery/marketplace/product
+performance, and cash movement, each clearly and separately defined — revenue,
+cash received, gross profit, contribution and accounting profit are never used
+interchangeably. Standard comparison periods (today, yesterday, this/last
+week, month to date, previous month, custom range), and every comparison
+states its comparison period explicitly.
 
-Security review, integration and automation test suites, monitoring, rate
-limiting, performance, deployment.
+## Milestone 8 — CEO dashboard
+
+The dashboard the owner actually reads every day: an AI CEO briefing (every
+claim traceable per the fact-first principle), a business pulse, an
+explainable business health score, winners and losers, products ready to
+scale (only when sales evidence, profitability, supplier capacity, returns,
+compliance and advertising efficiency all clear their thresholds), an
+attention-required section, an automation centre, a finance centre (VAT
+tracked, not filed — never presented as tax advice), supplier and advertising
+command centres, a product testing centre, a system health panel (connectors,
+workers, last sync, failed jobs), and an emergency stop that can pause
+automation categories while preserving critical order processing, itself
+logged like any other consequential action.
+
+## Milestone 9 — Commerce Intelligence chat
+
+An AI chat interface answering real questions about the actual business
+through a controlled tool/query layer with explicit per-tool permissions —
+never raw, unrestricted database access. Responses follow the fact-first
+categories (facts, calculations, rules, analysis, predictions, uncertainty)
+and the system can say "I don't have enough current data to answer that
+reliably." Credentials never enter conversational memory.
+
+## Milestone 10 — AI actions
+
+Four interaction modes — ask, analyse, recommend, execute — where "execute"
+still passes through the same automation-level and approval machinery as any
+other action. The AI is never the source of authority: rules, permissions,
+validation and the action layer built in Milestones 5–6 remain authoritative
+regardless of what the AI recommends.
+
+## Milestone 11 — Advertising intelligence
+
+Advertising platform integrations (Amazon Ads, Meta, Google, TikTok as
+applicable) evaluated on contribution after advertising, never on ROAS alone —
+a campaign can carry high revenue or a strong ROAS and still be unprofitable
+once real costs are included. Automated advertising actions carry account,
+daily and per-product limits, maximum percentage changes, approval thresholds,
+cooldowns, rollback logic and audit logging, with no path to unlimited
+automated spend.
+
+## Milestone 12 — International expansion
+
+Country/marketplace/currency/tax/shipping/documentation modelled explicitly,
+with product-marketplace eligibility, supplier delivery capability, delivery
+acceptability, profitability, documentation and tax configuration each
+assessed independently per destination. Unknown resolves to review, never to
+approval, exactly as in Milestone 2's compliance model.
+
+## Cross-cutting, ongoing
+
+These are not single milestones — they are requirements that apply across all
+of the above and should be revisited at every milestone boundary:
+
+- **Finance, invoicing and tax**: preserve the immutable-invoice and
+  append-only principles from Milestone 1; VAT/tax features track, calculate
+  from configured rules, remain auditable, and are never presented as
+  professional tax advice.
+- **Payments and cashflow**: model the real gap between a marketplace sale, a
+  processor settlement, fees, refunds, chargebacks, and outgoing supplier/ad/
+  tax payments — gross sales are never treated as cash available, and every
+  forecast is labelled as a forecast.
+- **Reliability**: idempotency, retries with backoff, reconciliation, health
+  monitoring, explicit stale-data detection, and the existing database
+  constraints and append-only records are the tools — the system is never
+  described as bulletproof, because external systems (marketplace APIs,
+  suppliers, networks) fail in ways it must detect and manage, not assume
+  away.
+- **Central Intelligence**: an orchestration layer combining data,
+  calculations, rules, specialist engines, AI reasoning and automation
+  policy — never a single "magic" AI function. Deterministic calculations
+  and compliance gates never depend solely on AI reasoning.
