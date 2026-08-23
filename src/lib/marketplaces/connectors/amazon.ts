@@ -12,6 +12,8 @@ import type {
   MarketplaceInventorySnapshot,
   MarketplaceListingSnapshot,
   MarketplaceOrderSnapshot,
+  WriteFailure,
+  WriteOutcome,
 } from './types'
 
 /**
@@ -45,6 +47,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     processRefunds: false, // Refunds on Amazon are customer/Amazon-initiated, not seller-submitted via this API.
     readFees: true,
     webhooks: true, // Amazon calls these "Notifications", delivered via SQS/EventBridge rather than a plain webhook URL.
+    verifyWrites: true,
   },
   requiredCredentials: [
     'AMAZON_SP_CLIENT_ID',
@@ -133,11 +136,12 @@ async function spApiRequest<T>(
   path: string,
   queryParams: Record<string, string> = {},
   body?: unknown,
+  methodOverride?: 'GET' | 'POST' | 'PATCH',
 ): Promise<Result<T, string>> {
   const tokenResult = await getAccessToken(creds)
   if (!tokenResult.ok) return tokenResult
 
-  const method = body === undefined ? 'GET' : 'POST'
+  const method = methodOverride ?? (body === undefined ? 'GET' : 'POST')
   const bodyText = body === undefined ? '' : JSON.stringify(body)
   const signed = signAwsRequestV4(
     { method, host: SP_API_HOST, path, queryParams, headers: {}, body: bodyText },
@@ -303,6 +307,43 @@ export class AmazonConnector implements MarketplaceConnector {
     if (!result.ok) return result
 
     return ok({ accepted: true, marketplaceReference: result.value.payload?.orderId ?? null })
+  }
+
+  /**
+   * Amazon's write side (price, inventory, listing status) all go through
+   * the Listings Items API, keyed by `sellerId` + seller SKU — neither of
+   * which this connector currently reads from the environment
+   * (`AMAZON_SP_SELLER_ID` does not yet exist alongside the four credentials
+   * `requiredCredentials` already declares), and the API expects a JSON
+   * Patch document whose exact shape depends on the product type's schema.
+   * Implementing this against a guessed shape, with no seller account to
+   * validate it against, is exactly the "fake live integration" this
+   * project's principles forbid — so these three honestly report
+   * `not_supported` rather than attempting a call that would almost
+   * certainly be wrong. This is a real gap, not a stub with matching
+   * capabilities: `descriptor.capabilities.writeListings` stays `true`
+   * because the *marketplace* supports writes; these three methods being
+   * `not_supported` is what actually tells a caller "not by this
+   * connector, not yet."
+   */
+  async updateListingPrice(): Promise<Result<WriteOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'Amazon price writes require the Listings Items API with a seller id and product-type-specific patch schema, not yet implemented in this connector.' })
+  }
+
+  async updateInventory(): Promise<Result<WriteOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'Amazon inventory writes require the Listings Items API with a seller id, not yet implemented in this connector.' })
+  }
+
+  async setListingStatus(): Promise<Result<WriteOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'Amazon listing status writes require the Listings Items API with a seller id, not yet implemented in this connector.' })
+  }
+
+  async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
+    // Reading a single listing's current price/status is possible through
+    // the Catalog Items API — this connector's `fetchListings` uses a
+    // different, batch-oriented call. A targeted single-ASIN verification
+    // is left for when a real write exists to verify.
+    return err(`Single-listing verification for ${externalId} is not yet implemented in this connector.`)
   }
 }
 

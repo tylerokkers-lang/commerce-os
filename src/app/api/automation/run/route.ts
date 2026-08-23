@@ -2,6 +2,8 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
+import { getSupabaseFactsLoader } from '@/lib/automation/facts'
+import { getMarketplaceConnector } from '@/lib/marketplaces/connectors/registry'
 
 /** Constant-time comparison so a wrong guess cannot be narrowed down by response timing. */
 function secretsMatch(provided: string, expected: string): boolean {
@@ -43,7 +45,7 @@ export async function POST(request: Request) {
     })
   }
 
-  const result = await runWorkerBatch(getSupabaseAutomationStore(), randomUUID())
+  const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID())
   return Response.json({ status: 'ok', checkedAt: new Date().toISOString(), ...result })
 }
 

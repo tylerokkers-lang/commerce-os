@@ -5,8 +5,9 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (Milestone 6 complete and rigorously
-re-verified end to end — see §18 before trusting any automation claim).
+Last updated: 23 August 2026 (Milestone 7 complete — production automation
+& real execution. See §19 before trusting any claim about live writes, and
+§18 for Milestone 6's engine-level verification).
 
 ## 1. What this is
 
@@ -631,11 +632,93 @@ to "does this run 24/7 without Claude Code" — see also `docs/MILESTONES.md`):
 **BLOCKED BY CREDENTIALS:** none specific to this milestone beyond the
 Supabase project itself, already covered above.
 
-## 19. Next step
+## 19. Milestone 7 (production automation & real execution) — what was built
 
-Milestone 7 (analytics and business intelligence), per `docs/MILESTONES.md`.
-Read `docs/PRINCIPLES.md` first. Before starting it, note that Milestone 8
-(CEO dashboard) is where `automation/repository.ts`'s `getAutomationStatus`
-should be surfaced a second time rather than re-summarised — read it, don't
-recompute it. Do not start Milestone 8 until Milestone 7 is tested and
-working.
+Connects the Milestone 6 automation engine to real execution. Nothing was
+rewritten; every new module composes an existing engine. Read
+`docs/MILESTONES.md`'s Milestone 7 section for the full breakdown — this is
+the short version plus the things you need to know before touching this
+code.
+
+- **Job-handler registry, all 14 named types**: `automation/handlers/*.ts`.
+  `automation_availability_check` (Milestone 6) is unchanged; the other 13
+  are new, each a thin orchestration around an existing engine, each with
+  its own end-to-end test in `tests/automation-job-handlers.test.ts`.
+- **Live facts** (`automation/facts.ts`, `factsTypes.ts`,
+  `inMemoryFactsLoader.ts`): the `FactsLoader` interface, satisfied for real
+  (Supabase queries against `products`/`suppliers`/`supplier_products`/
+  `channel_products`) and for tests (in-memory), exactly like Milestone 6's
+  `AutomationStore` pattern. Every fact carries `FRESH | STALE | UNKNOWN |
+  UNAVAILABLE` — `product_profitability_recheck` blocks rather than
+  recalculates when supplier cost data is stale or missing.
+- **Marketplace write capabilities**: `updateListingPrice`,
+  `updateInventory`, `setListingStatus`, `verifyListingState` added to
+  `MarketplaceConnector`. Demo connectors implement all four for real
+  (stateful — write then read-back genuinely works). Shopify's live
+  connector implements price and status writes against the real REST Admin
+  API (**IMPLEMENTED BUT NOT LIVE-VERIFIED** — no store to test against, same
+  standing caveat as every live connector method since Milestone 4).
+  Shopify inventory and every Amazon write honestly return `not_supported`
+  — read `docs/MILESTONES.md` for exactly why each one is a real gap rather
+  than a guess.
+- **`priceExecution.ts` / `supplierSwitchExecution.ts`**: the two flagship
+  SUBMIT → VERIFY → RECONCILE pipelines, each with a dedicated
+  `tests/automation-execution-e2e.test.ts` suite proving: permitted +
+  verified, requires-approval (connector never touched), blocked-by-policy
+  (connector never touched), marketplace-rejects-the-write (never marked
+  succeeded), and duplicate-event idempotency.
+- **Migration `0021`**: `external_ref`/`verification_status`/
+  `reconciliation_status` added to the existing `automation_actions` table
+  — deliberately not a new table or a wider status enum. 65 tables, 21
+  migrations.
+- **Two real bugs found by the new tests, same bug class as Milestone 6's**:
+  `worker.ts` and `approvalWorkflow.ts` were both deciding success from
+  their own copy of a policy verdict instead of `createAutomationAction`'s
+  actual returned status — meaning the runaway-safeguard's override could
+  be silently reverted a line later. Both now branch on the store's
+  authoritative status, not a locally-held verdict. **If you add a new
+  handler or execution pipeline, branch on `created.status`, never on the
+  policy result you already have in scope — this bug will recur otherwise.**
+- **Production-readiness view**: `/automation` now shows whether
+  `AUTOMATION_CRON_SECRET` is actually set, live job counts by status, and
+  every registered connector's real status — all read, none inferred.
+
+**The honest answer to "does this run 24/7 without you":** No, not yet, and
+here is exactly what would need to change:
+
+1. **Deploy Supabase for real.** Everything is proven against the exact
+   same `AutomationStore`/`FactsLoader` interfaces production code uses;
+   what is not proven anywhere is the live `@supabase/supabase-js` →
+   PostgREST HTTP path itself, because there is no way to run a real
+   PostgREST server against an in-process database in this environment.
+2. **Point an external scheduler at `POST /api/automation/run`** with
+   `AUTOMATION_CRON_SECRET` set on both sides — a Vercel Cron entry, any
+   host's scheduled-function feature, or a plain crontab `curl` line. On
+   whatever interval suits the business; nothing about the route cares.
+3. **Build the live event source(s)** that actually call `enqueueJob` for
+   real entities — a webhook receiver, a scheduled sweep querying
+   `products`/`suppliers` and calling `product_profitability_recheck` for
+   each, etc. `FactsLoader` answers "what is true for entity X"; nothing
+   yet decides "which entities need checking today."
+4. **Real Shopify/Amazon credentials**, to find out whether the
+   `IMPLEMENTED BUT NOT LIVE-VERIFIED` code actually works against a real
+   account, and to build the remaining `not_supported` write paths for
+   real (Shopify inventory needs a real store to resolve
+   `inventory_item_id`/`location_id` against; Amazon needs a seller id and
+   a validated product-type patch schema).
+
+**Verified:** 539 tests (up from 516), 21 migrations, typecheck/lint/build
+clean, every relevant route (`/automation`, `/automation/[id]`,
+`/approvals`, `/suppliers`, `/products`, `/marketplaces`, `/orders`,
+`/api/automation/run`) confirmed live with no console errors.
+
+## 20. Next step
+
+Milestone 8 (analytics and business intelligence), per `docs/MILESTONES.md`
+(the roadmap was renumbered when this Milestone 7 was inserted ahead of it —
+what used to be Milestone 7 is now 8, CEO dashboard is now 9, and so on).
+Read `docs/PRINCIPLES.md` first. Before starting Milestone 9 (CEO
+dashboard), note that `automation/repository.ts`'s `getAutomationStatus`
+(including the new `productionReadiness` section) should be surfaced there
+rather than re-summarised — read it, don't recompute it. Do not start
+Milestone 9 until Milestone 8 is tested and working.

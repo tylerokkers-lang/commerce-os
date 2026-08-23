@@ -129,3 +129,19 @@ fulfilment, or automation decisions must too.
   with guardrails" against the specific failure mode of a rule that keeps
   re-triggering itself. It cannot be bypassed by any automation level,
   including autonomous.
+- `src/lib/automation/factsTypes.ts`'s `FactsLoader` interface (Milestone 7)
+  — the same "define the interface, satisfy it twice" pattern as
+  `AutomationStore`, applied to reading live facts instead of writing
+  automation state. Extends #1 ("empty is not the same as unknown") with a
+  fourth fact state beyond fresh/stale: `unavailable` (no record exists at
+  all) is distinct from `unknown` (a record exists but has no timestamp to
+  judge freshness by) — collapsing the two would hide a real difference
+  between "we have never observed this" and "we observed it, but cannot say
+  how recently."
+- SUBMIT → VERIFY → RECONCILE (`priceExecution.ts`, `supplierSwitchExecution.ts`)
+  — the pattern every external write follows: a write call's own "accepted"
+  response is never treated as proof the external state changed (#1 again —
+  a claim needs evidence, and a provider's acknowledgement of receipt is not
+  evidence of effect). `verification_status`/`reconciliation_status` on
+  `automation_actions` (migration `0021`) exist specifically so "submitted"
+  and "verified" are never the same claim in the database either.

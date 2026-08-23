@@ -699,7 +699,212 @@ a browser-tooling artifact, not an application bug).
 and build all clean; every route returns 200 with no regression;
 `informax-site` confirmed untouched throughout.
 
-## Milestone 7 — Analytics and business intelligence
+## Milestone 7 — Production automation & real execution
+
+Connects Milestone 6's automation engine to real execution without
+rewriting it: a job-handler registry covering all fourteen named job types,
+a live data-assembly layer (`FactsLoader`) with explicit fact freshness,
+marketplace write capabilities (price/inventory/status) added to the
+existing connector interface with a SUBMIT → VERIFY → RECONCILE pipeline,
+and the approval bridge wired to genuinely re-check facts before executing.
+No profitability, compliance, supplier-redundancy, order-orchestration,
+automation-policy or audit logic was duplicated — every new module composes
+an existing engine.
+
+**What was built:**
+
+- **`automation/store.ts` extended**: `ChannelProductReconciliation` (the
+  RECONCILE step, writing a verified external change to our own
+  `channel_products` row — never speculatively), `VerificationStatus`
+  (`not_applicable | pending | verified | failed | uncertain`) and
+  `ReconciliationStatus` (`not_applicable | matched | discrepancy | pending`)
+  on `CompleteActionOutcome`/`ActionRecord`, `cancelJob`, and
+  `proposeApproval`'s counterpart is now genuinely reachable from a job
+  handler, not just `approvalWorkflow.ts`.
+- **Migration `0021_external_action_verification.sql`**: adds
+  `external_ref`, `verification_status`, `reconciliation_status` to
+  `automation_actions` — deliberately *not* a new parallel table or a wider
+  status enum, per the brief's "do not create redundant state systems." A
+  successful submission (`status: 'executing'`) and a verified result
+  (`status: 'succeeded'` with `verification_status: 'verified'`) are now
+  distinguishable in the one existing record.
+- **The live data-assembly layer** (`automation/factsTypes.ts` +
+  `automation/facts.ts` + `automation/inMemoryFactsLoader.ts`): a
+  `FactsLoader` interface — `loadProductFacts`, `loadSupplierFactsForProduct`,
+  `loadChannelProductFacts` — satisfied twice exactly like Milestone 6's
+  `AutomationStore`: `facts.ts` queries `products`/`suppliers`/
+  `supplier_products`/`channel_products` for real; `inMemoryFactsLoader.ts`
+  is a real (not mocked) test double sharing the identical freshness
+  calculation (`factFrom`). Every fact is `FRESH | STALE | UNKNOWN |
+  UNAVAILABLE`, computed from the record's own timestamp against a
+  documented per-kind window (`FRESHNESS_WINDOW_HOURS`) — `PRODUCT_PROFITABILITY_RECHECK`
+  blocks outright, with a fact-first reason, rather than recalculating
+  profitability on stale or missing supplier cost data.
+- **Marketplace connector write capabilities** (`marketplaces/connectors/types.ts`):
+  `updateListingPrice`, `updateInventory`, `setListingStatus`,
+  `verifyListingState`, a new `verifyWrites` capability flag, and a closed
+  `WriteFailureReason` (`not_supported | not_configured | requires_approval |
+  rejected`) so "this marketplace can't do this," "we haven't configured
+  writes," and "the provider rejected this attempt" are never collapsed
+  into one generic failure. Implemented for real in both demo connectors
+  (genuinely stateful — a write followed by `verifyListingState` reads back
+  the value just written) and partially in the live connectors: Shopify's
+  price and status writes are implemented against the real REST Admin API
+  (IMPLEMENTED BUT NOT LIVE-VERIFIED, same standing caveat as every other
+  live connector method since Milestone 4); Shopify inventory and every
+  Amazon write honestly return `not_supported` — both genuinely require API
+  surfaces (Inventory Levels API; Listings Items API with a seller id this
+  codebase does not yet read from the environment) that would otherwise
+  need to be guessed at with no account to validate against.
+- **`automation/priceExecution.ts`**: the safe price-action pipeline (brief
+  §6) — FACT CHANGE → `assessPriceChange` (Milestone 6, unchanged) →
+  POLICY → APPROVAL IF REQUIRED → SUBMIT (`connector.updateListingPrice`) →
+  VERIFY (`connector.verifyListingState`, only reconciling on an actual
+  match — never on the write call's own "accepted" response) → RECONCILE
+  (`store.reconcileChannelProduct`) → AUDIT → NOTIFICATION. Proven end to
+  end in `tests/automation-execution-e2e.test.ts` against the real demo
+  Shopify connector: permitted-and-verified, requires-approval (never
+  touches the connector), blocked-by-margin (never touches the connector),
+  marketplace-rejects-the-write (never marked succeeded), and duplicate
+  submission (idempotency key) never submits twice.
+- **`automation/supplierSwitchExecution.ts`**: completes the redundancy flow
+  (brief §4) — `evaluateSupplierSwitchAutomation` (Milestone 6, unchanged)
+  → policy → approval if required → execute. "Executing" a supplier switch
+  is honestly an internal write (`channel_products.fulfilment_supplier_id`)
+  rather than a fabricated external call — there is no "switch my supplier"
+  marketplace API; the real-world effect is which supplier the next
+  purchase order goes to, which our own database entirely governs. Proven
+  end to end alongside the price pipeline: a permitted switch genuinely
+  updates the record; one blocked by compliance never touches it.
+- **The job-handler registry** (`automation/handlers/*.ts`, `automation/worker.ts`):
+  all fourteen types named in the brief — `supplier_availability_check`
+  (Milestone 6, unchanged), `supplier_price_change`, `supplier_stock_change`,
+  `supplier_switch`, `product_profitability_recheck`,
+  `product_compliance_recheck`, `channel_eligibility_recheck`,
+  `product_pause`, `product_price_review`, `marketplace_listing_sync`,
+  `order_processing`, `fulfilment_update`, `tracking_check`,
+  `marketplace_reconciliation`. `runWorkerBatch` now takes a `FactsLoader`
+  and a `ConnectorLookup` alongside the `AutomationStore`, injected the same
+  way in production (`facts.ts`, `getMarketplaceConnector`) and in tests
+  (`inMemoryFactsLoader.ts`, a small connector map). Every handler is proven
+  in `tests/automation-job-handlers.test.ts` (one test per type, driven
+  through `runWorkerBatch`, never by calling a handler function directly),
+  including two genuine event-chains (`supplier_price_change` ->
+  `product_profitability_recheck` -> `product_price_review`;
+  `supplier_stock_change` -> `product_pause`) and the approval-required path
+  at a lower automation level.
+- **Approval execution reconnected** (brief §13): `approvalWorkflow.ts`
+  already re-checked expiry and stale facts (Milestone 6); this pass fixed
+  a real gap found by its own reasoning — `createAutomationAction`'s
+  runaway-safeguard can still force `blocked` even when the caller's
+  synthetic policy says `allow_automatic`, and `approveDecision` was
+  calling `completeAutomationAction` unconditionally rather than checking
+  which status actually won. Fixed identically to the same bug class found
+  in `worker.ts` below.
+- **Two real bugs found by the new test suite** (not by inspection): (1)
+  `handleSupplierAvailabilityCheck`/`approveDecision` were both deciding
+  whether to mark an action `succeeded` from their own copy of the policy
+  verdict rather than `createAutomationAction`'s returned `status` — so the
+  runaway-automation safeguard's `blocked` override was silently reverted a
+  line later. Both now branch on the store's authoritative status. (2) a
+  price/switch action's `reason` was always the domain engine's reason,
+  even when the kill switch was the actual cause of a block. Both fixed in
+  the Milestone 6 verification pass and carried forward correctly here.
+- **CEO/production-readiness view** (`automation/repository.ts`,
+  `/automation` page): a new `productionReadiness` section — whether
+  `AUTOMATION_CRON_SECRET` is actually configured (never inferred), live job
+  counts by status, and every registered marketplace connector's real
+  status (`connected | demo | not_configured | degraded | error`), reusing
+  `marketplaces/connectors/registry.ts`'s existing `marketplaceConnectorSummary`
+  rather than a second health check.
+- **`/automation/[id]`**: unchanged from Milestone 6's action-detail page,
+  now additionally shows `external_ref`/verification/reconciliation status
+  where present, still reading only what the row actually stores.
+- **Constant-time secret comparison** on `/api/automation/run`: already
+  landed in the Milestone 6 verification pass, unchanged here.
+- 23 new tests: `tests/automation-execution-e2e.test.ts` (7),
+  `tests/automation-job-handlers.test.ts` (16) — 539 total, up from 516.
+
+**IMPLEMENTED AND VERIFIED** (by tests driving real entry points, never a
+decision function directly):
+- The full acceptance-test loop (fact change → job → worker → facts loaded
+  → profitability/compliance re-checked → supplier alternatives evaluated
+  where relevant → policy applied → approval requested OR executed →
+  external connector call → verification → reconciliation → audit →
+  notification) for the two flagship pipelines (price change, supplier
+  switch) and, at a wiring-confidence level with one dedicated test each,
+  for the other twelve job handlers.
+- Idempotency: a retried price-change or supplier-switch event never
+  submits, executes, or notifies twice (`idempotencyKey` on both the job
+  and the resulting action).
+- Channel independence: `channel_eligibility_recheck` evaluates exactly one
+  channel per call by construction; nothing here can collapse two channels'
+  verdicts into one.
+- Kill switch, category pauses, money limits, organisation isolation: all
+  re-verified against the new execution paths (a paused category blocks a
+  price/switch execution exactly as it blocked a check in Milestone 6).
+
+**IMPLEMENTED BUT NOT LIVE-VERIFIED:**
+- Shopify's real `updateListingPrice`/`setListingStatus` — written against
+  the published REST Admin API, never run against a real store.
+- Everything else Milestone 4/5/6 already carried this label for continues
+  to carry it; nothing here changes that standing caveat.
+
+**REQUIRES PRODUCTION INFRASTRUCTURE** (the honest answer to "does this run
+24/7 without Claude Code," carried forward and extended from Milestone 6):
+- A deployed Supabase project — the `AutomationStore`/`FactsLoader`
+  orchestration logic is proven correct against real implementations of
+  both interfaces; the actual `@supabase/supabase-js` → PostgREST HTTP path
+  is not exercised by any test here, for the same reason Milestone 6
+  documented (no way to run a real PostgREST server against an in-process
+  database in this environment).
+- An external scheduler calling `POST /api/automation/run` on an interval —
+  still nothing in this repository calls it periodically.
+- The live data-assembly layer is real for products/suppliers/channel
+  products but still requires a caller (a future live event source: a
+  webhook, a scheduled sweep job) to actually enumerate real entities and
+  enqueue jobs for them — `FactsLoader` answers "what is true for this one
+  entity," not "which entities need checking today."
+- Amazon's Listings Items API write path needs a seller id
+  (`AMAZON_SP_SELLER_ID`, not currently read) and a product-type-specific
+  JSON Patch schema this codebase has never validated against a real
+  account.
+
+**NOT IMPLEMENTED:**
+- Shopify inventory writes (needs the Inventory Levels API's
+  `inventory_item_id`/`location_id`, not yet resolved by this connector's
+  read side).
+- Every Amazon write capability (price, inventory, status) — all honestly
+  `not_supported` rather than guessed at.
+- A live event source that detects a real supplier price/stock change and
+  enqueues `supplier_price_change`/`supplier_stock_change` jobs — those
+  handlers exist and are tested, but nothing in the live application calls
+  `enqueueJob` for them yet.
+
+**BLOCKED BY CREDENTIALS:** live-verifying any Shopify or Amazon write
+requires the same real store/seller account named as blocked in every
+marketplace milestone since Milestone 4.
+
+**Final acceptance test, demonstrated in demo mode without Claude Code**
+(brief §21): `tests/automation-execution-e2e.test.ts`'s first test enqueues
+a price-change event, runs it through `runWorkerBatch` against the real
+demo Shopify connector, and asserts — in one continuous run — that the
+policy was applied, the connector was called, `verifyListingState` confirms
+the marketplace's own reported price now matches, `channelProductReconciliations`
+reflects the reconciled value, the action's audit trail contains creation
+and execution entries, and a success notification was created. This is the
+exact chain the brief specifies, driven through `enqueueJob`/`runWorkerBatch`
+— never by calling `assessPriceChange` or the connector directly from the
+test.
+
+**Verified:** 539 tests (up from 516, +23); 21 migrations; typecheck, lint and build all clean; every
+route (`/automation`, `/automation/[id]`, `/approvals`, `/suppliers`,
+`/products`, `/marketplaces`, `/orders`, `/api/automation/run`) confirmed
+live with no console errors beyond a stale cached message from a
+since-closed tab (confirmed unrelated by opening a fresh tab); `informax-site`
+confirmed untouched throughout.
+
+## Milestone 8 — Analytics and business intelligence
 
 Revenue, orders, units, gross profit, contribution, contribution margin, ad
 spend, CAC, ROAS, MER, refunds, returns, supplier/delivery/marketplace/product
@@ -709,7 +914,7 @@ interchangeably. Standard comparison periods (today, yesterday, this/last
 week, month to date, previous month, custom range), and every comparison
 states its comparison period explicitly.
 
-## Milestone 8 — CEO dashboard
+## Milestone 9 — CEO dashboard
 
 The dashboard the owner actually reads every day: an AI CEO briefing (every
 claim traceable per the fact-first principle), a business pulse, an
@@ -723,7 +928,7 @@ workers, last sync, failed jobs), and an emergency stop that can pause
 automation categories while preserving critical order processing, itself
 logged like any other consequential action.
 
-## Milestone 9 — Commerce Intelligence chat
+## Milestone 10 — Commerce Intelligence chat
 
 An AI chat interface answering real questions about the actual business
 through a controlled tool/query layer with explicit per-tool permissions —
@@ -732,7 +937,7 @@ categories (facts, calculations, rules, analysis, predictions, uncertainty)
 and the system can say "I don't have enough current data to answer that
 reliably." Credentials never enter conversational memory.
 
-## Milestone 10 — AI actions
+## Milestone 11 — AI actions
 
 Four interaction modes — ask, analyse, recommend, execute — where "execute"
 still passes through the same automation-level and approval machinery as any
@@ -740,7 +945,7 @@ other action. The AI is never the source of authority: rules, permissions,
 validation and the action layer built in Milestones 5–6 remain authoritative
 regardless of what the AI recommends.
 
-## Milestone 11 — Advertising intelligence
+## Milestone 12 — Advertising intelligence
 
 Advertising platform integrations (Amazon Ads, Meta, Google, TikTok as
 applicable) evaluated on contribution after advertising, never on ROAS alone —
@@ -750,7 +955,7 @@ daily and per-product limits, maximum percentage changes, approval thresholds,
 cooldowns, rollback logic and audit logging, with no path to unlimited
 automated spend.
 
-## Milestone 12 — International expansion
+## Milestone 13 — International expansion
 
 Country/marketplace/currency/tax/shipping/documentation modelled explicitly,
 with product-marketplace eligibility, supplier delivery capability, delivery

@@ -149,8 +149,10 @@ describe('capabilities are declared, not assumed', () => {
     expect(amazonConnector.descriptor.capabilities.processRefunds).toBe(false)
   })
 
-  it('demo connectors declare no write capability, since they never touch a real marketplace', () => {
-    expect(shopifyDemoConnector.descriptor.capabilities.writeListings).toBe(false)
-    expect(amazonDemoConnector.descriptor.capabilities.writeListings).toBe(false)
+  it('demo connectors declare write and verify capability, since they genuinely simulate the full submit -> verify pipeline (Milestone 7)', () => {
+    expect(shopifyDemoConnector.descriptor.capabilities.writeListings).toBe(true)
+    expect(shopifyDemoConnector.descriptor.capabilities.verifyWrites).toBe(true)
+    expect(amazonDemoConnector.descriptor.capabilities.writeListings).toBe(true)
+    expect(amazonDemoConnector.descriptor.capabilities.verifyWrites).toBe(true)
   })
 })

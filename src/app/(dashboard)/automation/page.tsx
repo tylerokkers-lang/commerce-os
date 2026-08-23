@@ -159,6 +159,37 @@ export default async function AutomationPage() {
         </div>
       </Card>
 
+      <Card>
+        <CardHeader title="Production readiness" description="What it would actually take for this to run 24/7 without anyone watching — never inferred, always read from real configuration and job state." />
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-4">
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Scheduler</p>
+            <Badge tone={status.productionReadiness.schedulerConfigured ? 'positive' : 'caution'} className="mt-1.5">
+              {status.productionReadiness.schedulerConfigured ? 'Configured' : 'Not configured'}
+            </Badge>
+          </div>
+          {['pending', 'running', 'dead_letter'].map((s) => (
+            <div key={s} className="bg-surface px-4 py-3">
+              <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Jobs {s.replace('_', ' ')}</p>
+              <p className="mt-1 text-sm font-medium">{status.productionReadiness.jobsByStatus[s] ?? 0}</p>
+            </div>
+          ))}
+          {status.productionReadiness.connectors.map((c) => (
+            <div key={c.key} className="bg-surface px-4 py-3">
+              <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">{c.label}</p>
+              <Badge tone={c.status === 'connected' ? 'positive' : c.status === 'demo' ? 'demo' : c.status === 'degraded' ? 'caution' : 'negative'} className="mt-1.5">
+                {c.status.replace('_', ' ')}
+              </Badge>
+            </div>
+          ))}
+        </div>
+        {!status.productionReadiness.schedulerConfigured ? (
+          <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
+            No external scheduler is calling <code>POST /api/automation/run</code> yet — jobs will queue but nothing will claim them until one does. See HANDOVER.md for what to point at that route.
+          </p>
+        ) : null}
+      </Card>
+
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatTile label="Actions today" value={String(status.today.actionsTotal)} sublabel={`${status.today.succeeded} succeeded`} />
         <StatTile label="Approvals requested" value={String(status.today.approvalsRequested)} sublabel={`${status.today.approvalsCompleted} completed`} />

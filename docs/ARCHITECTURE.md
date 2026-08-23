@@ -61,21 +61,54 @@ src/lib/
   audit/         append-only action log
   profitability/ the cost model everything else defers to
   demo/          the simulated business
-  products/      catalogue reads and settings validation
-  suppliers/     supplier reads
+  products/      catalogue, lifecycle, identifiers
+  suppliers/     supplier scoring, redundancy, connectors
   compliance/    per-channel gate reads
+  marketplaces/  connectors (Shopify/Amazon), reconciliation, publication gate
+  orders/        ingestion, validation, refunds, the order pipeline
+  fulfilment/    lifecycle, selection, submission, tracking
+  inventory/     stock reservation
+  automation/    policy engine, job queue, live facts, execution pipelines,
+                 approvals — see below
+  notifications/ read + write (write added Milestone 6)
+  integrations/  connection health
   tax/           VAT and finance reads
   analytics/     reporting aggregates
-  automation/    approvals, rules, scheduled runs
-  notifications/ alerting
-  integrations/  connection health
-  amazon/ shopify/ orders/ inventory/ fulfilment/ pricing/
-  invoices/ accounting/ research/ ai/
+  amazon/ shopify/ pricing/ invoices/ accounting/ research/ ai/
 ```
 
-The empty directories are deliberate: they are the seams the later milestones
+The empty directories are deliberate: they are the seams later milestones
 fill, and having them named now stops integration code from being written into
 whatever file happens to be open.
+
+### `src/lib/automation/` (Milestones 6–7)
+
+The busiest module, so its own map:
+
+```
+types.ts, settingsTypes.ts, factsTypes.ts, store.ts   pure interfaces/types
+policyEngine.ts, supplierSwitching.ts, priceAutomation.ts,
+inventoryAutomation.ts, publicationAutomation.ts,
+orderAutomation.ts, monitoring.ts                      pure decision engines
+priceExecution.ts, supplierSwitchExecution.ts          SUBMIT->VERIFY->RECONCILE pipelines
+handlers/*.ts                                          the 14 job handlers (thin orchestration)
+worker.ts                                              claim -> dispatch -> complete
+jobs.ts, actions.ts, settings.ts, facts.ts,
+proposeApproval.ts, supabaseStore.ts                   Supabase-backed implementations
+inMemoryStore.ts, inMemoryFactsLoader.ts               real (not mocked) test doubles
+approvalWorkflow.ts, killSwitch.ts                     the approval and kill-switch APIs
+```
+
+Two interfaces are satisfied twice each, on purpose: `AutomationStore`
+(`store.ts`) by `supabaseStore.ts` (production) and `inMemoryStore.ts`
+(tests), and `FactsLoader` (`factsTypes.ts`) by `facts.ts` (production) and
+`inMemoryFactsLoader.ts` (tests). This is what lets
+`tests/automation-engine-e2e.test.ts`, `tests/automation-job-handlers.test.ts`
+and `tests/automation-execution-e2e.test.ts` drive the *real* orchestration
+code (`runWorkerBatch`, `executePriceChange`, `executeSupplierSwitch`) end
+to end without a live Supabase project — the standard way to test code that
+would otherwise require a live external service, and the reason two real
+bugs were found by tests rather than by inspection (see `HANDOVER.md` §18–19).
 
 ## Rules the code follows
 

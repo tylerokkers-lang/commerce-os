@@ -6,12 +6,15 @@ import type {
   FetchOutcome,
   FulfilmentUpdateInput,
   FulfilmentUpdateOutcome,
+  ListingWriteInput,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
   MarketplaceInventorySnapshot,
   MarketplaceListingSnapshot,
   MarketplaceOrderSnapshot,
+  WriteFailure,
+  WriteOutcome,
 } from './types'
 
 /**
@@ -27,13 +30,14 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
   channel: 'amazon_uk',
   capabilities: {
     readListings: true,
-    writeListings: false,
+    writeListings: true,
     syncInventory: false,
     ingestOrders: true,
     updateFulfilment: true,
     processRefunds: false,
     readFees: true,
     webhooks: false,
+    verifyWrites: true,
   },
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
@@ -82,6 +86,41 @@ export class AmazonDemoConnector implements MarketplaceConnector {
       return err('A tracking number and carrier are both required.')
     }
     return ok({ accepted: true, marketplaceReference: `demo-shipment-${update.idempotencyKey}` })
+  }
+
+  private static writtenPrices = new Map<string, number>()
+  private static writtenStock = new Map<string, number>()
+  private static writtenStatus = new Map<string, 'active' | 'paused'>()
+
+  async updateListingPrice(input: ListingWriteInput & { priceMinor: number }): Promise<Result<WriteOutcome, WriteFailure>> {
+    if (input.priceMinor <= 0) return err({ reason: 'rejected', detail: 'Price must be greater than zero.' })
+    AmazonDemoConnector.writtenPrices.set(input.externalId, input.priceMinor)
+    return ok({ accepted: true, externalRef: `demo-price-${input.idempotencyKey}` })
+  }
+
+  async updateInventory(input: ListingWriteInput & { stockQty: number }): Promise<Result<WriteOutcome, WriteFailure>> {
+    if (input.stockQty < 0) return err({ reason: 'rejected', detail: 'Stock cannot be negative.' })
+    AmazonDemoConnector.writtenStock.set(input.externalId, input.stockQty)
+    return ok({ accepted: true, externalRef: `demo-inventory-${input.idempotencyKey}` })
+  }
+
+  async setListingStatus(input: ListingWriteInput & { status: 'active' | 'paused' }): Promise<Result<WriteOutcome, WriteFailure>> {
+    AmazonDemoConnector.writtenStatus.set(input.externalId, input.status)
+    return ok({ accepted: true, externalRef: `demo-status-${input.idempotencyKey}` })
+  }
+
+  async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
+    const listing = demoAmazonListings().find((l) => l.externalId === externalId)
+    if (!listing) return err(`No demo Amazon listing found for external id "${externalId}".`)
+
+    const writtenStatus = AmazonDemoConnector.writtenStatus.get(externalId)
+    return ok({
+      ...listing,
+      priceMinor: AmazonDemoConnector.writtenPrices.get(externalId) ?? listing.priceMinor,
+      stockQty: AmazonDemoConnector.writtenStock.has(externalId) ? AmazonDemoConnector.writtenStock.get(externalId)! : listing.stockQty,
+      status: writtenStatus === 'paused' ? 'archived' : writtenStatus === 'active' ? 'active' : listing.status,
+      reportedAt: new Date().toISOString(),
+    })
   }
 }
 

@@ -457,6 +457,9 @@ export interface Database {
           is_demo: boolean
           created_at: string
           completed_at: string | null
+          external_ref: string | null
+          verification_status: string
+          reconciliation_status: string
         }
         Insert: {
           id?: string
@@ -481,6 +484,9 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           completed_at?: string | null
+          external_ref?: string | null
+          verification_status?: string
+          reconciliation_status?: string
         }
         Update: {
           id?: string
@@ -505,6 +511,9 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           completed_at?: string | null
+          external_ref?: string | null
+          verification_status?: string
+          reconciliation_status?: string
         }
         Relationships: [
           {

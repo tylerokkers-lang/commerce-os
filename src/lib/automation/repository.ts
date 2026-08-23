@@ -4,6 +4,9 @@ import { createServerSupabase } from '@/lib/supabase/server'
 import { requireSession, type SessionContext } from '@/lib/security/session'
 import { getAutomationSettings, type AutomationSettings } from './settings'
 import { demoAutomationScenarios, type AnyDemoScenario } from '@/lib/demo/automation'
+import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
+import { listMarketplaceConnectors, marketplaceConnectorSummary } from '@/lib/marketplaces/connectors/registry'
+import type { MarketplaceConnectorSummary } from '@/lib/marketplaces/connectors/types'
 import type { Tables } from '@/lib/supabase/database.types'
 
 export type AutomationAction = Tables<'automation_actions'>
@@ -32,6 +35,21 @@ export interface AutomationStatus {
   recentActions: readonly AutomationAction[]
   pendingJobs: readonly AutomationJob[]
   demoScenarios: readonly AnyDemoScenario[]
+  productionReadiness: ProductionReadiness
+}
+
+/**
+ * The honest production-readiness view (brief §15). Never fabricates a
+ * "healthy" scheduler or worker — a scheduler is "configured" only when the
+ * shared secret it authenticates with actually exists, and worker/job
+ * health is read from the same `automation_jobs` rows the rest of this page
+ * already queries, not asserted separately.
+ */
+export interface ProductionReadiness {
+  schedulerConfigured: boolean
+  jobsByStatus: Record<string, number>
+  externalActionsByVerification: Record<string, number>
+  connectors: readonly MarketplaceConnectorSummary[]
 }
 
 const EMPTY_TODAY: AutomationStatus['today'] = {
@@ -51,6 +69,9 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
   const session = await requireSession()
   const settings = await getAutomationSettings(session)
 
+  const connectorSummaries = await Promise.all(listMarketplaceConnectors().map((c) => marketplaceConnectorSummary(c)))
+  const schedulerConfigured = isSupabaseConfigured() && automationCronSecret() !== undefined
+
   if (session.isDemo) {
     return {
       isDemo: true,
@@ -60,6 +81,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
       recentActions: [],
       pendingJobs: [],
       demoScenarios: demoAutomationScenarios(),
+      productionReadiness: { schedulerConfigured: false, jobsByStatus: {}, externalActionsByVerification: {}, connectors: connectorSummaries },
     }
   }
 
@@ -67,12 +89,21 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
   const startOfDay = new Date()
   startOfDay.setUTCHours(0, 0, 0, 0)
 
-  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }] = await Promise.all([
+  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }] = await Promise.all([
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).gte('created_at', startOfDay.toISOString()),
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).order('created_at', { ascending: false }).limit(25),
     supabase.from('automation_jobs').select('*').eq('org_id', session.orgId).in('status', ['pending', 'running']).order('run_at', { ascending: true }).limit(25),
     supabase.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('org_id', session.orgId).eq('status', 'dead_letter'),
+    supabase.from('automation_jobs').select('status').eq('org_id', session.orgId),
   ])
+
+  const jobsByStatus: Record<string, number> = {}
+  for (const job of allJobs ?? []) jobsByStatus[job.status] = (jobsByStatus[job.status] ?? 0) + 1
+
+  const externalActionsByVerification: Record<string, number> = {}
+  for (const action of recentActions ?? []) {
+    externalActionsByVerification[action.verification_status] = (externalActionsByVerification[action.verification_status] ?? 0) + 1
+  }
 
   const rows = todaysActions ?? []
   const today = {
@@ -100,6 +131,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
     recentActions: recentActions ?? [],
     pendingJobs: pendingJobs ?? [],
     demoScenarios: [],
+    productionReadiness: { schedulerConfigured, jobsByStatus, externalActionsByVerification, connectors: connectorSummaries },
   }
 }
 

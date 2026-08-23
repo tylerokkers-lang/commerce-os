@@ -1,8 +1,10 @@
 # Database
 
-49 tables across nine migrations, applied in filename order. Every migration is
-executed against a real Postgres engine by `npm run db:verify`, so nothing in
-here is untested SQL.
+65 tables across 21 migrations (as of Milestone 7), applied in filename
+order. Every migration is executed against a real Postgres engine by
+`npm run db:verify`, so nothing in here is untested SQL. This file describes
+the conventions that have held since Milestone 1; see `docs/MILESTONES.md`
+for what each later migration specifically added.
 
 ## Conventions
 
@@ -54,6 +56,12 @@ past decision can be replayed against the inputs that produced it.
 | `0007_finance.sql` | Invoices, credit notes, expenses, VAT transactions and periods, accounting sync |
 | `0008_intelligence.sql` | Compliance, performance, health, advertising, AI decisions, automation, notifications, documents |
 | `0009_rls.sql` | Row level security policies |
+| `0010`–`0012` | Research providers, RLS, supplier attributes (Milestone 2) |
+| `0013`–`0014` | Supplier connectors, price history, RLS (Milestone 3) |
+| `0015`–`0016` | Marketplace connectors, discrepancies, RLS (Milestone 4) |
+| `0017`–`0018` | Order/fulfilment transition history, RLS (Milestone 5) |
+| `0019`–`0020` | `automation_actions`, `automation_jobs`, kill-switch/limit columns, RLS (Milestone 6) |
+| `0021_external_action_verification.sql` | `external_ref`/`verification_status`/`reconciliation_status` on `automation_actions` (Milestone 7) |
 
 ## Access model
 

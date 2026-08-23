@@ -11,12 +11,15 @@ import type {
   FetchOutcome,
   FulfilmentUpdateInput,
   FulfilmentUpdateOutcome,
+  ListingWriteInput,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
   MarketplaceInventorySnapshot,
   MarketplaceListingSnapshot,
   MarketplaceOrderSnapshot,
+  WriteFailure,
+  WriteOutcome,
 } from './types'
 
 /**
@@ -37,13 +40,14 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
   channel: 'shopify',
   capabilities: {
     readListings: true,
-    writeListings: false,
+    writeListings: true,
     syncInventory: true,
     ingestOrders: true,
     updateFulfilment: true,
     processRefunds: false,
     readFees: true,
     webhooks: false,
+    verifyWrites: true,
   },
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
@@ -89,6 +93,45 @@ export class ShopifyDemoConnector implements MarketplaceConnector {
       return err('A tracking number and carrier are both required.')
     }
     return ok({ accepted: true, marketplaceReference: `demo-fulfilment-${update.idempotencyKey}` })
+  }
+
+  // Module-level so a write made earlier in the same process is visible to
+  // a later verify call — the whole point of exercising SUBMIT -> VERIFY
+  // for real in demo mode. Resets on process restart, same as every other
+  // in-memory demo dataset.
+  private static writtenPrices = new Map<string, number>()
+  private static writtenStock = new Map<string, number>()
+  private static writtenStatus = new Map<string, 'active' | 'paused'>()
+
+  async updateListingPrice(input: ListingWriteInput & { priceMinor: number }): Promise<Result<WriteOutcome, WriteFailure>> {
+    if (input.priceMinor <= 0) return err({ reason: 'rejected', detail: 'Price must be greater than zero.' })
+    ShopifyDemoConnector.writtenPrices.set(input.externalId, input.priceMinor)
+    return ok({ accepted: true, externalRef: `demo-price-${input.idempotencyKey}` })
+  }
+
+  async updateInventory(input: ListingWriteInput & { stockQty: number }): Promise<Result<WriteOutcome, WriteFailure>> {
+    if (input.stockQty < 0) return err({ reason: 'rejected', detail: 'Stock cannot be negative.' })
+    ShopifyDemoConnector.writtenStock.set(input.externalId, input.stockQty)
+    return ok({ accepted: true, externalRef: `demo-inventory-${input.idempotencyKey}` })
+  }
+
+  async setListingStatus(input: ListingWriteInput & { status: 'active' | 'paused' }): Promise<Result<WriteOutcome, WriteFailure>> {
+    ShopifyDemoConnector.writtenStatus.set(input.externalId, input.status)
+    return ok({ accepted: true, externalRef: `demo-status-${input.idempotencyKey}` })
+  }
+
+  async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
+    const listing = demoShopifyListings().find((l) => l.externalId === externalId)
+    if (!listing) return err(`No demo Shopify listing found for external id "${externalId}".`)
+
+    const writtenStatus = ShopifyDemoConnector.writtenStatus.get(externalId)
+    return ok({
+      ...listing,
+      priceMinor: ShopifyDemoConnector.writtenPrices.get(externalId) ?? listing.priceMinor,
+      stockQty: ShopifyDemoConnector.writtenStock.has(externalId) ? ShopifyDemoConnector.writtenStock.get(externalId)! : listing.stockQty,
+      status: writtenStatus === 'paused' ? 'draft' : writtenStatus === 'active' ? 'active' : listing.status,
+      reportedAt: new Date().toISOString(),
+    })
   }
 }
 

@@ -25,6 +25,18 @@ a real (not mocked) implementation of the same `AutomationStore` interface
 `supabaseStore.ts` implements for production — read `HANDOVER.md` §18 before
 claiming anything about "the automation engine works" is proven beyond that.
 
+Live facts (`automation/facts.ts`, `factsTypes.ts`) and every marketplace
+write (`updateListingPrice`, `updateInventory`, `setListingStatus`,
+`verifyListingState` in `marketplaces/connectors/types.ts`) follow the same
+define-the-interface-satisfy-it-twice pattern (Milestone 7) — a real
+implementation and a real in-memory test double, never a mock. External
+writes always go SUBMIT → VERIFY → RECONCILE
+(`automation/priceExecution.ts`, `automation/supplierSwitchExecution.ts`):
+a write's own "accepted" response is never treated as proof the external
+state changed. Read `HANDOVER.md` §19 before claiming any live marketplace
+write works — most are `IMPLEMENTED BUT NOT LIVE-VERIFIED` or honestly
+`not_supported`, not proven against a real account.
+
 Before pushing any change:
 
 ```bash

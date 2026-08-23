@@ -68,6 +68,9 @@ export interface ActionRecord {
   jobId: string | null
   createdAt: string
   completedAt: string | null
+  externalRef: string | null
+  verificationStatus: VerificationStatus
+  reconciliationStatus: ReconciliationStatus
 }
 
 export interface EnqueueJobInput {
@@ -104,12 +107,28 @@ export interface CreateActionInput {
   jobId?: string | null
 }
 
+export type VerificationStatus = 'not_applicable' | 'pending' | 'verified' | 'failed' | 'uncertain'
+export type ReconciliationStatus = 'not_applicable' | 'matched' | 'discrepancy' | 'pending'
+
 export interface CompleteActionOutcome {
   succeeded: boolean
   error?: string | null
   orgId: string
   entityType: string
   entityId?: string | null
+  /** The provider's own reference for the external write this action performed, if any (Milestone 7). */
+  externalRef?: string | null
+  verificationStatus?: VerificationStatus
+  reconciliationStatus?: ReconciliationStatus
+}
+
+/** A patch to our own record of a channel listing, applied only after a write has been verified — never speculatively. */
+export interface ChannelProductReconciliation {
+  orgId: string
+  channelProductId: string
+  priceMinor?: number
+  status?: 'live' | 'paused'
+  fulfilmentSupplierId?: string
 }
 
 export interface AuditEntryInput {
@@ -190,4 +209,11 @@ export interface AutomationStore {
   getAutomationSettings(orgId: string): Promise<AutomationSettings>
   /** Count of actions of this exact type for this exact entity created since `sinceIso` — the runaway-loop safeguard's input. */
   countRecentActionsForEntity(orgId: string, entityType: string, entityId: string | null, actionType: AutomationActionType, sinceIso: string): Promise<number>
+  /**
+   * The RECONCILE step (brief §Non-negotiable principles, "SUBMIT -> VERIFY
+   * -> RECONCILE"): applies a verified external change to our own record.
+   * Never called speculatively — only after `verifyListingState` (or
+   * equivalent) has confirmed the external state actually changed.
+   */
+  reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void>
 }

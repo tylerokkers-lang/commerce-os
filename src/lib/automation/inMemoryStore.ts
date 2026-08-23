@@ -7,6 +7,7 @@ import {
   type ActionRecord,
   type AuditEntryInput,
   type AutomationStore,
+  type ChannelProductReconciliation,
   type CompleteActionOutcome,
   type CreateActionInput,
   type EnqueueJobInput,
@@ -45,6 +46,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
   const notificationDedupeKeys = new Set<string>()
   const settingsByOrg = new Map<string, AutomationSettings>(Object.entries(options?.settingsByOrg ?? {}))
   const approvals: (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[] = []
+  const channelProductReconciliations = new Map<string, Partial<ChannelProductReconciliation>>()
 
   function isAbandoned(job: JobRecord, nowMs: number): boolean {
     return job.status === 'running' && job.lockedAt !== null && nowMs - Date.parse(job.lockedAt) > lockTimeoutMs
@@ -57,6 +59,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       auditLog: readonly (AuditEntryInput & { occurredAt: string })[]
       notifications: readonly (NotifyInput & { id: string; createdAt: string })[]
       approvals: readonly (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[]
+      channelProductReconciliations: Record<string, Partial<ChannelProductReconciliation>>
     }
     setAutomationSettings: (orgId: string, settings: AutomationSettings) => void
   } = {
@@ -225,6 +228,9 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
         jobId: input.jobId ?? null,
         createdAt: nowIso,
         completedAt: status === 'executing' ? null : nowIso,
+        externalRef: null,
+        verificationStatus: 'not_applicable',
+        reconciliationStatus: 'not_applicable',
       }
       actions.push(record)
       if (input.idempotencyKey) actionsByIdempotencyKey.set(orgKey, id)
@@ -250,7 +256,15 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       if (index === -1) throw new Error(`Unknown automation action ${actionId}`)
       const nowIso = new Date().toISOString()
       const status: Enums<'automation_action_status'> = outcome.succeeded ? 'succeeded' : 'failed'
-      actions[index] = { ...actions[index], status, error: outcome.error ?? null, completedAt: nowIso }
+      actions[index] = {
+        ...actions[index],
+        status,
+        error: outcome.error ?? null,
+        completedAt: nowIso,
+        externalRef: outcome.externalRef ?? actions[index].externalRef,
+        verificationStatus: outcome.verificationStatus ?? actions[index].verificationStatus,
+        reconciliationStatus: outcome.reconciliationStatus ?? actions[index].reconciliationStatus,
+      }
 
       auditLog.push({
         orgId: outcome.orgId,
@@ -290,12 +304,34 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       return settingsByOrg.get(orgId) ?? DEMO_AUTOMATION_SETTINGS
     },
 
+    async reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void> {
+      const current = channelProductReconciliations.get(input.channelProductId) ?? {}
+      const merged = { ...current, ...input }
+      channelProductReconciliations.set(input.channelProductId, merged)
+      auditLog.push({
+        orgId: input.orgId,
+        action: 'CHANNEL_PRODUCT_RECONCILED',
+        entityType: 'channel_product',
+        entityId: input.channelProductId,
+        actorType: 'system',
+        reason: "Reconciled local record with the marketplace's verified state after an automated write.",
+        occurredAt: new Date().toISOString(),
+      })
+    },
+
     setAutomationSettings(orgId: string, settings: AutomationSettings) {
       settingsByOrg.set(orgId, settings)
     },
 
     getState() {
-      return { jobs: Array.from(jobs.values()), actions: [...actions], auditLog: [...auditLog], notifications: [...notifications], approvals: [...approvals] }
+      return {
+        jobs: Array.from(jobs.values()),
+        actions: [...actions],
+        auditLog: [...auditLog],
+        notifications: [...notifications],
+        approvals: [...approvals],
+        channelProductReconciliations: Object.fromEntries(channelProductReconciliations),
+      }
     },
   }
 

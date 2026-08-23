@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fromMajor } from '@/lib/core/money'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
-import { runWorkerBatch, type SupplierAvailabilityCheckPayload } from '@/lib/automation/worker'
+import { runWorkerBatch } from '@/lib/automation/worker'
+import type { SupplierAvailabilityCheckPayload } from '@/lib/automation/handlers/supplierHandlers'
+import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
 import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
+
+const factsLoader = createInMemoryFactsLoader()
+const connectorLookup = () => undefined
 
 /**
  * Verifies the actual automation loop end to end (brief §1, §22):
@@ -68,7 +73,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     expect(enqueueResult.alreadyExisted).toBe(false)
 
     // WORKER PICKS UP JOB -> ... -> ACTION EXECUTION -> AUDIT -> NOTIFICATION
-    const batch = await runWorkerBatch(store, 'worker-1')
+    const batch = await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
     expect(batch).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 })
 
     const state = store.getState()
@@ -98,7 +103,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     // NOTIFICATION: the owner is told what happened.
     expect(state.notifications).toHaveLength(1)
     expect(state.notifications[0].severity).toBe('success')
-    expect(state.notifications[0].title).toContain('switched automatically')
+    expect(state.notifications[0].title).toContain('permitted')
   })
 
   it('a supplier switch that fails the profitability bar is never executed, and the reason is recorded', async () => {
@@ -106,7 +111,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     const expensiveAlternative = autoSwitchRequest({ alternatives: [{ id: 'sup-pricey', name: 'Pricey Supply Co', signals: goodSignals({ unitCost: fromMajor(50) }) }] })
 
     await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(expensiveAlternative) as unknown as Record<string, unknown> })
-    const batch = await runWorkerBatch(store, 'worker-1')
+    const batch = await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
     expect(batch.succeeded).toBe(1) // The job itself succeeded — it correctly determined the switch should not happen.
     const action = store.getState().actions[0]
@@ -123,7 +128,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     })
 
     await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(noncompliantAlternative) as unknown as Record<string, unknown> })
-    await runWorkerBatch(store, 'worker-1')
+    await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
     const action = store.getState().actions[0]
     expect(action.decision.redundancy).toMatchObject({ outcome: expect.not.stringMatching('switch_automatically') })
@@ -133,7 +138,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
   it('a valid switch whose cost exceeds the automation limit requires approval, not automatic execution', async () => {
     const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, maxAutoSupplierSwitchCostIncreasePct: 2 } } })
     await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest()) as unknown as Record<string, unknown> })
-    await runWorkerBatch(store, 'worker-1')
+    await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
     const action = store.getState().actions[0]
     expect(action.status).toBe('requires_approval')
@@ -146,13 +151,13 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
 
       // ON
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest(), 'product-1') as unknown as Record<string, unknown> })
-      await runWorkerBatch(store, 'worker-1')
+      await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
       expect(store.getState().actions[0].status).toBe('succeeded')
 
       // PAUSE ALL AUTOMATION
       store.setAutomationSettings(ORG_A, { ...DEMO_AUTOMATION_SETTINGS, automationPaused: true, automationPausedReason: 'Owner emergency stop' })
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest(), 'product-2') as unknown as Record<string, unknown> })
-      const pausedBatch = await runWorkerBatch(store, 'worker-1')
+      const pausedBatch = await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
       expect(pausedBatch.succeeded).toBe(1) // The job ran and correctly determined it must not execute.
       const blockedAction = store.getState().actions.find((a) => a.entityId === 'product-2')!
@@ -164,7 +169,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
       // RESUME
       store.setAutomationSettings(ORG_A, DEMO_AUTOMATION_SETTINGS)
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest(), 'product-3') as unknown as Record<string, unknown> })
-      await runWorkerBatch(store, 'worker-1')
+      await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
       const resumedAction = store.getState().actions.find((a) => a.entityId === 'product-3')!
       expect(resumedAction.status).toBe('succeeded')
     })
@@ -174,7 +179,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
         settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, automationPausedCategories: ['supplier_switching'] } },
       })
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest()) as unknown as Record<string, unknown> })
-      await runWorkerBatch(store, 'worker-1')
+      await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
       expect(store.getState().actions[0].status).toBe('blocked')
     })
   })
@@ -183,7 +188,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     it('a decision requiring approval is surfaced on the owner-facing approvals queue with the exact action payload to replay', async () => {
       const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, maxAutoSupplierSwitchCostIncreasePct: 2 } } })
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest()) as unknown as Record<string, unknown> })
-      await runWorkerBatch(store, 'worker-1')
+      await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
       const approvals = store.getState().approvals
       expect(approvals).toHaveLength(1)
@@ -201,7 +206,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
       const cancelled = await store.cancelJob(id, 'No longer needed')
       expect(cancelled).toBe(true)
 
-      const batch = await runWorkerBatch(store, 'worker-1')
+      const batch = await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
       expect(batch.claimed).toBe(0) // A cancelled job is never claimed.
       expect(store.getState().actions).toHaveLength(0)
     })
@@ -228,7 +233,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
       const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest()) as unknown as Record<string, unknown> })
 
-      const [batchA, batchB] = await Promise.all([runWorkerBatch(store, 'worker-A'), runWorkerBatch(store, 'worker-B')])
+      const [batchA, batchB] = await Promise.all([runWorkerBatch(store, factsLoader, connectorLookup, 'worker-A'), runWorkerBatch(store, factsLoader, connectorLookup, 'worker-B')])
 
       const totalClaimed = batchA.claimed + batchB.claimed
       expect(totalClaimed).toBe(1) // Exactly one worker claimed the only job.
@@ -271,7 +276,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     it('an unregistered job type fails safely and non-retryably, never silently "succeeding"', async () => {
       const store = createInMemoryAutomationStore()
       await store.enqueueJob({ orgId: ORG_A, jobType: 'no_such_handler', maxAttempts: 5 })
-      const batch = await runWorkerBatch(store, 'worker-1')
+      const batch = await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
       expect(batch.succeeded).toBe(0)
       expect(store.getState().jobs[0].status).toBe('failed')
       expect(store.getState().jobs[0].lastError).toContain('No handler registered')
@@ -300,7 +305,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
       const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS, [ORG_B]: DEMO_AUTOMATION_SETTINGS } })
 
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', payload: payloadFor(autoSwitchRequest(), 'shared-entity-id') as unknown as Record<string, unknown> })
-      await runWorkerBatch(store, 'worker-1')
+      await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
       const countForOrgB = await store.countRecentActionsForEntity(ORG_B, 'product', 'shared-entity-id', 'switch_supplier', new Date(Date.now() - 60_000).toISOString())
       expect(countForOrgB).toBe(0) // Org A's action does not leak into Org B's count, even for the same entity id.
@@ -316,13 +321,13 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
 
       for (let i = 0; i < 5; i++) {
         await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', idempotencyKey: `evt-${i}`, payload: payloadFor(autoSwitchRequest(), 'flapping-product') as unknown as Record<string, unknown> })
-        await runWorkerBatch(store, 'worker-1')
+        await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
       }
       const firstFive = store.getState().actions
       expect(firstFive.every((a) => a.status === 'succeeded')).toBe(true)
 
       await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_availability_check', idempotencyKey: 'evt-6', payload: payloadFor(autoSwitchRequest(), 'flapping-product') as unknown as Record<string, unknown> })
-      await runWorkerBatch(store, 'worker-1')
+      await runWorkerBatch(store, factsLoader, connectorLookup, 'worker-1')
 
       const sixth = store.getState().actions.at(-1)!
       expect(sixth.status).toBe('blocked')

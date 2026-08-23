@@ -3,7 +3,7 @@ import 'server-only'
 import { recordAudit } from '@/lib/audit'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import type { Enums } from '@/lib/supabase/database.types'
-import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type CompleteActionOutcome, type CreateActionInput } from './store'
+import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type ChannelProductReconciliation, type CompleteActionOutcome, type CreateActionInput } from './store'
 import type { AutomationActionType } from './types'
 
 /**
@@ -143,7 +143,14 @@ export async function completeAutomationAction(actionId: string, outcome: Comple
 
   const { error } = await supabase
     .from('automation_actions')
-    .update({ status, error: outcome.error ?? null, completed_at: new Date().toISOString() })
+    .update({
+      status,
+      error: outcome.error ?? null,
+      completed_at: new Date().toISOString(),
+      external_ref: outcome.externalRef ?? null,
+      verification_status: outcome.verificationStatus ?? (outcome.succeeded ? 'not_applicable' : 'not_applicable'),
+      reconciliation_status: outcome.reconciliationStatus ?? 'not_applicable',
+    })
     .eq('id', actionId)
 
   if (error) throw new Error(`Could not complete automation action: ${error.message}`)
@@ -158,5 +165,32 @@ export async function completeAutomationAction(actionId: string, outcome: Comple
     result: outcome.succeeded ? 'success' : 'failure',
     error: outcome.error ?? undefined,
     metadata: { automationActionId: actionId },
+  })
+}
+
+/**
+ * The RECONCILE step: applies a verified external change to our own
+ * `channel_products` record. Callers must only reach this after a
+ * `verifyListingState` (or equivalent) call has confirmed the marketplace's
+ * own state — never speculatively from a write's own "accepted" response.
+ */
+export async function reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void> {
+  const supabase = createServiceSupabase()
+  const patch: Record<string, unknown> = { last_synced_at: new Date().toISOString() }
+  if (input.priceMinor !== undefined) patch.price_minor = input.priceMinor
+  if (input.status !== undefined) patch.status = input.status
+  if (input.fulfilmentSupplierId !== undefined) patch.fulfilment_supplier_id = input.fulfilmentSupplierId
+
+  const { error } = await supabase.from('channel_products').update(patch as never).eq('org_id', input.orgId).eq('id', input.channelProductId)
+  if (error) throw new Error(`Could not reconcile channel product ${input.channelProductId}: ${error.message}`)
+
+  await recordAudit({
+    orgId: input.orgId,
+    action: 'CHANNEL_PRODUCT_RECONCILED',
+    entityType: 'channel_product',
+    entityId: input.channelProductId,
+    actorType: 'system',
+    reason: 'Reconciled local record with the marketplace\'s verified state after an automated write.',
+    newValue: patch,
   })
 }

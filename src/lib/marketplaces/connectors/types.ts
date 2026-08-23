@@ -52,6 +52,16 @@ export interface MarketplaceCapabilities {
   processRefunds: boolean
   readFees: boolean
   webhooks: boolean
+  /**
+   * Milestone 7: can this connector read back a listing/inventory value
+   * after writing it, to confirm the write actually took? `writeListings:
+   * true` with `verifyWrites: false` is a real, honest combination — it
+   * means "this connector can submit a change but cannot itself confirm it
+   * stuck," which the SUBMIT -> VERIFY -> RECONCILE pipeline in
+   * `automation/priceExecution.ts` treats as `verification_status:
+   * 'uncertain'`, never as success.
+   */
+  verifyWrites: boolean
 }
 
 export interface MarketplaceConnectorDescriptor {
@@ -159,6 +169,29 @@ export interface MarketplaceConnector {
    * marketplace update failed" apart from "nothing happened."
    */
   submitFulfilmentUpdate(update: FulfilmentUpdateInput): Promise<Result<FulfilmentUpdateOutcome, string>>
+
+  /**
+   * Milestone 7 write capabilities (brief §7). Every one of these is gated
+   * by `descriptor.capabilities.writeListings` at the call site — a
+   * connector that declares `writeListings: false` (the real connectors,
+   * until write scopes are actually configured) must never have these
+   * called at all, not called-and-told-no. When `writeListings` is true but
+   * a specific write genuinely is not supported by the provider's API for
+   * this account, the method itself returns `NOT_SUPPORTED` rather than a
+   * generic failure, so a caller can tell "this marketplace cannot do this"
+   * apart from "this attempt failed."
+   */
+  updateListingPrice(input: ListingWriteInput & { priceMinor: number }): Promise<Result<WriteOutcome, WriteFailure>>
+  updateInventory(input: ListingWriteInput & { stockQty: number }): Promise<Result<WriteOutcome, WriteFailure>>
+  setListingStatus(input: ListingWriteInput & { status: 'active' | 'paused' }): Promise<Result<WriteOutcome, WriteFailure>>
+
+  /**
+   * VERIFY: reads the listing back from the marketplace itself, so a write
+   * can be confirmed against the provider's own state rather than assumed
+   * from the write call's own response. Only meaningful when
+   * `capabilities.verifyWrites` is true.
+   */
+  verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>>
 }
 
 export interface FulfilmentUpdateInput {
@@ -172,6 +205,31 @@ export interface FulfilmentUpdateInput {
 export interface FulfilmentUpdateOutcome {
   accepted: boolean
   marketplaceReference: string | null
+}
+
+export interface ListingWriteInput {
+  externalId: string
+  /** Idempotency: resubmitting the same write must never create a duplicate marketplace-side change. */
+  idempotencyKey: string
+}
+
+export interface WriteOutcome {
+  accepted: boolean
+  /** The provider's own reference for this specific write, when it gives one distinct from the listing id. */
+  externalRef: string | null
+}
+
+/**
+ * A closed set, not a bare string — so "this marketplace does not support
+ * this action at all," "we have not configured write access," "this needs
+ * a human to approve," and "the provider rejected this specific attempt"
+ * are never collapsed into one generic failure (brief §7).
+ */
+export type WriteFailureReason = 'not_supported' | 'not_configured' | 'requires_approval' | 'rejected'
+
+export interface WriteFailure {
+  reason: WriteFailureReason
+  detail: string
 }
 
 /** Runtime health, combining the descriptor with what has actually happened. */

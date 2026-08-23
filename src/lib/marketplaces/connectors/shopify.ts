@@ -5,12 +5,15 @@ import type {
   FetchOutcome,
   FulfilmentUpdateInput,
   FulfilmentUpdateOutcome,
+  ListingWriteInput,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
   MarketplaceInventorySnapshot,
   MarketplaceListingSnapshot,
   MarketplaceOrderSnapshot,
+  WriteFailure,
+  WriteOutcome,
 } from './types'
 
 /**
@@ -44,6 +47,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     processRefunds: true,
     readFees: true,
     webhooks: true,
+    verifyWrites: true,
   },
   requiredCredentials: ['SHOPIFY_STORE_DOMAIN', 'SHOPIFY_ADMIN_ACCESS_TOKEN', 'SHOPIFY_API_VERSION'],
   // Shopify's REST Admin API enforces a leaky-bucket limit of 2 requests per
@@ -80,13 +84,14 @@ async function shopifyRequest<T>(
   path: string,
   params: Record<string, string> = {},
   body?: unknown,
+  method?: 'GET' | 'POST' | 'PUT',
 ): Promise<Result<T, string>> {
   const url = new URL(`https://${creds.storeDomain}/admin/api/${creds.apiVersion}/${path}`)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
 
   try {
     const response = await fetch(url, {
-      method: body === undefined ? 'GET' : 'POST',
+      method: method ?? (body === undefined ? 'GET' : 'POST'),
       headers: {
         'X-Shopify-Access-Token': creds.accessToken,
         Accept: 'application/json',
@@ -249,6 +254,78 @@ export class ShopifyConnector implements MarketplaceConnector {
     return ok({
       accepted: result.value.fulfillment.status === 'success',
       marketplaceReference: String(result.value.fulfillment.id),
+    })
+  }
+
+  /**
+   * Price lives on the variant, not the product, in Shopify's data model —
+   * `externalId` here (a product id, per `MarketplaceListingSnapshot`'s
+   * shape) is resolved to its first variant before the actual price write.
+   * This assumes a single-variant product, the common case for a
+   * dropshipping catalogue; a genuinely multi-variant product would need a
+   * variant-level identifier this connector does not yet carry.
+   * IMPLEMENTED BUT NOT LIVE-VERIFIED, same as every other write below.
+   */
+  async updateListingPrice(input: ListingWriteInput & { priceMinor: number }): Promise<Result<WriteOutcome, WriteFailure>> {
+    const creds = credentials()
+    if (!creds) return err({ reason: 'not_configured', detail: 'Shopify is not configured.' })
+
+    const product = await shopifyRequest<{ product: { variants: readonly { id: number }[] } }>(creds, `products/${input.externalId}.json`)
+    if (!product.ok) return err({ reason: 'rejected', detail: product.error })
+    const variantId = product.value.product.variants[0]?.id
+    if (!variantId) return err({ reason: 'rejected', detail: `Product ${input.externalId} has no variant to price.` })
+
+    const priceMajor = (input.priceMinor / 100).toFixed(2)
+    const result = await shopifyRequest<{ variant: { id: number } }>(creds, `variants/${variantId}.json`, {}, { variant: { id: variantId, price: priceMajor } }, 'PUT')
+    if (!result.ok) return err({ reason: 'rejected', detail: result.error })
+
+    return ok({ accepted: true, externalRef: String(result.value.variant.id) })
+  }
+
+  async updateInventory(): Promise<Result<WriteOutcome, WriteFailure>> {
+    // Shopify's inventory lives behind the separate Inventory Levels API,
+    // keyed by `inventory_item_id` and `location_id` — neither of which this
+    // connector's read side currently resolves. Declaring this honestly as
+    // not yet implemented is preferable to guessing at a location id.
+    return err({ reason: 'not_supported', detail: 'Inventory writes require the Inventory Levels API (inventory_item_id + location_id), not yet implemented in this connector.' })
+  }
+
+  async setListingStatus(input: ListingWriteInput & { status: 'active' | 'paused' }): Promise<Result<WriteOutcome, WriteFailure>> {
+    const creds = credentials()
+    if (!creds) return err({ reason: 'not_configured', detail: 'Shopify is not configured.' })
+
+    const result = await shopifyRequest<{ product: { id: number; status: string } }>(
+      creds,
+      `products/${input.externalId}.json`,
+      {},
+      { product: { id: Number(input.externalId), status: input.status === 'active' ? 'active' : 'draft' } },
+      'PUT',
+    )
+    if (!result.ok) return err({ reason: 'rejected', detail: result.error })
+
+    return ok({ accepted: true, externalRef: String(result.value.product.id) })
+  }
+
+  async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
+    const creds = credentials()
+    if (!creds) return err('Shopify is not configured.')
+    const result = await shopifyRequest<{ product: { id: number; title: string; status: string; variants: readonly { price: string; inventory_quantity: number }[] } }>(
+      creds,
+      `products/${externalId}.json`,
+    )
+    if (!result.ok) return result
+    const product = result.value.product
+    const variant = product.variants[0]
+    return ok({
+      externalId: String(product.id),
+      channelProductRef: String(product.id),
+      title: product.title,
+      status: product.status === 'active' ? 'active' : product.status === 'draft' ? 'draft' : 'archived',
+      priceMinor: variant ? Math.round(Number(variant.price) * 100) : 0,
+      currency: 'GBP',
+      stockQty: variant?.inventory_quantity ?? null,
+      reportedAt: new Date().toISOString(),
+      raw: product as unknown as Record<string, unknown>,
     })
   }
 }
