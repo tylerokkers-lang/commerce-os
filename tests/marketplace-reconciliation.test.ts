@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  reconcileFulfilment,
   reconcileInventory,
   reconcileListings,
   reconcileOrders,
@@ -121,5 +122,39 @@ describe('discrepancy summary', () => {
     expect(summary.byField.stock).toBe(2)
     expect(summary.byField.price).toBe(1)
     expect(summary.byField.order_status).toBe(0)
+  })
+})
+
+describe('fulfilment and tracking reconciliation (Milestone 5)', () => {
+  it('detects a fulfilment status discrepancy', () => {
+    const discrepancies = reconcileFulfilment(
+      [{ externalOrderId: 'ord-1', status: 'shipped', trackingNumber: 'T1', recordedAt: '2026-08-23T00:00:00Z' }],
+      [{ externalOrderId: 'ord-1', fulfilmentStatus: 'delivered', trackingNumber: 'T1', reportedAt: '2026-08-23T09:00:00Z' }],
+    )
+    expect(discrepancies.some((d) => d.field === 'fulfilment_status')).toBe(true)
+  })
+
+  it('detects a tracking number discrepancy', () => {
+    const discrepancies = reconcileFulfilment(
+      [{ externalOrderId: 'ord-1', status: 'shipped', trackingNumber: 'T1', recordedAt: '2026-08-23T00:00:00Z' }],
+      [{ externalOrderId: 'ord-1', fulfilmentStatus: 'shipped', trackingNumber: 'T2-CORRECTED', reportedAt: '2026-08-23T09:00:00Z' }],
+    )
+    expect(discrepancies.some((d) => d.field === 'tracking')).toBe(true)
+  })
+
+  it('the missing-tracking case: we have none recorded, the marketplace does', () => {
+    const discrepancies = reconcileFulfilment(
+      [{ externalOrderId: 'ord-1', status: 'shipped', trackingNumber: null, recordedAt: '2026-08-23T00:00:00Z' }],
+      [{ externalOrderId: 'ord-1', fulfilmentStatus: 'shipped', trackingNumber: 'T1', reportedAt: '2026-08-23T09:00:00Z' }],
+    )
+    expect(discrepancies.some((d) => d.field === 'tracking' && d.ourValue === '(none)')).toBe(true)
+  })
+
+  it('reports nothing when fulfilment status and tracking both agree', () => {
+    const discrepancies = reconcileFulfilment(
+      [{ externalOrderId: 'ord-1', status: 'shipped', trackingNumber: 'T1', recordedAt: '2026-08-23T00:00:00Z' }],
+      [{ externalOrderId: 'ord-1', fulfilmentStatus: 'shipped', trackingNumber: 'T1', reportedAt: '2026-08-23T09:00:00Z' }],
+    )
+    expect(discrepancies).toHaveLength(0)
   })
 })

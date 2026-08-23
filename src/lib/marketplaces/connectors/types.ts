@@ -102,6 +102,15 @@ export interface MarketplaceOrderSnapshot {
   totalMinor: number
   currency: string
   lineItemRefs: readonly string[]
+  /**
+   * Fraud/risk status, where the connector's API surface reports one.
+   * Undefined — not 'low' — when the connector does not fetch this at all,
+   * so "no risk data available" is never confused with "assessed as safe."
+   * Neither read-only call built for Shopify or Amazon in Milestone 4
+   * currently populates this; it exists so a connector that does call a risk
+   * endpoint (Shopify's Order Risk resource, for one) has somewhere to put it.
+   */
+  riskLevel?: 'low' | 'medium' | 'high'
   raw: Record<string, unknown>
 }
 
@@ -141,6 +150,28 @@ export interface MarketplaceConnector {
   fetchInventory(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceInventorySnapshot>, string>>
   fetchOrders(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceOrderSnapshot>, string>>
   fetchFees(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceFeeSnapshot>, string>>
+
+  /**
+   * Pushes tracking/fulfilment information back to the marketplace (Milestone 5)
+   * — the "marketplace updated" step in the order pipeline. Declared even for
+   * connectors that do not yet implement it for real, returning an honest
+   * error rather than a silent no-op, so a caller can always tell "this
+   * marketplace update failed" apart from "nothing happened."
+   */
+  submitFulfilmentUpdate(update: FulfilmentUpdateInput): Promise<Result<FulfilmentUpdateOutcome, string>>
+}
+
+export interface FulfilmentUpdateInput {
+  externalOrderId: string
+  carrier: string
+  trackingNumber: string
+  /** Idempotency: resubmitting the same update must not create a duplicate marketplace-side record. */
+  idempotencyKey: string
+}
+
+export interface FulfilmentUpdateOutcome {
+  accepted: boolean
+  marketplaceReference: string | null
 }
 
 /** Runtime health, combining the descriptor with what has actually happened. */

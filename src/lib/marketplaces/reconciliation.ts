@@ -148,6 +148,59 @@ export function reconcileOrders(
   return discrepancies
 }
 
+export interface OurFulfilmentRecord {
+  externalOrderId: string
+  status: string
+  trackingNumber: string | null
+  recordedAt: string
+}
+
+/**
+ * Marketplace-reported fulfilment status, where a connector's order snapshot
+ * carries one — built as its own reconciler (Milestone 5) rather than folded
+ * into `reconcileOrders`, because fulfilment and order status are genuinely
+ * different facts that can each be individually wrong: an order can be
+ * correctly "paid" on both sides while its fulfilment status has drifted.
+ */
+export function reconcileFulfilment(
+  ours: readonly OurFulfilmentRecord[],
+  marketplace: readonly { externalOrderId: string; fulfilmentStatus: string; trackingNumber: string | null; reportedAt: string }[],
+): readonly Discrepancy[] {
+  const byExternalId = new Map(ours.map((record) => [record.externalOrderId, record]))
+  const discrepancies: Discrepancy[] = []
+
+  for (const snapshot of marketplace) {
+    const our = byExternalId.get(snapshot.externalOrderId)
+    if (!our) continue
+
+    if (our.status !== snapshot.fulfilmentStatus) {
+      discrepancies.push({
+        field: 'fulfilment_status',
+        channelProductRef: snapshot.externalOrderId,
+        ourValue: our.status,
+        marketplaceValue: snapshot.fulfilmentStatus,
+        ourRecordedAt: our.recordedAt,
+        marketplaceReportedAt: snapshot.reportedAt,
+      })
+    }
+
+    const ourTracking = our.trackingNumber ?? '(none)'
+    const theirTracking = snapshot.trackingNumber ?? '(none)'
+    if (ourTracking !== theirTracking) {
+      discrepancies.push({
+        field: 'tracking',
+        channelProductRef: snapshot.externalOrderId,
+        ourValue: ourTracking,
+        marketplaceValue: theirTracking,
+        ourRecordedAt: our.recordedAt,
+        marketplaceReportedAt: snapshot.reportedAt,
+      })
+    }
+  }
+
+  return discrepancies
+}
+
 export interface ReconciliationSummary {
   discrepancies: readonly Discrepancy[]
   checkedCount: number

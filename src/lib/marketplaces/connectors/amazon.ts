@@ -4,6 +4,8 @@ import type {
   ConnectionHealth,
   FetchOptions,
   FetchOutcome,
+  FulfilmentUpdateInput,
+  FulfilmentUpdateOutcome,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
@@ -130,12 +132,15 @@ async function spApiRequest<T>(
   aws: AwsCredentials,
   path: string,
   queryParams: Record<string, string> = {},
+  body?: unknown,
 ): Promise<Result<T, string>> {
   const tokenResult = await getAccessToken(creds)
   if (!tokenResult.ok) return tokenResult
 
+  const method = body === undefined ? 'GET' : 'POST'
+  const bodyText = body === undefined ? '' : JSON.stringify(body)
   const signed = signAwsRequestV4(
-    { method: 'GET', host: SP_API_HOST, path, queryParams, headers: {}, body: '' },
+    { method, host: SP_API_HOST, path, queryParams, headers: {}, body: bodyText },
     aws,
   )
 
@@ -144,7 +149,13 @@ async function spApiRequest<T>(
 
   try {
     const response = await fetch(url, {
-      headers: { ...signed.headers, 'x-amz-access-token': tokenResult.value },
+      method,
+      headers: {
+        ...signed.headers,
+        'x-amz-access-token': tokenResult.value,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      body: body === undefined ? undefined : bodyText,
     })
     if (!response.ok) {
       return err(`SP-API returned ${response.status} ${response.statusText} for ${path}.`)
@@ -254,6 +265,44 @@ export class AmazonConnector implements MarketplaceConnector {
     return err(
       `Fee reporting requires the Finances API, not yet implemented in this connector (requested up to ${options.limit} records).`,
     )
+  }
+
+  /**
+   * Confirms shipment for a merchant-fulfilled (MFN) order.
+   *
+   * IMPORTANT — lower confidence than the read-only methods above: Amazon's
+   * SP-API surface for confirming shipment has changed over time (an Orders
+   * API shipment-confirmation call in earlier API versions; increasingly,
+   * fulfilment updates for MFN orders are expected via the Feeds API using
+   * an uploaded shipment-confirmation feed document, an entirely different,
+   * asynchronous flow this method does not implement). This is written
+   * against the Orders API v0 shape, is untested against a live account, and
+   * should be checked against Amazon's *current* SP-API documentation before
+   * being relied on — do not assume this is correct without that check.
+   */
+  async submitFulfilmentUpdate(update: FulfilmentUpdateInput): Promise<Result<FulfilmentUpdateOutcome, string>> {
+    const creds = credentials()
+    const aws = awsCredentials()
+    if (!creds || !aws) return err('Amazon is not configured.')
+
+    const result = await spApiRequest<{ payload?: { orderId: string } }>(
+      creds,
+      aws,
+      `/orders/v0/orders/${update.externalOrderId}/shipmentConfirmation`,
+      {},
+      {
+        marketplaceId: creds.marketplaceId,
+        packageDetail: {
+          packageReferenceId: update.idempotencyKey,
+          carrierCode: update.carrier,
+          trackingNumber: update.trackingNumber,
+          shipDate: new Date().toISOString(),
+        },
+      },
+    )
+    if (!result.ok) return result
+
+    return ok({ accepted: true, marketplaceReference: result.value.payload?.orderId ?? null })
   }
 }
 

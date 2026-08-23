@@ -3,6 +3,8 @@ import type {
   ConnectionHealth,
   FetchOptions,
   FetchOutcome,
+  FulfilmentUpdateInput,
+  FulfilmentUpdateOutcome,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
@@ -77,16 +79,20 @@ async function shopifyRequest<T>(
   creds: ShopifyCredentials,
   path: string,
   params: Record<string, string> = {},
+  body?: unknown,
 ): Promise<Result<T, string>> {
   const url = new URL(`https://${creds.storeDomain}/admin/api/${creds.apiVersion}/${path}`)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
 
   try {
     const response = await fetch(url, {
+      method: body === undefined ? 'GET' : 'POST',
       headers: {
         'X-Shopify-Access-Token': creds.accessToken,
         Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
+      body: body === undefined ? undefined : JSON.stringify(body),
     })
 
     if (!response.ok) {
@@ -215,6 +221,35 @@ export class ShopifyConnector implements MarketplaceConnector {
     return err(
       `Fee reporting requires the Shopify Payments Payouts API, which is not yet implemented in this connector (requested up to ${options.limit} records).`,
     )
+  }
+
+  async submitFulfilmentUpdate(update: FulfilmentUpdateInput): Promise<Result<FulfilmentUpdateOutcome, string>> {
+    const creds = credentials()
+    if (!creds) return err('Shopify is not configured.')
+
+    // Shopify's Fulfillment resource is created with a POST carrying the
+    // tracking info in the documented shape. Shopify does not itself
+    // deduplicate a resubmission of the same tracking number, which is why
+    // `update.idempotencyKey` is recorded in our own `channel_sync_runs` (the
+    // caller's responsibility, not this connector's) rather than assumed to
+    // be handled marketplace-side.
+    const result = await shopifyRequest<{ fulfillment: { id: number; status: string } }>(
+      creds,
+      `orders/${update.externalOrderId}/fulfillments.json`,
+      {},
+      {
+        fulfillment: {
+          tracking_info: { number: update.trackingNumber, company: update.carrier },
+          notify_customer: true,
+        },
+      },
+    )
+    if (!result.ok) return result
+
+    return ok({
+      accepted: result.value.fulfillment.status === 'success',
+      marketplaceReference: String(result.value.fulfillment.id),
+    })
   }
 }
 

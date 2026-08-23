@@ -310,6 +310,133 @@ cancellation and refund as first-class cases, not exceptions to a happy path.
 Build reconciliation jobs that detect when internal records disagree with a
 marketplace or supplier.
 
+- [x] Order status state machine (`orders/lifecycle.ts`): `pending → paid →
+      awaiting_fulfilment → partially_fulfilled/fulfilled → delivered`, with
+      `cancelled`/`refunded`/`partially_refunded`/`failed` reachable as
+      first-class branches rather than exceptions. Reuses the existing
+      `order_status` enum; mirrors the `ALLOWED` transition map +
+      `planTransition` shape from `products/lifecycle.ts` and
+      `marketplaces/listingLifecycle.ts`, plus a new append-only
+      `order_status_transitions` history table.
+- [x] Fulfilment status state machine (`fulfilment/lifecycle.ts`), same shape,
+      keyed on `fulfilment_status` and a new `fulfilment_status_transitions`
+      table. `failed` is deliberately **not** terminal here — unlike an order,
+      a failed fulfilment can be retried against a different supplier via the
+      redundancy evaluator built in Milestone 3.
+- [x] Stock reservation with race-condition handling (`inventory/reservation.ts`):
+      `reserveStock`, `releaseReservation` and a `reserveStockBatch` that
+      processes requests in order and reports exactly which ones succeeded,
+      partially succeeded, or failed against the remaining balance — the
+      "two orders for the last unit" race is a named test case, not an
+      afterthought.
+- [x] Order validation and idempotent ingestion (`orders/validation.ts`,
+      `orders/ingestion.ts`): `validateOrder` distinguishes fatal issues from
+      warnings (a 5-minor-unit total-mismatch tolerance for rounding);
+      `planOrderIngestion` returns `create | already_ingested |
+      status_changed | rejected` so the same webhook delivered twice, or a
+      status-only update, never creates a duplicate order.
+- [x] Profitability re-check against live order economics
+      (`orders/profitabilityRecheck.ts`): calls `calculateProfitability`
+      directly — never a second, order-specific formula — because an order's
+      real price and real supplier cost at fulfilment time can differ from
+      the estimate the listing was approved against.
+- [x] Compliance re-check (`orders/complianceRecheck.ts`): required when the
+      fulfilling supplier differs from the one the listing was approved
+      against, when product details have changed since approval, or when the
+      last assessment is more than 90 days old. A supplier substitution never
+      fulfils silently against a compliance basis that no longer applies.
+- [x] Supplier selection for fulfilment (`fulfilment/selection.ts`): wraps the
+      existing `rankSuppliers` engine from Milestones 2–3; prefers the
+      already-approved supplier when it is also best-ranked, otherwise falls
+      back to the best alternative with an explicit "this needs a compliance
+      re-check" rationale attached to the choice.
+- [x] Fulfilment submission gate (`fulfilment/submission.ts`), the order-side
+      sibling of Milestone 4's `publicationGate.ts`: composes supplier
+      selection, stock reservation, the profitability re-check, the
+      compliance re-check and automation permission into named, individually
+      reported requirements, then decides `submit_automatically |
+      pending_approval | blocked`. Automation may auto-submit at `supervised`
+      *or* `autonomous` here — looser than the publication gate's
+      `autonomous`-only rule, because fulfilling an already-approved listing
+      carries materially less downside than creating a new one — but, as with
+      publication, a compliance or profitability failure blocks regardless of
+      automation level, proven by dedicated tests.
+- [x] Refund handling (`orders/refunds.ts`): a new
+      `business_settings.max_auto_refund_minor` (default £50) gates
+      auto-approval; manual/assisted automation always requires approval; a
+      refund exceeding the order's remaining refundable balance is blocked
+      regardless of automation level.
+- [x] Delivery/tracking health (`fulfilment/tracking.ts`): flags missing
+      tracking, stale status (no update in 5+ days), and overdue delivery as
+      named, distinct conditions rather than one generic "problem" flag.
+- [x] End-to-end orchestration (`orders/pipeline.ts`): `runOrderPipeline`
+      threads ingestion → profitability re-check → compliance re-check →
+      supplier selection → stock reservation → submission → delivery health
+      in the documented order, composing every engine above without
+      duplicating any of their logic.
+- [x] Fulfilment-side marketplace update: `MarketplaceConnector.submitFulfilmentUpdate`
+      added to the Milestone 4 connector interface, implemented for real
+      against Shopify's `POST orders/{id}/fulfillments.json` and Amazon's
+      SP-API shipment confirmation endpoint (the latter carries an explicit
+      lower-confidence caveat — Amazon's shipment-confirmation surface has
+      changed over time and should be checked against current SP-API docs
+      before being relied on). Implementing this surfaced a real, pre-existing
+      bug: both connectors' internal request helpers (`shopifyRequest`,
+      `spApiRequest`) only supported GET, so a fulfilment "update" would
+      silently have been a broken GET against a create-fulfilment endpoint —
+      fixed by extending both to support a POST body.
+- [x] Reconciliation extended to fulfilment (`marketplaces/reconciliation.ts`):
+      `reconcileFulfilment` compares both fulfilment status and tracking
+      number between our records and the marketplace's, following the same
+      "record both values, resolve nothing automatically" pattern as the
+      existing stock/price/order-status reconciliation.
+- [x] Migrations `0017_order_orchestration.sql`, `0018_rls_order_orchestration.sql`:
+      `order_status_transitions` and `fulfilment_status_transitions` (both
+      append-only via `forbid_mutation`, read-only through RLS), plus
+      `orders.risk_level`/`risk_assessed_at` and
+      `business_settings.max_auto_refund_minor`. 63 tables, 18 migrations.
+- [x] New Orders page (`/orders`) showing three demo order scenarios run
+      through the real pipeline end to end, each isolating exactly one
+      genuine failure mode: a clean happy path awaiting approval at the
+      "assisted" automation level; an order whose approved supplier is
+      unavailable, forcing a compliance re-check that fails; and a genuine
+      stock shortfall with every other requirement passing. Each requirement
+      the submission gate checked is listed individually with its own
+      pass/fail reason, not collapsed into one verdict.
+
+**Verified:** 424 unit/integration tests pass (up from 332, +92); 18
+migrations apply cleanly against PGlite; typecheck, lint and build are clean;
+all 20+ routes return 200 in demo mode; the new Orders page was confirmed
+rendering live in the browser with all three scenarios showing their intended,
+isolated failure mode and no console errors beyond the dev server's own HMR
+websocket noise (unrelated to application code); `/marketplaces` and
+`/approvals` continue to render with no regression from the new orchestration
+layer.
+
+**Not implemented / explicitly out of scope for this milestone:**
+- The Approvals page does not yet have working approve/reject buttons wired
+  to the new fulfilment submission gate — its copy already said "Approve and
+  reject actions arrive with the automation engine in Milestone 5" from an
+  earlier milestone, but wiring a click-through action that actually advances
+  an order's state belongs with Milestone 6's formal action/audit pipeline,
+  not this milestone's orchestration *logic*, so it was left as read-only.
+- No order has ever been ingested from a real marketplace connector, because
+  no live connector exists yet (Milestone 4's honest limitation) — so
+  `order_status_transitions`, `fulfilment_status_transitions` and the new
+  `business_settings.max_auto_refund_minor` column have no live-org rows to
+  verify against; only demo data exercises them.
+- Refund processing (`orders/refunds.ts`) decides whether a refund is
+  permitted; it does not call any marketplace or payment provider to actually
+  issue one — no payment provider connector exists yet.
+- AWS SigV4 signing used by the Amazon fulfilment-update path remains
+  verified only for internal structural correctness (canonical request
+  shape, determinism), not against AWS's official signing test vectors — see
+  §7 of `HANDOVER.md`.
+
+**Blocked by credentials/API access:** live-verifying `submitFulfilmentUpdate`
+against a real Shopify store or Amazon seller account requires the same real
+accounts named as blocked in Milestone 4.
+
 ## Milestone 6 — Automation engine
 
 A formal trigger → conditions → rules → decision → permission check → action

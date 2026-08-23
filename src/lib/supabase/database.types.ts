@@ -580,6 +580,7 @@ export interface Database {
           preferred_countries: string[]
           created_at: string
           updated_at: string
+          max_auto_refund_minor: number
         }
         Insert: {
           org_id: string
@@ -624,6 +625,7 @@ export interface Database {
           preferred_countries?: string[]
           created_at?: string
           updated_at?: string
+          max_auto_refund_minor?: number
         }
         Update: {
           org_id?: string
@@ -668,6 +670,7 @@ export interface Database {
           preferred_countries?: string[]
           created_at?: string
           updated_at?: string
+          max_auto_refund_minor?: number
         }
         Relationships: [
           {
@@ -1795,6 +1798,80 @@ export interface Database {
           },
         ]
       }
+      fulfilment_status_transitions: {
+        Row: {
+          id: number
+          org_id: string
+          fulfilment_id: string
+          from_status: Database['public']['Enums']['fulfilment_status'] | null
+          to_status: Database['public']['Enums']['fulfilment_status']
+          reason: string
+          actor_type: Database['public']['Enums']['actor_type']
+          actor_user_id: string | null
+          actor_label: string | null
+          evidence: Json
+          ai_decision_id: string | null
+          occurred_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          fulfilment_id: string
+          from_status?: Database['public']['Enums']['fulfilment_status'] | null
+          to_status: Database['public']['Enums']['fulfilment_status']
+          reason: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          fulfilment_id?: string
+          from_status?: Database['public']['Enums']['fulfilment_status'] | null
+          to_status?: Database['public']['Enums']['fulfilment_status']
+          reason?: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'fulfilment_status_transitions_actor_user_id_fkey'
+            columns: ['actor_user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'fulfilment_status_transitions_ai_decision_id_fkey'
+            columns: ['ai_decision_id']
+            isOneToOne: false
+            referencedRelation: 'ai_decisions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'fulfilment_status_transitions_fulfilment_id_fkey'
+            columns: ['fulfilment_id']
+            isOneToOne: false
+            referencedRelation: 'fulfilments'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'fulfilment_status_transitions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       fulfilments: {
         Row: {
           id: string
@@ -2425,6 +2502,80 @@ export interface Database {
           },
         ]
       }
+      order_status_transitions: {
+        Row: {
+          id: number
+          org_id: string
+          order_id: string
+          from_status: Database['public']['Enums']['order_status'] | null
+          to_status: Database['public']['Enums']['order_status']
+          reason: string
+          actor_type: Database['public']['Enums']['actor_type']
+          actor_user_id: string | null
+          actor_label: string | null
+          evidence: Json
+          ai_decision_id: string | null
+          occurred_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          order_id: string
+          from_status?: Database['public']['Enums']['order_status'] | null
+          to_status: Database['public']['Enums']['order_status']
+          reason: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          order_id?: string
+          from_status?: Database['public']['Enums']['order_status'] | null
+          to_status?: Database['public']['Enums']['order_status']
+          reason?: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'order_status_transitions_actor_user_id_fkey'
+            columns: ['actor_user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'order_status_transitions_ai_decision_id_fkey'
+            columns: ['ai_decision_id']
+            isOneToOne: false
+            referencedRelation: 'ai_decisions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'order_status_transitions_order_id_fkey'
+            columns: ['order_id']
+            isOneToOne: false
+            referencedRelation: 'orders'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'order_status_transitions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       orders: {
         Row: {
           id: string
@@ -2454,6 +2605,8 @@ export interface Database {
           is_demo: boolean
           created_at: string
           updated_at: string
+          risk_level: string | null
+          risk_assessed_at: string | null
         }
         Insert: {
           id?: string
@@ -2483,6 +2636,8 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          risk_level?: string | null
+          risk_assessed_at?: string | null
         }
         Update: {
           id?: string
@@ -2512,6 +2667,8 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          risk_level?: string | null
+          risk_assessed_at?: string | null
         }
         Relationships: [
           {

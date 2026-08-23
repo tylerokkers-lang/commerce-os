@@ -1,4 +1,4 @@
-import { ok, type Result } from '@/lib/core/result'
+import { err, ok, type Result } from '@/lib/core/result'
 import {
   demoShopifyFees,
   demoShopifyInventory,
@@ -9,6 +9,8 @@ import type {
   ConnectionHealth,
   FetchOptions,
   FetchOutcome,
+  FulfilmentUpdateInput,
+  FulfilmentUpdateOutcome,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
@@ -38,7 +40,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     writeListings: false,
     syncInventory: true,
     ingestOrders: true,
-    updateFulfilment: false,
+    updateFulfilment: true,
     processRefunds: false,
     readFees: true,
     webhooks: false,
@@ -77,6 +79,16 @@ export class ShopifyDemoConnector implements MarketplaceConnector {
 
   async fetchFees(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceFeeSnapshot>, string>> {
     return ok({ records: demoShopifyFees().slice(0, options.limit), requestsMade: 0, warnings: [] })
+  }
+
+  async submitFulfilmentUpdate(update: FulfilmentUpdateInput): Promise<Result<FulfilmentUpdateOutcome, string>> {
+    // Genuinely validates rather than accepting anything unconditionally, so
+    // the "marketplace update failure" path has real behaviour to exercise
+    // in tests, not a hardcoded success.
+    if (!update.trackingNumber || !update.carrier) {
+      return err('A tracking number and carrier are both required.')
+    }
+    return ok({ accepted: true, marketplaceReference: `demo-fulfilment-${update.idempotencyKey}` })
   }
 }
 

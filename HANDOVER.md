@@ -5,7 +5,7 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (Milestone 4 complete).
+Last updated: 23 August 2026 (Milestone 5 complete).
 
 ## 1. What this is
 
@@ -377,10 +377,80 @@ against either marketplace, no public webhook endpoint. See
 page shows both channels as "Demo," never "Connected," and `/api/health`
 continues to report every real credential as genuinely absent.
 
-## 15. Next step
+## 16. Milestone 5 (order and fulfilment orchestration) — what was built
 
-Milestone 5 (order and fulfilment orchestration), per `docs/MILESTONES.md`.
-It is the natural next step: it uses the connector foundation, the
-publication gate, and the idempotency patterns built here. Read
-`docs/PRINCIPLES.md` first. Do not start Milestone 6 until Milestone 5 is
-tested and working.
+- `orders/lifecycle.ts`, `fulfilment/lifecycle.ts` — order and fulfilment
+  status state machines, same `ALLOWED` map + `planTransition` shape as every
+  prior lifecycle in this codebase. Note: fulfilment `failed` is deliberately
+  **not terminal** — it can be retried against a different supplier via the
+  Milestone 3 redundancy evaluator, unlike a genuinely terminal order state.
+- `inventory/reservation.ts` — `reserveStock`/`releaseReservation`/
+  `reserveStockBatch`, handling the exact "two orders competing for the last
+  unit" race as a named case, not an afterthought.
+- `orders/validation.ts`, `orders/ingestion.ts` — validation distinguishes
+  fatal vs warning issues; ingestion is idempotent (`create |
+  already_ingested | status_changed | rejected`), so a duplicate webhook or a
+  status-only update never creates a second order.
+- `orders/profitabilityRecheck.ts`, `orders/complianceRecheck.ts` — both call
+  the existing Milestone 1/2 engines directly rather than recalculating
+  anything. Compliance re-check triggers on supplier substitution, changed
+  product details, or an assessment older than 90 days.
+- `fulfilment/selection.ts`, `fulfilment/submission.ts` — supplier choice
+  (wraps the Milestone 2/3 `rankSuppliers`) and the fulfilment submission
+  gate, the order-side sibling of Milestone 4's `publicationGate.ts`.
+  Automation may auto-submit at `supervised` **or** `autonomous` here
+  (looser than publication's `autonomous`-only rule — a fulfilment against an
+  already-approved listing carries less downside than a new listing) but a
+  compliance or profitability failure still blocks regardless of level.
+- `orders/refunds.ts` — gated by a new `business_settings.max_auto_refund_minor`
+  (default £50); manual/assisted always needs approval; a refund exceeding
+  the remaining refundable balance is blocked at any automation level.
+- `fulfilment/tracking.ts` — `assessDeliveryHealth`: missing tracking, stale
+  status (5+ days), overdue delivery as distinct named conditions.
+- `orders/pipeline.ts` — `runOrderPipeline`, the orchestration function
+  threading every engine above in the documented order.
+- Extended `MarketplaceConnector` (Milestone 4's interface) with
+  `submitFulfilmentUpdate`, implemented for real against Shopify's
+  create-fulfilment endpoint and Amazon's SP-API shipment confirmation (the
+  latter explicitly caveated as lower-confidence — check current SP-API docs
+  before relying on it). **Building this found a real bug**: `shopifyRequest`
+  and `spApiRequest` (Milestone 4's connector request helpers) only supported
+  GET; a fulfilment "update" would have silently been a broken GET against a
+  create-fulfilment endpoint. Fixed by extending both to support a POST body.
+- `reconciliation.ts` extended with `reconcileFulfilment` — same
+  record-both-values pattern, now also covering fulfilment status and
+  tracking number.
+- Migrations `0017`-`0018`: `order_status_transitions`,
+  `fulfilment_status_transitions` (append-only, read-only through RLS),
+  `orders.risk_level`/`risk_assessed_at`, `business_settings.max_auto_refund_minor`.
+  63 tables, 18 migrations.
+- New `/orders` page: three demo scenarios run through the real
+  `runOrderPipeline`, each isolating exactly one failure mode (clean happy
+  path awaiting approval; approved supplier unavailable → compliance
+  re-check fails; genuine stock shortfall with everything else passing).
+
+**What Milestone 5 deliberately does not do:**
+- No approve/reject buttons on the Approvals page yet — click-through actions
+  that actually advance state belong with Milestone 6's formal action/audit
+  pipeline, not this milestone's orchestration logic.
+- Refund *decisions* are made; no payment provider is called to actually
+  issue one — no payment connector exists yet.
+- No live order has ever been ingested (no live marketplace connector exists
+  per Milestone 4) — the new tables and column have no live-org rows.
+
+**No fake connected/completed states were introduced.** Verified live: all
+three `/orders` scenarios show their intended, isolated failure reason, not a
+generic pass/fail; `/marketplaces` and `/approvals` render with no regression.
+
+**Verified:** 424 tests (up from 332), 18 migrations, typecheck/lint/build
+clean, all 20+ routes return 200, `/orders` confirmed live in browser.
+
+## 17. Next step
+
+Milestone 6 (automation engine), per `docs/MILESTONES.md`. It is the natural
+next step: it formalises the automation-level gating already enforced inline
+throughout Milestones 4-5 into one trigger → conditions → rules → decision →
+permission check → action → audit → monitoring pipeline, and is where the
+Approvals page's approve/reject actions (currently read-only) should actually
+get wired up. Read `docs/PRINCIPLES.md` first. Do not start Milestone 7 until
+Milestone 6 is tested and working.

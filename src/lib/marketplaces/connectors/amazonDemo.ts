@@ -1,9 +1,11 @@
-import { ok, type Result } from '@/lib/core/result'
+import { err, ok, type Result } from '@/lib/core/result'
 import { demoAmazonFees, demoAmazonListings, demoAmazonOrders } from '@/lib/demo/marketplaceData'
 import type {
   ConnectionHealth,
   FetchOptions,
   FetchOutcome,
+  FulfilmentUpdateInput,
+  FulfilmentUpdateOutcome,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
@@ -28,7 +30,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     writeListings: false,
     syncInventory: false,
     ingestOrders: true,
-    updateFulfilment: false,
+    updateFulfilment: true,
     processRefunds: false,
     readFees: true,
     webhooks: false,
@@ -73,6 +75,13 @@ export class AmazonDemoConnector implements MarketplaceConnector {
 
   async fetchFees(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceFeeSnapshot>, string>> {
     return ok({ records: demoAmazonFees().slice(0, options.limit), requestsMade: 0, warnings: [] })
+  }
+
+  async submitFulfilmentUpdate(update: FulfilmentUpdateInput): Promise<Result<FulfilmentUpdateOutcome, string>> {
+    if (!update.trackingNumber || !update.carrier) {
+      return err('A tracking number and carrier are both required.')
+    }
+    return ok({ accepted: true, marketplaceReference: `demo-shipment-${update.idempotencyKey}` })
   }
 }
 
