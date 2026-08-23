@@ -1,9 +1,10 @@
 # Security
 
-A review of the automation engine's security-relevant surface, written as
-part of Milestone 7. This is not a certification — it is what was actually
-checked, what it found, and what remains genuinely unverified because the
-credentials or infrastructure to verify it do not exist in this environment.
+A review of the automation and monitoring engines' security-relevant
+surface, written as part of Milestone 7 and extended for Milestone 8. This
+is not a certification — it is what was actually checked, what it found,
+and what remains genuinely unverified because the credentials or
+infrastructure to verify it do not exist in this environment.
 
 ## Row level security
 
@@ -24,7 +25,11 @@ Every org-scoped table has RLS enabled and is asserted by `npm run db:verify`
 `automation_actions`/`automation_jobs` (Milestone 6) and the columns
 Milestone 7 added to `automation_actions` (`external_ref`,
 `verification_status`, `reconciliation_status`) follow the read-only
-pattern exactly — checked in `0020_rls_automation_engine.sql`.
+pattern exactly — checked in `0020_rls_automation_engine.sql`. Milestone
+8's `domain_events`, `monitor_observations` and `monitor_runs` follow the
+identical pattern — checked in `0023_rls_monitoring_events.sql` — for the
+same reason: a monitoring history a viewer could edit or delete would not
+be a history.
 
 **Not verified**: real RLS *enforcement* under an authenticated Supabase
 session with a real JWT. `npm run db:verify` checks that policies exist and
@@ -51,9 +56,12 @@ not by the claim query itself.
 
 ## Scheduler authentication
 
-`POST /api/automation/run` has no user session — a scheduler is not a
-logged-in owner. It is authenticated by a shared secret
-(`AUTOMATION_CRON_SECRET`) compared with `crypto.timingSafeEqual`, not `===`,
+`POST /api/automation/run` and, since Milestone 8, `POST
+/api/monitoring/run` have no user session — a scheduler is not a logged-in
+owner. Both are authenticated by the same shared secret
+(`AUTOMATION_CRON_SECRET`) compared with `crypto.timingSafeEqual`, not `===`
+(factored into `src/lib/core/schedulerAuth.ts` during Milestone 8 so both
+routes share one implementation rather than two copies that could drift),
 so a wrong guess cannot be narrowed down by response timing. Once Supabase
 is configured, a missing or absent secret refuses every request (503) rather
 than running unauthenticated against a live database. The secret is read
@@ -122,6 +130,42 @@ payload. `worker.ts`'s `HANDLERS` map is a closed, reviewable set — a job's
 `eval`, no dynamic `import()` of a payload-supplied path, and no code path
 that treats any part of a job payload as executable. A payload only ever
 supplies *data* to a fixed handler.
+
+## Monitoring never performs a business action (Milestone 8)
+
+`src/lib/monitoring/registry.ts`'s `MONITORS` map is the same closed,
+reviewable-set pattern as `worker.ts`'s `HANDLERS` — a monitor key selects a
+monitor by exact string match, never by evaluating anything from
+configuration or a payload as code. More importantly, no monitor module
+imports a marketplace connector's write methods, `priceExecution.ts`, or
+`supplierSwitchExecution.ts` — the brief's "monitoring observes, automation
+decides and acts" separation is enforced by what these modules are allowed
+to depend on, not only documented. `marketplaceMonitor.ts` calls a
+connector's *read* method (`fetchListings`) only; every subsequent write
+happens later, inside the automation engine, once a job the monitor
+enqueued is actually claimed and its policy checked.
+
+`EVENT_TO_JOB_MAPPING` (`registry.ts`) is the single, auditable point where
+an event type is allowed to become a job — `tests/monitoring-registry.test.ts`
+asserts every monitor's real `enqueueJob` calls agree with this table, and
+separately asserts every non-null mapped job type is a real, registered
+`worker.ts` handler, so this table cannot silently drift into naming a job
+type that does not exist.
+
+## What Milestone 8 changed here
+
+- Factored scheduler-secret comparison into `core/schedulerAuth.ts`, shared
+  by `/api/automation/run` and the new `/api/monitoring/run`, rather than a
+  second copy.
+- Extended the read-only-history RLS pattern to three new tables
+  (`domain_events`, `monitor_observations`, `monitor_runs`).
+- Introduced a second closed-registry dispatch pattern (`MONITORS`,
+  mirroring `HANDLERS`) and a second explicit mapping table
+  (`EVENT_TO_JOB_MAPPING`), both reviewable and both tested for
+  consistency with what the code actually does.
+- No new credential types were introduced; `liveSubjects.ts` reads from the
+  same Supabase tables every other server-only module already reads, via
+  the same service-role client.
 
 ## What Milestone 7 changed here
 

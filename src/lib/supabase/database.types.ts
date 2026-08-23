@@ -1861,6 +1861,126 @@ export interface Database {
           },
         ]
       }
+      domain_events: {
+        Row: {
+          id: string
+          org_id: string
+          event_type: string
+          subject_type: string
+          subject_id: string | null
+          source: string
+          source_connector_key: string | null
+          source_observation_id: string | null
+          occurred_at: string
+          detected_at: string
+          severity: Database['public']['Enums']['event_severity']
+          previous_value: Json | null
+          current_value: Json | null
+          facts: Json
+          metadata: Json
+          dedupe_key: string | null
+          correlation_id: string
+          causation_id: string | null
+          status: Database['public']['Enums']['event_status']
+          automation_job_id: string | null
+          superseded_by: string | null
+          monitor_run_id: string | null
+          is_demo: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          event_type: string
+          subject_type: string
+          subject_id?: string | null
+          source: string
+          source_connector_key?: string | null
+          source_observation_id?: string | null
+          occurred_at?: string
+          detected_at?: string
+          severity?: Database['public']['Enums']['event_severity']
+          previous_value?: Json | null
+          current_value?: Json | null
+          facts?: Json
+          metadata?: Json
+          dedupe_key?: string | null
+          correlation_id?: string
+          causation_id?: string | null
+          status?: Database['public']['Enums']['event_status']
+          automation_job_id?: string | null
+          superseded_by?: string | null
+          monitor_run_id?: string | null
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          event_type?: string
+          subject_type?: string
+          subject_id?: string | null
+          source?: string
+          source_connector_key?: string | null
+          source_observation_id?: string | null
+          occurred_at?: string
+          detected_at?: string
+          severity?: Database['public']['Enums']['event_severity']
+          previous_value?: Json | null
+          current_value?: Json | null
+          facts?: Json
+          metadata?: Json
+          dedupe_key?: string | null
+          correlation_id?: string
+          causation_id?: string | null
+          status?: Database['public']['Enums']['event_status']
+          automation_job_id?: string | null
+          superseded_by?: string | null
+          monitor_run_id?: string | null
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'domain_events_automation_job_id_fkey'
+            columns: ['automation_job_id']
+            isOneToOne: false
+            referencedRelation: 'automation_jobs'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'domain_events_causation_id_fkey'
+            columns: ['causation_id']
+            isOneToOne: false
+            referencedRelation: 'domain_events'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'domain_events_monitor_run_fk'
+            columns: ['monitor_run_id']
+            isOneToOne: false
+            referencedRelation: 'monitor_runs'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'domain_events_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'domain_events_superseded_by_fkey'
+            columns: ['superseded_by']
+            isOneToOne: false
+            referencedRelation: 'domain_events'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       expenses: {
         Row: {
           id: string
@@ -2440,6 +2560,112 @@ export interface Database {
             columns: ['user_id']
             isOneToOne: false
             referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      monitor_observations: {
+        Row: {
+          org_id: string
+          monitor_key: string
+          subject_type: string
+          subject_id: string
+          status: string
+          value: Json
+          last_checked_at: string
+          updated_at: string
+        }
+        Insert: {
+          org_id: string
+          monitor_key: string
+          subject_type: string
+          subject_id: string
+          status?: string
+          value?: Json
+          last_checked_at?: string
+          updated_at?: string
+        }
+        Update: {
+          org_id?: string
+          monitor_key?: string
+          subject_type?: string
+          subject_id?: string
+          status?: string
+          value?: Json
+          last_checked_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'monitor_observations_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      monitor_runs: {
+        Row: {
+          id: string
+          org_id: string
+          monitor_key: string
+          status: Database['public']['Enums']['monitor_run_status']
+          started_at: string
+          completed_at: string | null
+          subjects_checked: number
+          observations_created: number
+          events_created: number
+          events_deduplicated: number
+          error: string | null
+          next_scheduled_at: string | null
+          locked_by: string | null
+          locked_at: string | null
+          correlation_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          monitor_key: string
+          status?: Database['public']['Enums']['monitor_run_status']
+          started_at?: string
+          completed_at?: string | null
+          subjects_checked?: number
+          observations_created?: number
+          events_created?: number
+          events_deduplicated?: number
+          error?: string | null
+          next_scheduled_at?: string | null
+          locked_by?: string | null
+          locked_at?: string | null
+          correlation_id?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          monitor_key?: string
+          status?: Database['public']['Enums']['monitor_run_status']
+          started_at?: string
+          completed_at?: string | null
+          subjects_checked?: number
+          observations_created?: number
+          events_created?: number
+          events_deduplicated?: number
+          error?: string | null
+          next_scheduled_at?: string | null
+          locked_by?: string | null
+          locked_at?: string | null
+          correlation_id?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'monitor_runs_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
             referencedColumns: ['id']
           },
         ]
@@ -5004,6 +5230,8 @@ export interface Database {
       decision_status: 'recommended' | 'awaiting_approval' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired' | 'superseded'
       differentiation_kind: 'bundle' | 'packaging' | 'instructions' | 'accessories' | 'positioning' | 'quality' | 'support' | 'warranty' | 'variation' | 'value'
       discrepancy_field: 'stock' | 'price' | 'listing_status' | 'order_status' | 'fulfilment_status' | 'tracking'
+      event_severity: 'info' | 'warning' | 'critical'
+      event_status: 'open' | 'processing' | 'processed' | 'ignored' | 'superseded' | 'failed'
       expense_category: 'supplier_goods' | 'supplier_shipping' | 'marketplace_fee' | 'payment_fee' | 'advertising' | 'software' | 'packaging' | 'shipping' | 'professional_fees' | 'refund' | 'other'
       fulfilment_status: 'pending' | 'awaiting_supplier' | 'submitted' | 'accepted' | 'shipped' | 'delivered' | 'failed' | 'cancelled'
       identifier_source: 'manufacturer' | 'supplier' | 'gs1' | 'marketplace' | 'owner_supplied' | 'gtin_exemption'
@@ -5014,6 +5242,7 @@ export interface Database {
       marketplace_connection_status: 'demo' | 'not_configured' | 'connected' | 'degraded' | 'error'
       marketplace_listing_state: 'discovered' | 'evaluating' | 'approved' | 'ready_to_list' | 'pending_approval' | 'published' | 'paused' | 'ended' | 'blocked'
       member_role: 'owner' | 'admin' | 'analyst' | 'viewer'
+      monitor_run_status: 'running' | 'success' | 'partial_success' | 'failed' | 'cancelled'
       movement_reason: 'purchase_received' | 'sale' | 'reservation' | 'reservation_released' | 'return' | 'adjustment' | 'damage' | 'loss' | 'recount' | 'supplier_sync' | 'demo_seed'
       notification_severity: 'info' | 'success' | 'warning' | 'critical' | 'approval_required'
       order_status: 'pending' | 'paid' | 'awaiting_fulfilment' | 'partially_fulfilled' | 'fulfilled' | 'delivered' | 'cancelled' | 'refunded' | 'partially_refunded' | 'failed'

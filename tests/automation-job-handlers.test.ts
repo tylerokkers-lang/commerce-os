@@ -56,11 +56,18 @@ describe('job handler registry', () => {
     const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
     const facts = createInMemoryFactsLoader()
 
-    await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_price_change', payload: { productId: 'prod-1', supplierId: 'sup-1', previousUnitCostMinor: 900, newUnitCostMinor: 1100 } })
+    await store.enqueueJob({ orgId: ORG_A, jobType: 'supplier_price_change', payload: { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', previousUnitCostMinor: 900, newUnitCostMinor: 1100 } })
     await runWorkerBatch(store, facts, connectors, 'worker-1', 1) // Claim only the first job — the chained one is asserted separately.
 
     const chained = store.getState().jobs.find((j) => j.jobType === 'product_profitability_recheck')
     expect(chained).toBeTruthy()
+    // The chained payload itself must be well-formed enough for the next
+    // handler to actually accept it, not merely present — a prior bug here
+    // (missing channelProductId) let this test pass while the chained job
+    // silently failed as "malformed" every time it was actually claimed.
+    const batch2 = await runWorkerBatch(store, facts, connectors, 'worker-1', 1)
+    expect(batch2.succeeded).toBe(1)
+    expect(chained!.payload).toMatchObject({ productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1' })
   })
 
   it('SUPPLIER_STOCK_CHANGE chains into a PRODUCT_PAUSE job when out of stock with no alternative', async () => {

@@ -561,7 +561,7 @@ placeholder text.
   supplier/marketplace writer exists yet to perform the actual external
   write (switching a supplier, publishing a listing, issuing a refund),
   consistent with the same limitation Milestones 4 and 5 already documented.
-- No CEO Dashboard exists yet (Milestone 8) for the brief's §20 to extend —
+- No CEO Dashboard exists yet (Milestone 10) for the brief's §20 to extend —
   `automation/repository.ts`'s `getAutomationStatus` is written so that
   dashboard can read from it directly once built, rather than growing a
   second, possibly-diverging summary.
@@ -904,7 +904,240 @@ live with no console errors beyond a stale cached message from a
 since-closed tab (confirmed unrelated by opening a fresh tab); `informax-site`
 confirmed untouched throughout.
 
-## Milestone 8 — Analytics and business intelligence
+## Milestone 8 — Continuous intelligence, monitoring & event generation ✅ complete
+
+Milestone 7 answers "what is true about product X right now?" This milestone
+answers "what should the system check right now, what changed, and does that
+change require action?" It sits strictly upstream of the Milestone 6/7
+automation engine — monitors observe and raise domain events; they never
+decide or act. The full chain: schedule/event source → monitoring → load
+current facts → compare with previous verified facts → detect meaningful
+change → create domain event → deduplicate/coalesce → create automation job
+→ the existing automation engine → submit → verify → reconcile → audit →
+notification.
+
+**What was built:**
+
+- **Schema** (`0022_monitoring_events.sql`, `0023_rls_monitoring_events.sql`):
+  `domain_events` (id, org_id, event_type, subject_type, subject_id, source
+  `local|external|internal`, source_connector_key, source_observation_id,
+  occurred_at, detected_at, severity, previous_value/current_value jsonb,
+  facts/metadata jsonb, dedupe_key, correlation_id, causation_id self-FK,
+  status, automation_job_id FK, superseded_by self-FK, monitor_run_id,
+  is_demo) with a partial unique index
+  `(org_id, dedupe_key) WHERE status = 'open' AND dedupe_key IS NOT NULL` —
+  the actual deduplication guarantee, not an application-level convention;
+  `monitor_observations` (composite PK org_id+monitor_key+subject_type+
+  subject_id, status `ok|unavailable|unknown`, value jsonb,
+  last_checked_at) — each monitor's own "what did I last see" cursor;
+  `monitor_runs` (org_id, monitor_key, status, started_at, completed_at,
+  subjects_checked, observations_created, events_created,
+  events_deduplicated, error, next_scheduled_at, locked_by, locked_at,
+  correlation_id). All three read-only under RLS (service role writes only),
+  same pattern as `automation_actions`/`automation_jobs`. 68 tables, 23
+  migrations.
+- **`EventStore`** (`monitoring/eventTypes.ts`, `eventStore.ts`,
+  `inMemoryEventStore.ts`): the same "define the interface, satisfy it
+  twice" pattern as `AutomationStore`/`FactsLoader`. `createEvent` is
+  idempotent on `dedupeKey` — a duplicate insert is detected via Postgres
+  error `23505` in the real store and re-queries the existing open event;
+  the in-memory store reproduces the same race with two genuine
+  `await Promise.resolve()` yields between its check and its commit, proven
+  safe under real `Promise.all` interleaving in
+  `tests/monitoring-concurrency.test.ts` (2-way, 10-way, and monitor-level
+  races). Schedule intervals and numeric thresholds are read from the
+  existing `config_values` table (Milestone 1) — no new configuration
+  table.
+- **Five monitors** (`monitoring/monitors/*.ts`), one per required category,
+  each composing an existing engine rather than duplicating it:
+  - `supplierMonitor.ts` — stock and price, per supplier/product pair.
+    Distinguishes a genuine "unavailable" observation (`SUPPLIER_FEED_FAILED`)
+    from a genuine "in stock: false" observation (`SUPPLIER_OUT_OF_STOCK`) —
+    a failed connector can never be silently read as "out of stock." Price
+    changes compared against a configurable threshold (default 3%), not a
+    hardcoded one.
+  - `marketplaceMonitor.ts` — fetches real external listings from a
+    connector and calls `reconcileListings` (Milestone 4, unmodified) to
+    find genuine divergence. Loop prevention: it compares the marketplace's
+    live state against *our own already-reconciled local record* — a price
+    change our own automation just wrote and verified no longer looks like
+    external drift, which is what stops the reprice-loop the brief warned
+    about, proven in `tests/monitoring-marketplace.test.ts`'s "loop
+    prevention" test.
+  - `complianceMonitor.ts` — calls `decideComplianceRecheck` (Milestone 5)
+    directly; no compliance rule is re-implemented here.
+  - `profitabilityMonitor.ts` — a pure boundary check on supplier cost
+    (has it moved since the last look?), never a margin calculation; the
+    real margin arithmetic runs once the chained `product_profitability_recheck`
+    job calls `calculateProfitability` (the one profitability engine).
+  - `performanceMonitor.ts` — sales surge/decline, return-rate increase, ad
+    spend vs limit. Honest scope boundary: there is still no live
+    sales-aggregation query in this codebase, so the comparison windows are
+    caller-supplied, not queried from `orders`/`order_items` — the
+    comparison logic itself is real and tested. Never invents a "trending"
+    label without storing the calculation basis (units and date ranges) in
+    the event's `facts`.
+- **`registry.ts`**: a closed `MONITORS` map (mirrors `worker.ts`'s
+  `HANDLERS` map) and an explicit, auditable `EVENT_TO_JOB_MAPPING` table —
+  every event type this milestone defines maps to either a real job type or
+  `null` ("no safe automated action exists yet — event and notification
+  only"), never a guess buried in a conditional.
+  `tests/monitoring-registry.test.ts` drives real monitor scenarios and
+  asserts the job actually enqueued (by `correlationId === event.id`)
+  agrees with the declared mapping, and separately asserts every non-null
+  mapped job type is a real, registered handler in `worker.ts`.
+- **`runner.ts`** (`runDueMonitors`): the scheduler integration. Reuses
+  `automation/jobs.ts`'s concurrency philosophy rather than inventing a
+  second one — a monitor "claim" is simply inserting a `monitor_runs` row;
+  safety comes from every downstream write (`createEvent`) being itself
+  idempotent, so a duplicate tick produces duplicate *attempts* but never
+  duplicate *events*. Subject enumeration is wrapped in the same `try` as
+  the monitor run itself — **a real bug found by this milestone's own
+  tests**: the first draft called the caller-supplied `subjectsFor` before
+  starting the run record, so a failure enumerating subjects (e.g. a
+  database outage) would crash the entire scheduler sweep for every org and
+  monitor, with no `monitor_runs` row at all to show it happened. Fixed by
+  moving `startMonitorRun` before subject enumeration and wrapping both in
+  the same `try`/`catch`, so a subject-enumeration failure is now correctly
+  recorded as a `failed` run like any other. Run status is `success` when
+  no subject errored, `partial_success` when some but not all did, `failed`
+  when all did — never reported as success when half the connectors
+  failed.
+- **`POST /api/monitoring/run`**: same constant-time-secret pattern as
+  `/api/automation/run` (both now share `core/schedulerAuth.ts`), iterates
+  every organisation and calls `runDueMonitors` with the real Supabase-backed
+  `EventStore`/`AutomationStore`/`FactsLoader`. Demo mode returns
+  `{status: "skipped", reason: "Demo mode has no database and no monitors to
+  run."}` rather than fabricating a run.
+- **`liveSubjects.ts`**: real Supabase queries enumerating subjects for
+  `supplier_stock_and_price` (via `supplier_products`/`channel_products`)
+  and `marketplace_listing_sync` (via `channel_products` where
+  `status = 'live'`, hardcoded to the `shopify` connector for now); the
+  other three monitors return `[]` — an honestly documented following-pass
+  gap, not a hidden stub. `FactsLoader`'s Milestone 7 boundary ("answers
+  what's true for X, not which X to check") applies identically here.
+- **Two further real bugs found by the flagship integration test**
+  (`tests/monitoring-integration-e2e.test.ts`, which chains
+  `runDueMonitors` into `runWorkerBatch` against the same shared in-memory
+  stores — the brief's explicit "do not test only individual functions"
+  requirement): (1) `handleSupplierPriceChange` (Milestone 7) enqueued its
+  chained `product_profitability_recheck` job without a `channelProductId`
+  — a field that handler's own payload validator requires — so **every
+  supplier-price-change chain in production has always failed** as
+  "malformed payload" the moment the chained job was actually claimed. This
+  was invisible to Milestone 7's own handler test because that test only
+  asserted the chained job's existence, never actually ran it. Fixed by
+  adding `channelProductId` to `SupplierPriceChangeJobPayload`, its
+  validator, and both call sites (`supplierMonitor.ts` and the existing
+  `automation-job-handlers.test.ts`, which now also runs the chained job
+  and asserts it succeeds, not just that it exists). (2) `profitabilityMonitor`
+  raised an event on the very first-ever observation of a product (no prior
+  baseline existed, so "undefined cost" was compared as "different from"
+  the current cost) — fixed to silently establish a baseline on first
+  observation, matching `supplierMonitor`'s existing pattern. (3)
+  `performanceMonitor`'s own `PRODUCT_SALES_DECLINING` event was not
+  actually enqueuing the `product_profitability_recheck` job its own
+  `EVENT_TO_JOB_MAPPING` entry declared — found by
+  `tests/monitoring-registry.test.ts`'s consistency check, fixed to match.
+- **Business intelligence / live operations** (`monitoring/repository.ts`,
+  `/automation` page): there is still no dedicated CEO Dashboard (that
+  remains Milestone 10) — this extends the same `/automation` page
+  Milestone 7's production-readiness view already established. Shows
+  monitors registered/run-in-24h/failed-in-24h/never-run, open
+  critical/warning events, unavailable-supplier/reconciliation/compliance
+  alert counts, and a recent-events feed — all read from real
+  `monitor_runs`/`domain_events` rows, never inferred. Demo mode instead
+  runs the 5 required scenarios live (`demo/monitoring.ts`) against
+  in-memory stores and renders their actual output.
+- **Demo scenarios** (`demo/monitoring.ts`): all 5 required cases, each
+  driven through the real monitor + worker entry points, not narrated —
+  supplier price increase (£9.10 → £10.76) chaining into a real
+  profitability recheck; supplier out-of-stock chaining into the existing
+  redundancy evaluator; a genuine marketplace mismatch producing an
+  auditable `LISTING_OUT_OF_SYNC`/price-changed event; a failed supplier
+  connector producing `SUPPLIER_FEED_FAILED` with zero jobs enqueued: an
+  unknown fact never triggers a guess; and the same out-of-stock condition
+  checked 4 times in a row producing exactly one event and one job.
+
+**IMPLEMENTED AND VERIFIED** (by tests driving real entry points — monitors,
+`runDueMonitors`, `runWorkerBatch` — never a decision function directly):
+
+- Fact-first observation distinctions: `unavailable` vs `unknown` vs `ok`
+  never conflated; a failed connector never becomes an inferred stock state.
+- Meaningful-change detection against configurable thresholds (never a
+  hardcoded percentage).
+- Event deduplication under real concurrency (2-way, 10-way, and
+  monitor-level `Promise.all` races) and under repeated sequential runs.
+- Loop prevention in the marketplace monitor (comparing against our own
+  already-reconciled state, not naively re-diffing on every tick).
+- The full chain monitor → event → job → worker → live facts → the
+  profitability engine → an automation action with a real policy outcome →
+  audit → (conditionally) notification, through real entry points only.
+- Unknown/unavailable data cannot trigger an automated action (proven, not
+  asserted, in the flagship integration test).
+- `EVENT_TO_JOB_MAPPING` consistency with what monitors actually enqueue.
+- Org isolation on every new table (RLS asserted via `db:verify`, and
+  `tests/monitoring-events.test.ts`/`tests/monitoring-scheduler.test.ts`
+  exercise cross-org independence at the application layer too).
+- 57 new tests (596 total, up from 539): `monitoring-events.test.ts` (event
+  lifecycle/dedup/org isolation, 9 tests including `isMonitorDue`),
+  `monitoring-supplier.test.ts` (9), `monitoring-marketplace.test.ts` (5),
+  `monitoring-concurrency.test.ts` (3), `monitoring-compliance-profitability-performance.test.ts`
+  (13), `monitoring-scheduler.test.ts` (8), `monitoring-registry.test.ts`
+  (6), `monitoring-integration-e2e.test.ts` (2, the flagship chain), plus
+  one strengthened assertion in the existing `automation-job-handlers.test.ts`
+  (not counted as new). Typecheck, lint and `npm run build` all clean; `/automation` and
+  `/api/monitoring/run` confirmed live in the browser with no console
+  errors; `informax-site` confirmed untouched throughout (git status
+  checked before and after).
+
+**IMPLEMENTED BUT NOT LIVE-VERIFIED:**
+
+- Every Supabase-backed path (`eventStore.ts`, `liveSubjects.ts`, the live
+  branch of `/api/monitoring/run`) — proven against the identical
+  `EventStore`/`AutomationStore`/`FactsLoader` interfaces production code
+  uses, but never against a real deployed Postgres/PostgREST instance,
+  because none exists in this environment. Same standing caveat as every
+  live Supabase path since Milestone 1.
+- The partial unique dedupe index's real-Postgres behaviour under genuine
+  concurrent connections (the in-memory store's interleaving proof is a
+  faithful reproduction of the same semantics, not a substitute for it).
+
+**REQUIRES PRODUCTION INFRASTRUCTURE:**
+
+- An actual external scheduler calling `POST /api/monitoring/run` on an
+  interval — nothing in this codebase calls it on its own, by design (same
+  as `/api/automation/run` since Milestone 7).
+- Real Shopify/Amazon credentials, to find out whether `liveSubjects.ts`'s
+  live queries and the marketplace monitor's live connector calls behave as
+  expected against a real store/account.
+
+**EXPLICITLY NOT IMPLEMENTED (a real, documented gap, not a hidden stub):**
+
+- `liveSubjects.ts` returns `[]` for `marketplace_listing_sync` beyond the
+  single hardcoded `shopify` connector, and for
+  `profitability_safety_net`/`compliance_freshness`/`sales_performance`
+  entirely — there is no live "enumerate every active product/supplier for
+  this org" sweep yet. The monitors themselves are fully real and tested;
+  only the "which subjects to check today" enumeration is a following-pass
+  gap, the same honest boundary Milestone 7 drew for `FactsLoader`.
+- No live sales/order aggregation query feeds `performanceMonitor` — its
+  comparison windows must be supplied by the caller until Milestone 9
+  (analytics and business intelligence) builds that aggregation for real.
+- Supplier delivery/dispatch/cancellation-rate/connector-health monitoring
+  (named in the brief's minimum supplier-monitor scope) is not built — only
+  stock and price are. A documented gap, not a guess dressed up as
+  coverage.
+- No dedicated CEO Dashboard route — the business-intelligence section
+  extends `/automation` per this milestone's brief; Milestone 10 remains
+  the dedicated dashboard.
+
+**Verified:** 596 tests (up from 539, +57); 23 migrations (68 tables);
+typecheck, lint and `npm run build` all clean;
+`/automation` and `/api/monitoring/run` confirmed live in the browser with
+no console errors; `informax-site` confirmed untouched throughout.
+
+## Milestone 9 — Analytics and business intelligence
 
 Revenue, orders, units, gross profit, contribution, contribution margin, ad
 spend, CAC, ROAS, MER, refunds, returns, supplier/delivery/marketplace/product
@@ -914,7 +1147,7 @@ interchangeably. Standard comparison periods (today, yesterday, this/last
 week, month to date, previous month, custom range), and every comparison
 states its comparison period explicitly.
 
-## Milestone 9 — CEO dashboard
+## Milestone 10 — CEO dashboard
 
 The dashboard the owner actually reads every day: an AI CEO briefing (every
 claim traceable per the fact-first principle), a business pulse, an
@@ -928,7 +1161,7 @@ workers, last sync, failed jobs), and an emergency stop that can pause
 automation categories while preserving critical order processing, itself
 logged like any other consequential action.
 
-## Milestone 10 — Commerce Intelligence chat
+## Milestone 11 — Commerce Intelligence chat
 
 An AI chat interface answering real questions about the actual business
 through a controlled tool/query layer with explicit per-tool permissions —
@@ -937,7 +1170,7 @@ categories (facts, calculations, rules, analysis, predictions, uncertainty)
 and the system can say "I don't have enough current data to answer that
 reliably." Credentials never enter conversational memory.
 
-## Milestone 11 — AI actions
+## Milestone 12 — AI actions
 
 Four interaction modes — ask, analyse, recommend, execute — where "execute"
 still passes through the same automation-level and approval machinery as any
@@ -945,7 +1178,7 @@ other action. The AI is never the source of authority: rules, permissions,
 validation and the action layer built in Milestones 5–6 remain authoritative
 regardless of what the AI recommends.
 
-## Milestone 12 — Advertising intelligence
+## Milestone 13 — Advertising intelligence
 
 Advertising platform integrations (Amazon Ads, Meta, Google, TikTok as
 applicable) evaluated on contribution after advertising, never on ROAS alone —
@@ -955,7 +1188,7 @@ daily and per-product limits, maximum percentage changes, approval thresholds,
 cooldowns, rollback logic and audit logging, with no path to unlimited
 automated spend.
 
-## Milestone 13 — International expansion
+## Milestone 14 — International expansion
 
 Country/marketplace/currency/tax/shipping/documentation modelled explicitly,
 with product-marketplace eligibility, supplier delivery capability, delivery

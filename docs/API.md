@@ -101,3 +101,84 @@ working correctly (proven end to end in
 necessary but not sufficient for 24/7 automation — something outside this
 application must actually call it on a schedule, and a deployed Supabase
 project is required for it to have real jobs to claim.
+
+## `POST /api/monitoring/run` (Milestone 8)
+
+The scheduled-monitoring entry point — upstream of `/api/automation/run`,
+never a replacement for it. Same shape, same authentication, and
+deliberately the same shared secret (`AUTOMATION_CRON_SECRET`), reused
+rather than adding a second one, via `src/lib/core/schedulerAuth.ts`.
+
+Each call iterates every organisation and runs whichever of the 5
+registered monitors (`src/lib/monitoring/registry.ts`) are due per that
+org's own configured schedule (`config_values`), via
+`runDueMonitors` (`src/lib/monitoring/runner.ts`). A due monitor run loads
+current facts, compares against its own last verified observation, raises
+domain events on meaningful change, and enqueues automation jobs where the
+`EVENT_TO_JOB_MAPPING` table says a safe one exists — this route never
+performs a business action itself.
+
+**Authentication**: identical to `/api/automation/run`.
+
+```
+Authorization: Bearer <AUTOMATION_CRON_SECRET>
+```
+
+**Demo mode**: always returns 200 without checking the secret, since there
+is no monitor state to protect.
+
+```json
+{ "status": "skipped", "reason": "Demo mode has no database and no monitors to run." }
+```
+
+**Live mode, no secret configured**: refuses to run, identically to
+`/api/automation/run`.
+
+```
+503 { "error": "AUTOMATION_CRON_SECRET is not configured; refusing to run against a live database." }
+```
+
+**Live mode, wrong or missing secret**:
+
+```
+401 { "error": "Unauthorized" }
+```
+
+**Live mode, success**:
+
+```json
+{
+  "status": "ok",
+  "checkedAt": "2026-08-24T12:00:00.000Z",
+  "organisations": [
+    {
+      "orgId": "...",
+      "monitors": [
+        { "monitorKey": "supplier_stock_and_price", "ran": true, "subjectsChecked": 12, "eventsCreated": 1, "eventsDeduplicated": 0, "errors": [] },
+        { "monitorKey": "marketplace_listing_sync", "ran": false, "reason": "not due", "subjectsChecked": 0, "eventsCreated": 0, "eventsDeduplicated": 0, "errors": [] }
+      ]
+    }
+  ]
+}
+```
+
+`GET` is accepted as a convenience for manual/browser checks, identically
+to `/api/automation/run`.
+
+### What this route does not do
+
+It does not accept a request body, and it never calls a marketplace
+connector's write methods, `priceExecution.ts`, or
+`supplierSwitchExecution.ts` directly — monitoring observes and raises
+events; only the automation engine (driven separately, by
+`/api/automation/run`) decides and acts. This separation is enforced by
+which modules `src/lib/monitoring/*` is allowed to import, not just by
+convention.
+
+### Production infrastructure this route needs
+
+Documented in full in `HANDOVER.md` §21. Two enumeration gaps beyond the
+standard "no external scheduler calls this yet" caveat: `liveSubjects.ts`
+only has real queries for 2 of the 5 monitors (supplier stock/price and
+marketplace listings), and `performanceMonitor` has no live sales
+aggregation to compare against yet — both documented, not hidden.

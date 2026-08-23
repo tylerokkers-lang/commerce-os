@@ -2,9 +2,11 @@ import Link from 'next/link'
 import { Badge, Card, CardHeader, PageHeader, StatTile, type Tone } from '@/components/ui'
 import { formatMoney, money } from '@/lib/core/money'
 import { getAutomationStatus } from '@/lib/automation/repository'
+import { getMonitoringStatus } from '@/lib/monitoring/repository'
 import { AUTOMATION_CATEGORIES, type PolicyResult } from '@/lib/automation/types'
 import { getSession } from '@/lib/security/session'
 import type { AnyDemoScenario } from '@/lib/demo/automation'
+import type { MonitoringDemoScenario } from '@/lib/demo/monitoring'
 import { pauseAll, resumeAll, toggleCategory } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -92,8 +94,34 @@ function DemoScenarioCard({ scenario }: { scenario: AnyDemoScenario }) {
   )
 }
 
+function MonitoringDemoScenarioCard({ scenario }: { scenario: MonitoringDemoScenario }) {
+  return (
+    <Card>
+      <CardHeader title={scenario.label} description={scenario.description} />
+      <div className="border-t border-border px-5 py-4">
+        <ul className="space-y-1 text-xs text-ink-muted">
+          {scenario.narrative.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {scenario.events.map((e) => (
+            <Badge key={e.id} tone={e.severity === 'critical' ? 'negative' : e.severity === 'warning' ? 'caution' : 'neutral'}>
+              {e.eventType}
+            </Badge>
+          ))}
+          {scenario.events.length === 0 ? <span className="text-xs text-ink-subtle">No event created.</span> : null}
+        </div>
+        {scenario.jobsEnqueued.length > 0 ? (
+          <p className="mt-2 text-xs text-ink-subtle">Jobs enqueued: {scenario.jobsEnqueued.map((j) => j.jobType).join(', ')}</p>
+        ) : null}
+      </div>
+    </Card>
+  )
+}
+
 export default async function AutomationPage() {
-  const [status, session] = await Promise.all([getAutomationStatus(), getSession()])
+  const [status, monitoring, session] = await Promise.all([getAutomationStatus(), getMonitoringStatus(), getSession()])
   const isOwner = session?.role === 'owner'
 
   return (
@@ -189,6 +217,82 @@ export default async function AutomationPage() {
           </p>
         ) : null}
       </Card>
+
+      <Card>
+        <CardHeader title="Business intelligence & live operations" description="What the monitors have actually noticed — never inferred, always read from real monitor_runs and domain_events rows (or, in demo mode, from the same monitors run live against simulated data below)." />
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-5">
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Monitors registered</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.systemHealth.monitorsRegistered}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Ran (24h)</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.systemHealth.monitorsRunLast24h}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Failed (24h)</p>
+            <p className={`mt-1 text-sm font-medium ${monitoring.systemHealth.monitorsFailedLast24h > 0 ? 'text-negative' : ''}`}>{monitoring.systemHealth.monitorsFailedLast24h}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Critical events open</p>
+            <p className={`mt-1 text-sm font-medium ${monitoring.businessAlerts.openCriticalEvents > 0 ? 'text-negative' : ''}`}>{monitoring.businessAlerts.openCriticalEvents}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Never run</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.systemHealth.monitorsNeverRun.length}</p>
+          </div>
+        </div>
+        {monitoring.systemHealth.monitorsNeverRun.length > 0 ? (
+          <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
+            Never run yet: {monitoring.systemHealth.monitorsNeverRun.join(', ')}. Nothing calls <code>POST /api/monitoring/run</code> for these until an external scheduler is configured — see HANDOVER.md.
+          </p>
+        ) : null}
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-5">
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Warning events open</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.businessAlerts.openWarningEvents}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Suppliers unavailable</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.businessAlerts.unavailableSuppliers}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Reconciliation problems</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.businessAlerts.reconciliationProblems}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Compliance rechecks required</p>
+            <p className="mt-1 text-sm font-medium">{monitoring.businessAlerts.complianceRechecksRequired}</p>
+          </div>
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Scheduler</p>
+            <Badge tone={monitoring.schedulerConfigured ? 'positive' : 'caution'} className="mt-1.5">{monitoring.schedulerConfigured ? 'Configured' : 'Not configured'}</Badge>
+          </div>
+        </div>
+        {!monitoring.isDemo && monitoring.recentEvents.length > 0 ? (
+          <ul className="divide-y divide-border border-t border-border">
+            {monitoring.recentEvents.map((e) => (
+              <li key={e.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{e.event_type.replace(/_/g, ' ')} — {e.subject_type} {e.subject_id ?? ''}</p>
+                  <p className="truncate text-xs text-ink-muted">{new Date(e.detected_at).toLocaleString('en-GB')} · source: {e.source}</p>
+                </div>
+                <Badge tone={e.severity === 'critical' ? 'negative' : e.severity === 'warning' ? 'caution' : 'neutral'}>{e.status}</Badge>
+              </li>
+            ))}
+          </ul>
+        ) : !monitoring.isDemo ? (
+          <div className="border-t border-border px-5 py-8 text-center text-sm text-ink-muted">No monitoring events recorded yet.</div>
+        ) : null}
+      </Card>
+
+      {monitoring.isDemo ? (
+        <div className="grid gap-4">
+          {monitoring.demoScenarios.map((scenario) => (
+            <MonitoringDemoScenarioCard key={scenario.key} scenario={scenario} />
+          ))}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatTile label="Actions today" value={String(status.today.actionsTotal)} sublabel={`${status.today.succeeded} succeeded`} />

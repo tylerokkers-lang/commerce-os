@@ -70,6 +70,7 @@ src/lib/
   inventory/     stock reservation
   automation/    policy engine, job queue, live facts, execution pipelines,
                  approvals — see below
+  monitoring/    monitors, domain events, the scheduler runner — see below
   notifications/ read + write (write added Milestone 6)
   integrations/  connection health
   tax/           VAT and finance reads
@@ -109,6 +110,39 @@ code (`runWorkerBatch`, `executePriceChange`, `executeSupplierSwitch`) end
 to end without a live Supabase project — the standard way to test code that
 would otherwise require a live external service, and the reason two real
 bugs were found by tests rather than by inspection (see `HANDOVER.md` §18–19).
+
+### `src/lib/monitoring/` (Milestone 8)
+
+Sits strictly upstream of `automation/`: monitors observe and raise domain
+events; they never decide or act. Enforced structurally, not just by
+convention — no monitor imports a marketplace connector's write methods or
+`priceExecution.ts`/`supplierSwitchExecution.ts`.
+
+```
+eventTypes.ts             pure interfaces/types (EventStore, Monitor, MonitorContext)
+eventStore.ts, inMemoryEventStore.ts   Supabase-backed and in-memory EventStore
+monitors/*.ts              the 5 monitors (supplier, marketplace, compliance,
+                           profitability, sales performance), each composing
+                           an existing engine, never duplicating one
+registry.ts                closed MONITORS map + explicit EVENT_TO_JOB_MAPPING
+runner.ts                  runDueMonitors: schedule check -> monitor run -> events -> jobs
+liveSubjects.ts             real "which subjects to check" queries (partial — see HANDOVER.md)
+repository.ts               the /automation page's business-intelligence data
+```
+
+The same "define the interface, satisfy it twice" pattern as `automation/`:
+`EventStore` (`eventTypes.ts`) is satisfied by `eventStore.ts` (production)
+and `inMemoryEventStore.ts` (tests). The flagship
+`tests/monitoring-integration-e2e.test.ts` drives `runDueMonitors` directly
+into `automation/worker.ts`'s `runWorkerBatch` against the same shared
+in-memory stores — the full monitor -> event -> job -> worker -> facts ->
+policy -> action -> audit chain, through real entry points only.
+
+Deduplication is a database guarantee, not an application convention: a
+partial unique index on `domain_events(org_id, dedupe_key)` where
+`status = 'open'` is what actually prevents a supplier outage checked every
+15 minutes for 6 hours from becoming 24 separate events — see
+`docs/DATABASE.md`.
 
 ## Rules the code follows
 

@@ -1,6 +1,6 @@
 # Database
 
-65 tables across 21 migrations (as of Milestone 7), applied in filename
+68 tables across 23 migrations (as of Milestone 8), applied in filename
 order. Every migration is executed against a real Postgres engine by
 `npm run db:verify`, so nothing in here is untested SQL. This file describes
 the conventions that have held since Milestone 1; see `docs/MILESTONES.md`
@@ -42,6 +42,7 @@ past decision can be replayed against the inputs that produced it.
 | One order, one invoice | `unique (org_id, order_id)` on `invoices` |
 | Available stock cannot drift | derived by function, never stored |
 | Every org-scoped table has RLS | asserted by `npm run db:verify` |
+| At most one OPEN domain event per dedupe key | partial unique index `domain_events_open_dedupe_idx on (org_id, dedupe_key) where status = 'open' and dedupe_key is not null` — the actual mechanism that stops a supplier outage checked every 15 minutes from becoming dozens of events, not an application-level convention |
 
 ## Migrations
 
@@ -62,6 +63,8 @@ past decision can be replayed against the inputs that produced it.
 | `0017`–`0018` | Order/fulfilment transition history, RLS (Milestone 5) |
 | `0019`–`0020` | `automation_actions`, `automation_jobs`, kill-switch/limit columns, RLS (Milestone 6) |
 | `0021_external_action_verification.sql` | `external_ref`/`verification_status`/`reconciliation_status` on `automation_actions` (Milestone 7) |
+| `0022_monitoring_events.sql` | `domain_events`, `monitor_observations`, `monitor_runs` (Milestone 8) |
+| `0023_rls_monitoring_events.sql` | RLS for the three Milestone 8 tables |
 
 ## Access model
 
@@ -69,9 +72,10 @@ past decision can be replayed against the inputs that produced it.
 - `owner` and `admin` can write.
 - `owner` alone can delete, manage membership, and approve level 3 decisions.
 - History tables (audit log, inventory movements, AI decisions, automation runs,
-  scores, tax transactions) are **read-only through RLS**. Writes to them go
-  through the service role in server-side code, so a viewer can still cause an
-  audit entry without being able to forge one.
+  scores, tax transactions, and — since Milestone 8 — `domain_events`,
+  `monitor_observations`, `monitor_runs`) are **read-only through RLS**.
+  Writes to them go through the service role in server-side code, so a
+  viewer can still cause an audit entry without being able to forge one.
 - The service role bypasses RLS entirely, which is exactly why that key must
   never reach the browser.
 

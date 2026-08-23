@@ -63,7 +63,7 @@ export type JobHandler = (job: JobRecord, store: AutomationStore, facts: FactsLo
  * unregistered job type fails immediately and non-retryably, with that
  * exact reason — never silently "succeeding" having done nothing.
  */
-const HANDLERS: Record<string, JobHandler> = {
+export const HANDLERS: Record<string, JobHandler> = {
   supplier_availability_check: handleSupplierAvailabilityCheck,
   supplier_price_change: handleSupplierPriceChange,
   supplier_stock_change: handleSupplierStockChange,

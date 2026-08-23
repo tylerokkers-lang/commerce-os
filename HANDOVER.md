@@ -5,8 +5,9 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (Milestone 7 complete — production automation
-& real execution. See §19 before trusting any claim about live writes, and
+Last updated: 24 August 2026 (Milestone 8 complete — continuous
+intelligence, monitoring & event generation. See §21 before trusting any
+claim about monitoring/events, §19 for Milestone 7's execution work, and
 §18 for Milestone 6's engine-level verification).
 
 ## 1. What this is
@@ -101,7 +102,7 @@ None of these block development; they block going live.
 | Shopify Admin API credentials | Milestone 3 |
 | Amazon SP-API app credentials, seller account, and separate AWS IAM credentials (`AMAZON_SP_AWS_ACCESS_KEY_ID`, `AMAZON_SP_AWS_SECRET_ACCESS_KEY`) for SigV4 request signing | Milestone 4 |
 | Resend API key and a verified sending domain | Milestone 7 |
-| Xero credentials | Milestone 8 |
+| Xero credentials | Milestone 9 |
 | Confirmation of the financial approval limits | Defaults are in `src/app/(dashboard)/settings/page.tsx` |
 
 Current defaults, all changeable in business settings: minimum gross margin 25%,
@@ -177,7 +178,11 @@ the hosting provider's environment settings.
 | `/settings` | Legal identity, VAT, automation limits |
 | `/integrations` | What is genuinely connected |
 | `/login` | Sign in (live mode only) |
+| `/automation` | Automation control centre: pause switches, production readiness, business intelligence & live operations, demo scenarios |
+| `/automation/[id]` | A single automation action's full detail, including external verification/reconciliation status |
 | `/api/health` | Liveness and configuration check |
+| `/api/automation/run` | Scheduler entry point for the job worker (Milestone 7) — requires `AUTOMATION_CRON_SECRET` |
+| `/api/monitoring/run` | Scheduler entry point for the monitoring sweep (Milestone 8) — requires the same `AUTOMATION_CRON_SECRET` |
 
 ## 10. Product intelligence (Milestone 2)
 
@@ -712,13 +717,92 @@ clean, every relevant route (`/automation`, `/automation/[id]`,
 `/approvals`, `/suppliers`, `/products`, `/marketplaces`, `/orders`,
 `/api/automation/run`) confirmed live with no console errors.
 
-## 20. Next step
+## 20. (superseded — see §21 for what actually happened next)
 
-Milestone 8 (analytics and business intelligence), per `docs/MILESTONES.md`
-(the roadmap was renumbered when this Milestone 7 was inserted ahead of it —
-what used to be Milestone 7 is now 8, CEO dashboard is now 9, and so on).
-Read `docs/PRINCIPLES.md` first. Before starting Milestone 9 (CEO
-dashboard), note that `automation/repository.ts`'s `getAutomationStatus`
-(including the new `productionReadiness` section) should be surfaced there
-rather than re-summarised — read it, don't recompute it. Do not start
-Milestone 9 until Milestone 8 is tested and working.
+This section originally pointed at "Milestone 8 (analytics and business
+intelligence)" as the next step. The roadmap was renumbered again when a
+different Milestone 8 — continuous intelligence, monitoring & event
+generation — was inserted ahead of it: what this section called Milestone 8
+is now Milestone 9, and CEO dashboard is now Milestone 10. See
+`docs/MILESTONES.md` for the current numbering and §21 below for what was
+actually built as Milestone 8.
+
+## 21. Milestone 8 (continuous intelligence, monitoring & event generation) — what was built
+
+Milestone 7 answers "what is true about product X right now?" This
+milestone answers "what should the system check right now, what changed,
+and does that change require action?" Read `docs/MILESTONES.md`'s Milestone
+8 section for the full breakdown — this is the short version plus the
+things you need to know before touching this code.
+
+- **Schema**: `domain_events` (with the actual deduplication guarantee — a
+  partial unique index on `(org_id, dedupe_key) WHERE status = 'open'`),
+  `monitor_observations`, `monitor_runs`. 68 tables, 23 migrations, all
+  read-only under RLS like `automation_actions`/`automation_jobs`.
+- **`EventStore`** (`monitoring/eventTypes.ts`, `eventStore.ts`,
+  `inMemoryEventStore.ts`): same "define the interface, satisfy it twice"
+  pattern as `AutomationStore`/`FactsLoader`. Genuine concurrency safety
+  proven with real `Promise.all` interleaving, not mocked.
+- **Five monitors** (`monitoring/monitors/*.ts`): supplier (stock/price),
+  marketplace (external listing reconciliation, with loop prevention),
+  compliance (calls the existing `decideComplianceRecheck`), profitability
+  (a boundary check only — never a second margin calculation), sales
+  performance (comparison logic real; live sales-aggregation query not
+  built yet — comparison windows are caller-supplied, documented as a gap).
+- **`registry.ts`**: closed `MONITORS` map + explicit, tested
+  `EVENT_TO_JOB_MAPPING` (event type → job type or `null`).
+- **`runner.ts`** (`runDueMonitors`) + **`POST /api/monitoring/run`**: the
+  scheduler integration, same constant-time-secret pattern as
+  `/api/automation/run` (both now share `core/schedulerAuth.ts`).
+- **Business intelligence section on `/automation`**
+  (`monitoring/repository.ts`): monitor health, open critical/warning
+  events, and a recent-events feed — extends the existing page rather than
+  building a second CEO Dashboard (that remains Milestone 10). Demo mode
+  runs the 5 required scenarios live (`demo/monitoring.ts`).
+- **Three real bugs found by this milestone's own tests, not by
+  inspection** — the pattern repeats every milestone, and it is the reason
+  the flagship integration test exists:
+  1. `handleSupplierPriceChange` (Milestone 7) enqueued its chained
+     `product_profitability_recheck` job **without `channelProductId`**, a
+     field that handler's own payload validator requires. **Every
+     supplier-price-change chain has always failed as "malformed payload"
+     the instant the chained job was actually claimed** — invisible to
+     Milestone 7's own test because it only asserted the chained job
+     existed, never ran it. Fixed in `supplierHandlers.ts`,
+     `supplierMonitor.ts`, and the existing test now actually runs the
+     chained job. **If you add a job that chains into another job, run the
+     chained job in the same test, not just assert it was enqueued.**
+  2. `runner.ts`'s `runDueMonitors` called the caller-supplied
+     `subjectsFor` *before* starting the monitor run record — a failure
+     enumerating subjects (e.g. a database outage) crashed the entire
+     scheduler sweep for every organisation, with no audit trail at all.
+     Fixed by starting the run first and wrapping subject enumeration in
+     the same `try`. **Any step that can throw before a run/job record
+     exists must be inside the same try as the thing that completes that
+     record — otherwise a failure has no trace.**
+  3. `profitabilityMonitor` fired an event on a product's very first-ever
+     observation (no prior baseline, so "undefined" compared as
+     "different" from the real cost). Fixed to establish a silent baseline
+     on first observation, matching `supplierMonitor`'s existing pattern.
+
+**Verified:** 596 tests (up from 539); 23 migrations (68 tables); typecheck,
+lint and `npm run build` all clean; `/automation` and `/api/monitoring/run`
+confirmed live in the browser (demo mode) with no console errors;
+`informax-site` confirmed untouched throughout.
+
+**What is NOT done** (documented, not hidden): no live sales-aggregation
+query feeds `performanceMonitor`; `liveSubjects.ts` only enumerates real
+subjects for 2 of the 5 monitors; supplier delivery/dispatch/cancellation-rate
+monitoring named in the brief's minimum scope is not built; no external
+scheduler actually calls `POST /api/monitoring/run` yet.
+
+## 22. Next step
+
+Milestone 9 (analytics and business intelligence), per `docs/MILESTONES.md`.
+Its live sales/order aggregation query is also what Milestone 8's
+`performanceMonitor` is waiting on — build that once, and wire both up to
+it, rather than a second aggregation. Read `docs/PRINCIPLES.md` first. Do
+not start Milestone 10 (CEO dashboard) until Milestone 9 is tested and
+working — when it is built, it should read from `automation/repository.ts`'s
+`getAutomationStatus` and `monitoring/repository.ts`'s `getMonitoringStatus`
+directly, not re-summarise either.

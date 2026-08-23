@@ -132,6 +132,7 @@ export async function handleSupplierSwitch(job: JobRecord, store: AutomationStor
 export interface SupplierPriceChangeJobPayload {
   productId: string
   supplierId: string
+  channelProductId: string
   previousUnitCostMinor: number
   newUnitCostMinor: number
   /** The job to raise for a human/engine to actually re-check profitability with this new cost. */
@@ -139,7 +140,7 @@ export interface SupplierPriceChangeJobPayload {
 }
 
 function isSupplierPriceChangeJobPayload(payload: Record<string, unknown>): boolean {
-  return typeof payload.productId === 'string' && typeof payload.supplierId === 'string' && typeof payload.newUnitCostMinor === 'number'
+  return typeof payload.productId === 'string' && typeof payload.supplierId === 'string' && typeof payload.channelProductId === 'string' && typeof payload.newUnitCostMinor === 'number'
 }
 
 /**
@@ -168,7 +169,7 @@ export async function handleSupplierPriceChange(job: JobRecord, store: Automatio
   await store.enqueueJob({
     orgId: job.orgId,
     jobType: 'product_profitability_recheck',
-    payload: { productId: payload.productId, supplierId: payload.supplierId, triggeredBy: 'supplier_price_change' },
+    payload: { productId: payload.productId, supplierId: payload.supplierId, channelProductId: payload.channelProductId, triggeredBy: 'supplier_price_change' },
     idempotencyKey: `price-recheck:${payload.productId}:${payload.supplierId}:${job.id}`,
     correlationId: job.correlationId,
   })
