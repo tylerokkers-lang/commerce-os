@@ -150,6 +150,29 @@ export interface ResearchProviderSummary {
   consecutiveFailures: number
 }
 
+/** One row on the supplier connectors page. Mirrors ResearchProviderSummary. */
+export interface SupplierConnectorSummary {
+  key: string
+  label: string
+  description: string
+  sourceType: string
+  status: string
+  isEnabled: boolean
+  isConfigured: boolean
+  missingCredentials: readonly string[]
+  rateLimitPerMinute: number | null
+  rateLimitPerDay: number | null
+  minSecondsBetweenRuns: number
+  termsUrl: string | null
+  permittedUseNote: string
+  authenticatedFirstParty: boolean
+  lastSuccessAt: string | null
+  lastFailureAt: string | null
+  lastError: string | null
+  nextAllowedAt: string | null
+  consecutiveFailures: number
+}
+
 export interface SupplierSummary {
   id: string
   name: string

@@ -81,7 +81,7 @@ export default async function SupplierDetailPage(props: PageProps<'/suppliers/[i
                   {component.score === null ? (
                     <span className="text-ink-subtle">not scored</span>
                   ) : (
-                    component.score
+                    Math.round(component.score)
                   )}
                   <span className="ml-2 text-xs text-ink-subtle">weight {component.weight}</span>
                 </span>
@@ -178,6 +178,78 @@ export default async function SupplierDetailPage(props: PageProps<'/suppliers/[i
           </p>
         </Card>
       </div>
+
+      {supplier.redundancyPreview ? (
+        <Card className={supplier.redundancyPreview.outcome === 'switch_automatically' ? 'border-positive/30' : 'border-caution/30'}>
+          <CardHeader
+            title="If this supplier becomes unavailable"
+            description={supplier.redundancyPreview.reason}
+            action={
+              <Badge
+                tone={
+                  supplier.redundancyPreview.outcome === 'switch_automatically'
+                    ? 'positive'
+                    : supplier.redundancyPreview.outcome === 'no_alternative_available'
+                      ? 'negative'
+                      : 'caution'
+                }
+              >
+                {supplier.redundancyPreview.outcome.replace(/_/g, ' ')}
+              </Badge>
+            }
+          />
+          {supplier.redundancyPreview.assessed.length > 0 ? (
+            <TableWrap>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-ink-subtle">
+                    <th className="px-5 py-2.5 font-medium">Alternative</th>
+                    <th className="px-3 py-2.5 text-right font-medium">Score</th>
+                    <th className="px-3 py-2.5 font-medium">Shopify</th>
+                    <th className="px-3 py-2.5 font-medium">Amazon UK</th>
+                    <th className="px-5 py-2.5 font-medium">Preserves approval</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {supplier.redundancyPreview.assessed.map((assessment) => (
+                    <tr key={assessment.candidate.id} className="border-b border-border last:border-0">
+                      <td className="px-5 py-2.5">
+                        <Link href={`/suppliers/${assessment.candidate.id}`} className="font-medium text-accent hover:underline">
+                          {assessment.candidate.name}
+                        </Link>
+                        {supplier.redundancyPreview?.recommended?.candidate.id === assessment.candidate.id ? (
+                          <Badge tone="accent" className="ml-2">Recommended</Badge>
+                        ) : null}
+                      </td>
+                      <td className="tabular px-3 py-2.5 text-right">{assessment.score.total}</td>
+                      <td className="px-3 py-2.5">
+                        <Badge tone={assessment.capability.shopify?.status === 'approved' ? 'positive' : assessment.capability.shopify?.status === 'blocked' ? 'negative' : 'caution'}>
+                          {assessment.capability.shopify?.status.replace(/_/g, ' ')}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Badge tone={assessment.capability.amazon_uk?.status === 'approved' ? 'positive' : assessment.capability.amazon_uk?.status === 'blocked' ? 'negative' : 'caution'}>
+                          {assessment.capability.amazon_uk?.status.replace(/_/g, ' ')}
+                        </Badge>
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <Badge tone={assessment.preservesApprovedChannels && assessment.meetsProfitabilityBar ? 'positive' : 'negative'}>
+                          {assessment.preservesApprovedChannels && assessment.meetsProfitabilityBar ? 'Yes' : 'No'}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableWrap>
+          ) : null}
+          <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
+            This is a decision, not an action. No supplier has been switched, and nothing has been
+            listed or ordered. The current automation level (&ldquo;assisted&rdquo;) means switching supplier
+            always needs your approval, regardless of how good the alternative is.
+          </p>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader title="Edit supplier" description="Channel status is recomputed from the capability flags on save." />

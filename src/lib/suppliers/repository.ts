@@ -3,6 +3,8 @@ import 'server-only'
 import { demoSuppliers } from '@/lib/demo/dataset'
 import { DEMO_SUPPLIERS, findDemoSupplier, suppliersFor } from '@/lib/demo/suppliers'
 import { demoSupplierScores } from '@/lib/demo/research'
+import { demoRedundancyPreview } from '@/lib/demo/redundancy'
+import type { RedundancyDecision } from '@/lib/suppliers/redundancy'
 import { requireSession } from '@/lib/security/session'
 import { createServerSupabase } from '@/lib/supabase/server'
 import {
@@ -104,6 +106,8 @@ export interface SupplierDetail {
   documentCount: number
 
   quotes: readonly SupplierProductQuote[]
+  /** A worked "what if this supplier becomes unavailable" example, where one exists. */
+  redundancyPreview: RedundancyDecision | null
   isDemo: boolean
 }
 
@@ -186,6 +190,7 @@ export async function getSupplierDetail(id: string): Promise<SupplierDetail | nu
     supportsOwnBranding: supplier.signals.supportsOwnBranding,
     documentCount: supplier.documentCount,
     quotes,
+    redundancyPreview: demoRedundancyPreview(id),
     isDemo: true,
   }
 }

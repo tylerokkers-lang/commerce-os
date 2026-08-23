@@ -106,29 +106,77 @@ of verified data: a UI or engine for data that does not exist yet (a live
 provider, a connected marketplace) is exactly the kind of "mocked" work these
 milestones exist to avoid.
 
-## Milestone 3 — Supplier intelligence
+## Milestone 3 — Supplier intelligence 🟡 in progress (connector interface complete)
 
-Build an extensible supplier connector framework: a common interface capable
-of supporting API suppliers, feed-based suppliers, CSV/manual suppliers, and
-future platforms, without hard-coding the application around one supplier.
-Each supplier/product relationship tracks cost, shipping, warehouse/country,
-stock and its freshness, dispatch/delivery estimates, tracking availability,
-cancellation rate, fulfilment success, price change history, and feed/API
-health, in addition to the branding and seller-of-record capability already
-built in Milestone 2.
+- [x] Supplier connector interface (`src/lib/suppliers/connectors/types.ts`):
+      a `SupplierConnector` mirroring the research provider architecture
+      exactly — a declared descriptor (source type: api/feed/csv/manual/
+      custom, required credentials, rate limits, usage policy), `isConfigured()`
+      that can never lie about credentials it does not have, and
+      `fetchStatus()` returning a `Result` so one failing connector never
+      takes a run down. `SupplierProductStatus` covers every field Milestone 3
+      asks for: cost, shipping, warehouse/country, stock and its freshness
+      (`stockCheckedAt`), dispatch/delivery estimates, tracking, cancellation
+      rate, fulfilment success rate, price-change detection, and
+      documentation on file.
+- [x] A real, working manual/CSV connector (`connectors/manual.ts`) — the one
+      connector type that genuinely needs no credentials. It is not a
+      placeholder: it computes real `SupplierProductStatus` values from the
+      supplier data already in the system, and includes one seeded price
+      increase so price-change detection has something genuine to find.
+- [x] A connector registry (`connectors/registry.ts`) declaring seven planned
+      categories — DSers-compatible sourcing, Syncee-type networks,
+      EPROLO-type fulfilment, CJ-type sourcing, AutoDS-type aggregation, a
+      direct supplier API, and a CSV/scheduled feed — every one reporting
+      `not_configured` with its exact missing environment variables. Named
+      with "-compatible"/"-type" throughout because none of these is an
+      official partnership.
+- [x] Price change history: `supplier_price_history` (append-only, same
+      `forbid_mutation` trigger pattern as `audit_logs`), plus
+      `detectPriceChange`/`detectPriceChanges` (`connectors/priceChanges.ts`)
+      turning a connector's before/after cost pair into a signed percentage
+      with a configurable significance threshold.
+- [x] Supplier redundancy (`src/lib/suppliers/redundancy.ts`): given an
+      unavailable preferred supplier and a set of alternatives, ranks them on
+      the composite supplier score (never on price), re-checks only the two
+      things that actually change with a different supplier — cost, through
+      the single profitability engine, and channel capability — and applies
+      the org's automation level. `manual`/`assisted` always request
+      approval; `supervised`/`autonomous` may switch automatically, but only
+      when the alternative preserves every channel the outgoing supplier was
+      approved for and still clears the profitability gate there. An
+      alternative that fails compliance is never auto-selected at any
+      automation level.
+- [x] `/suppliers/connectors` page (mirrors `/research`) and a worked
+      "if this supplier becomes unavailable" panel on the supplier detail
+      page, using the real demo data (Meridian Housewares' knife rail losing
+      its only viable alternative to a supplier blocked for Amazon).
+- [ ] Extending `SUPPLIER_WEIGHTS` with dedicated integration-quality,
+      price-stability and stock-quality components. Not done in this pass —
+      it would touch the tested Milestone 2 scoring formula, and the
+      connector data needed to back those components with real signals
+      (rather than a single demo price event) is more naturally built
+      alongside a live connector.
+- [ ] Persisting `supplier_connectors` / `supplier_connector_runs` for a live
+      org. The tables exist and are RLS-verified (14 new tests); nothing
+      writes to them yet, matching the same "no live provider, so no live
+      data" honesty as Milestone 2's research providers.
 
-Extend supplier scoring with the connector-specific dimensions (integration
-quality, price stability, stock quality) alongside the existing reliability,
-delivery, quality, returns, tracking and compliance-capability dimensions, and
-keep it explainable exactly as it is today.
+**Verified:** 246 unit/integration tests pass (up from 203, +43); 14
+migrations apply cleanly (57 tables, up from 54); all 19 routes (20 counting
+the new opportunity/supplier detail routes) return 200 in demo mode with no
+console errors; the connectors page was read live and confirmed the manual
+connector's one genuine price-change detection (Northwind's desk lamp, +7.7%)
+and every planned connector's honest `not_configured` status with exact
+missing environment variables; the supplier detail redundancy panel was
+confirmed live for the scenario supplier and confirmed absent for the other
+two, proving it is not shown unconditionally. A pre-existing Milestone 2
+cosmetic defect (unrounded supplier score components, e.g. "76.02739726027399")
+was found and fixed while verifying this milestone's UI.
 
-Build supplier redundancy: when a preferred supplier becomes unavailable, the
-system detects it, evaluates alternatives, recalculates profitability with the
-single profitability engine, re-checks compliance, and only switches
-automatically when the configured automation policy permits it — otherwise it
-requests approval. Do not claim a supplier integration exists unless an
-official API or a real, permitted feed backs it; a "connector" with no real
-credentials reports `not_configured`, exactly as the research providers do.
+Do not claim a supplier integration exists unless an official API or a real,
+permitted feed backs it; every connector with no real credentials reports
+`not_configured`, exactly as the research providers do.
 
 ## Milestone 4 — Marketplace connector foundation
 

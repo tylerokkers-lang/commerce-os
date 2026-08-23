@@ -5,7 +5,7 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (re-verified, same day).
+Last updated: 23 August 2026 (Milestone 3 connector interface started).
 
 ## 1. What this is
 
@@ -144,6 +144,11 @@ the hosting provider's environment settings.
 - A Supabase `.select('a, b, c')` string must be one literal, not a
   concatenation of several — concatenating defeats the literal-type
   inference the client relies on and every column resolves to `never`.
+- A scoring component's numeric `score` is a float internally (e.g.
+  `76.02739726027399`) so the weighted total stays precise; only round it at
+  the point of display, never in the scoring engine itself. This was a real,
+  live bug in the Milestone 2 supplier score breakdown UI, fixed while
+  verifying Milestone 3.
 
 ## 9. Routes
 
@@ -157,7 +162,8 @@ the hosting provider's environment settings.
 | `/opportunities/[id]` | Full analysis: profitability by channel, compliance, supplier comparison, complaints, differentiation, score breakdown |
 | `/research` | Research provider health and usage terms |
 | `/suppliers` | Suppliers with per-channel approval |
-| `/suppliers/new`, `/suppliers/[id]` | Supplier CRUD with live capability assessment |
+| `/suppliers/new`, `/suppliers/[id]` | Supplier CRUD with live capability assessment, plus a "what if this supplier becomes unavailable" panel on the scenario supplier |
+| `/suppliers/connectors` | Supplier connector health and detected price changes |
 | `/compliance` | Blocks and reviews with reasons |
 | `/finance` | VAT position, threshold, cashflow |
 | `/audit` | Append-only action log |
@@ -261,11 +267,58 @@ non-negotiable principles governing every future milestone) and
 `docs/MILESTONES.md` (Milestones 3–10 replaced with a revised, more detailed
 12-milestone roadmap; Milestones 1–2 untouched).
 
-## 13. Next step
+## 13. Milestone 3 (supplier connector interface) — what was built
 
-**The roadmap changed.** `docs/MILESTONES.md` Milestone 3 is now **Supplier
-intelligence** (a supplier connector framework, redundancy, and richer
-supplier scoring), not Shopify. Shopify and Amazon connector work moved to the
-new Milestone 4. Read `docs/PRINCIPLES.md` before starting it — every
-milestone from here on is governed by it. Do not start Milestone 4 until
-Milestone 3 is tested and working.
+- `src/lib/suppliers/connectors/types.ts` — the `SupplierConnector` interface,
+  deliberately structured identically to the research provider interface from
+  Milestone 2. If you add a real connector, follow that file's shape, not a
+  new one.
+- `src/lib/suppliers/connectors/manual.ts` — a genuinely working manual/CSV
+  connector. Read this before writing a real one: it shows what "real, not a
+  placeholder" means for a connector that needs no credentials.
+- `src/lib/suppliers/connectors/registry.ts` — seven planned connector
+  categories, all `not_configured`. Follow this pattern (an `UnavailableConnector`
+  that fails every call) rather than writing a connector that quietly returns
+  invented data before its credentials exist.
+- `src/lib/suppliers/connectors/priceChanges.ts` — turns a connector's
+  before/after cost into a signed, thresholded event.
+- `src/lib/suppliers/redundancy.ts` — the "supplier becomes unavailable"
+  decision. Re-checks only cost (via the one profitability engine) and
+  channel capability, because those are the only two things that change with
+  a different supplier; everything else about a product's compliance
+  (identifiers, IP risk, category) does not depend on who supplies it.
+- Migrations `0013_supplier_connectors.sql`, `0014_rls_connectors.sql`:
+  `supplier_connectors`, `supplier_connector_runs`, `supplier_price_history`
+  (append-only), plus stock-freshness and fulfilment-quality columns on
+  `supplier_products`.
+- `/suppliers/connectors` page and a redundancy panel on the supplier detail
+  page, both exercising real code against demo data — nothing here is a
+  static mockup.
+
+**What Milestone 3 does not yet do**, stated plainly:
+
+- `SUPPLIER_WEIGHTS` (the supplier scoring formula) has not been extended
+  with dedicated integration-quality, price-stability or stock-quality
+  components. Deliberately deferred: doing it properly wants more than one
+  demo price event to score against, and it would touch a tested Milestone 2
+  formula for a benefit better realised alongside a real connector.
+- `supplier_connectors` / `supplier_connector_runs` are not persisted or read
+  for a live org — same honesty pattern as Milestone 2's research providers.
+  The tables exist and are RLS-verified; nothing writes to them yet.
+- No real connector (DSers-compatible, Syncee-type, or otherwise) has been
+  built. All seven planned categories are declarations only, exactly as
+  intended at this stage.
+
+A pre-existing Milestone 2 defect was found and fixed while verifying this
+milestone: the supplier score breakdown page displayed unrounded floating
+point scores (e.g. "76.02739726027399"). Fixed in
+`src/app/(dashboard)/suppliers/[id]/page.tsx` with `Math.round`.
+
+## 14. Next step
+
+Finish Milestone 3 (extend supplier scoring, or move on) or proceed to
+Milestone 4 (marketplace connector foundation: Shopify, then Amazon UK) —
+either is reasonable next; the connector interface built here is the pattern
+Milestone 4's marketplace connectors should also follow. Read
+`docs/PRINCIPLES.md` before starting either. Do not start Milestone 5 until
+whichever you choose is tested and working.

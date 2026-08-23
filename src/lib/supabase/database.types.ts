@@ -3319,6 +3319,162 @@ export interface Database {
           },
         ]
       }
+      supplier_connector_runs: {
+        Row: {
+          id: string
+          org_id: string
+          connector_id: string
+          status: string
+          started_at: string
+          finished_at: string | null
+          duration_ms: number | null
+          products_checked: number
+          products_updated: number
+          stock_changes_detected: number
+          price_changes_detected: number
+          requests_made: number
+          error: string | null
+          summary: Json
+          idempotency_key: string | null
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          connector_id: string
+          status?: string
+          started_at?: string
+          finished_at?: string | null
+          duration_ms?: number | null
+          products_checked?: number
+          products_updated?: number
+          stock_changes_detected?: number
+          price_changes_detected?: number
+          requests_made?: number
+          error?: string | null
+          summary?: Json
+          idempotency_key?: string | null
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          connector_id?: string
+          status?: string
+          started_at?: string
+          finished_at?: string | null
+          duration_ms?: number | null
+          products_checked?: number
+          products_updated?: number
+          stock_changes_detected?: number
+          price_changes_detected?: number
+          requests_made?: number
+          error?: string | null
+          summary?: Json
+          idempotency_key?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'supplier_connector_runs_connector_id_fkey'
+            columns: ['connector_id']
+            isOneToOne: false
+            referencedRelation: 'supplier_connectors'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_connector_runs_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      supplier_connectors: {
+        Row: {
+          id: string
+          org_id: string
+          supplier_id: string
+          connector_key: string
+          label: string
+          source_type: Database['public']['Enums']['connector_source_type']
+          status: Database['public']['Enums']['connector_status']
+          is_enabled: boolean
+          required_credentials: string[]
+          rate_limit_per_minute: number | null
+          rate_limit_per_day: number | null
+          min_seconds_between_runs: number
+          config: Json
+          last_success_at: string | null
+          last_failure_at: string | null
+          last_error: string | null
+          next_allowed_at: string | null
+          consecutive_failures: number
+          is_demo: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          supplier_id: string
+          connector_key: string
+          label: string
+          source_type: Database['public']['Enums']['connector_source_type']
+          status?: Database['public']['Enums']['connector_status']
+          is_enabled?: boolean
+          required_credentials?: string[]
+          rate_limit_per_minute?: number | null
+          rate_limit_per_day?: number | null
+          min_seconds_between_runs?: number
+          config?: Json
+          last_success_at?: string | null
+          last_failure_at?: string | null
+          last_error?: string | null
+          next_allowed_at?: string | null
+          consecutive_failures?: number
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          supplier_id?: string
+          connector_key?: string
+          label?: string
+          source_type?: Database['public']['Enums']['connector_source_type']
+          status?: Database['public']['Enums']['connector_status']
+          is_enabled?: boolean
+          required_credentials?: string[]
+          rate_limit_per_minute?: number | null
+          rate_limit_per_day?: number | null
+          min_seconds_between_runs?: number
+          config?: Json
+          last_success_at?: string | null
+          last_failure_at?: string | null
+          last_error?: string | null
+          next_allowed_at?: string | null
+          consecutive_failures?: number
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'supplier_connectors_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_connectors_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       supplier_documents: {
         Row: {
           id: string
@@ -3612,6 +3768,67 @@ export interface Database {
           },
         ]
       }
+      supplier_price_history: {
+        Row: {
+          id: number
+          org_id: string
+          supplier_product_id: string
+          previous_unit_cost_minor: number | null
+          new_unit_cost_minor: number
+          currency: string
+          change_pct: number | null
+          source: Database['public']['Enums']['price_change_source']
+          connector_run_id: string | null
+          detected_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          supplier_product_id: string
+          previous_unit_cost_minor?: number | null
+          new_unit_cost_minor: number
+          currency?: string
+          change_pct?: number | null
+          source?: Database['public']['Enums']['price_change_source']
+          connector_run_id?: string | null
+          detected_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          supplier_product_id?: string
+          previous_unit_cost_minor?: number | null
+          new_unit_cost_minor?: number
+          currency?: string
+          change_pct?: number | null
+          source?: Database['public']['Enums']['price_change_source']
+          connector_run_id?: string | null
+          detected_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'supplier_price_history_connector_run_id_fkey'
+            columns: ['connector_run_id']
+            isOneToOne: false
+            referencedRelation: 'supplier_connector_runs'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_price_history_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_price_history_supplier_product_id_fkey'
+            columns: ['supplier_product_id']
+            isOneToOne: false
+            referencedRelation: 'supplier_products'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       supplier_products: {
         Row: {
           id: string
@@ -3632,6 +3849,12 @@ export interface Database {
           is_demo: boolean
           created_at: string
           updated_at: string
+          stock_checked_at: string | null
+          dispatch_days_min: number | null
+          dispatch_days_max: number | null
+          cancellation_rate_pct: number | null
+          fulfilment_success_rate_pct: number | null
+          last_connector_run_id: string | null
         }
         Insert: {
           id?: string
@@ -3652,6 +3875,12 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          stock_checked_at?: string | null
+          dispatch_days_min?: number | null
+          dispatch_days_max?: number | null
+          cancellation_rate_pct?: number | null
+          fulfilment_success_rate_pct?: number | null
+          last_connector_run_id?: string | null
         }
         Update: {
           id?: string
@@ -3672,8 +3901,21 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          stock_checked_at?: string | null
+          dispatch_days_min?: number | null
+          dispatch_days_max?: number | null
+          cancellation_rate_pct?: number | null
+          fulfilment_success_rate_pct?: number | null
+          last_connector_run_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: 'supplier_products_last_connector_run_id_fkey'
+            columns: ['last_connector_run_id']
+            isOneToOne: false
+            referencedRelation: 'supplier_connector_runs'
+            referencedColumns: ['id']
+          },
           {
             foreignKeyName: 'supplier_products_org_id_fkey'
             columns: ['org_id']
@@ -4071,6 +4313,8 @@ export interface Database {
       channel_key: 'shopify' | 'amazon_uk'
       channel_listing_status: 'not_listed' | 'draft' | 'review_required' | 'blocked' | 'testing' | 'live' | 'paused' | 'removed'
       compliance_verdict: 'pass' | 'fail' | 'review_required' | 'not_assessed'
+      connector_source_type: 'api' | 'feed' | 'csv' | 'manual' | 'custom'
+      connector_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'
       decision_status: 'recommended' | 'awaiting_approval' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired' | 'superseded'
       differentiation_kind: 'bundle' | 'packaging' | 'instructions' | 'accessories' | 'positioning' | 'quality' | 'support' | 'warranty' | 'variation' | 'value'
       expense_category: 'supplier_goods' | 'supplier_shipping' | 'marketplace_fee' | 'payment_fee' | 'advertising' | 'software' | 'packaging' | 'shipping' | 'professional_fees' | 'refund' | 'other'
@@ -4085,6 +4329,7 @@ export interface Database {
       notification_severity: 'info' | 'success' | 'warning' | 'critical' | 'approval_required'
       order_status: 'pending' | 'paid' | 'awaiting_fulfilment' | 'partially_fulfilled' | 'fulfilled' | 'delivered' | 'cancelled' | 'refunded' | 'partially_refunded' | 'failed'
       payment_status: 'pending' | 'authorised' | 'captured' | 'failed' | 'refunded' | 'partially_refunded'
+      price_change_source: 'connector_sync' | 'manual' | 'demo'
       product_stage: 'discovered' | 'researching' | 'supplier_review' | 'compliance_review' | 'approved' | 'testing' | 'proven' | 'scaling' | 'mature' | 'declining' | 'rejected' | 'paused' | 'removed'
       provider_source_type: 'official_api' | 'licensed_dataset' | 'permitted_public' | 'supplier_feed' | 'manual_entry' | 'simulated'
       provider_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { demoEvaluations, demoSupplierScores } from '@/lib/demo/research'
 import { DEMO_SUPPLIERS } from '@/lib/demo/suppliers'
+import { demoRedundancyPreview } from '@/lib/demo/redundancy'
 
 /**
  * The demo dataset is not hand-authored: it is the real pipeline's output on
@@ -90,5 +91,36 @@ describe('demo suppliers exercise the per-channel distinction', () => {
     for (const other of others) {
       expect(aliexpressScore).toBeLessThan(scores.get(other.id)!.total)
     }
+  })
+})
+
+describe('demo supplier redundancy exercises a real decision, not a fixture', () => {
+  it('produces a decision for the scenario supplier', () => {
+    const decision = demoRedundancyPreview('sup-1')
+    expect(decision).not.toBeNull()
+  })
+
+  it('returns null for a supplier with no worked scenario', () => {
+    expect(demoRedundancyPreview('sup-2')).toBeNull()
+    expect(demoRedundancyPreview('does-not-exist')).toBeNull()
+  })
+
+  it('asks for approval under the demo business\'s default automation level', () => {
+    const decision = demoRedundancyPreview('sup-1')!
+    expect(decision.requiresOwnerApproval).toBe(true)
+    expect(decision.outcome).not.toBe('switch_automatically')
+  })
+
+  it('considers the real alternative supplier from the demo catalogue', () => {
+    const decision = demoRedundancyPreview('sup-1')!
+    expect(decision.assessed.length).toBeGreaterThan(0)
+    expect(decision.assessed.some((a) => a.candidate.id === 'sup-3')).toBe(true)
+  })
+
+  it('is deterministic across repeated calls', () => {
+    const first = demoRedundancyPreview('sup-1')!
+    const second = demoRedundancyPreview('sup-1')!
+    expect(first.outcome).toBe(second.outcome)
+    expect(first.assessed.map((a) => a.score.total)).toEqual(second.assessed.map((a) => a.score.total))
   })
 })
