@@ -40,7 +40,7 @@ const today = new Date('2026-08-22T09:00:00Z')
 const daysAgo = (n: number) => new Date(today.getTime() - n * DAY_MS).toISOString()
 const daysAhead = (n: number) => new Date(today.getTime() + n * DAY_MS).toISOString()
 
-interface DemoProductSeed {
+export interface DemoProductSeed {
   sku: string
   title: string
   category: string
@@ -67,7 +67,7 @@ type ListingStatusLike = ProductSummary['channelStatus']['shopify']
  * blocked on Amazon for a real policy reason, and one still in testing. A demo
  * where everything is healthy teaches the owner nothing.
  */
-const PRODUCT_SEEDS: readonly DemoProductSeed[] = [
+export const PRODUCT_SEEDS: readonly DemoProductSeed[] = [
   {
     sku: 'CMO-1001', title: 'Adjustable Laptop Riser, Aluminium', category: 'Home Office',
     stage: 'scaling', price: 34.99, cost: 9.2, supplierShipping: 2.4,

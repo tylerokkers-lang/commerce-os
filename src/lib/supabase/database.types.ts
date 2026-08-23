@@ -679,6 +679,180 @@ export interface Database {
           },
         ]
       }
+      channel_discrepancies: {
+        Row: {
+          id: string
+          org_id: string
+          channel_id: string
+          channel_product_id: string | null
+          order_id: string | null
+          sync_run_id: string | null
+          field: Database['public']['Enums']['discrepancy_field']
+          our_value: string
+          marketplace_value: string
+          our_recorded_at: string
+          marketplace_reported_at: string
+          status: string
+          resolution: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          detected_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          channel_id: string
+          channel_product_id?: string | null
+          order_id?: string | null
+          sync_run_id?: string | null
+          field: Database['public']['Enums']['discrepancy_field']
+          our_value: string
+          marketplace_value: string
+          our_recorded_at: string
+          marketplace_reported_at: string
+          status?: string
+          resolution?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          detected_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          channel_id?: string
+          channel_product_id?: string | null
+          order_id?: string | null
+          sync_run_id?: string | null
+          field?: Database['public']['Enums']['discrepancy_field']
+          our_value?: string
+          marketplace_value?: string
+          our_recorded_at?: string
+          marketplace_reported_at?: string
+          status?: string
+          resolution?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          detected_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'channel_discrepancies_channel_id_fkey'
+            columns: ['channel_id']
+            isOneToOne: false
+            referencedRelation: 'channels'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_discrepancies_channel_product_id_fkey'
+            columns: ['channel_product_id']
+            isOneToOne: false
+            referencedRelation: 'channel_products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_discrepancies_order_id_fkey'
+            columns: ['order_id']
+            isOneToOne: false
+            referencedRelation: 'orders'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_discrepancies_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_discrepancies_resolved_by_fkey'
+            columns: ['resolved_by']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_discrepancies_sync_run_id_fkey'
+            columns: ['sync_run_id']
+            isOneToOne: false
+            referencedRelation: 'channel_sync_runs'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      channel_listing_transitions: {
+        Row: {
+          id: number
+          org_id: string
+          channel_product_id: string
+          from_state: Database['public']['Enums']['marketplace_listing_state'] | null
+          to_state: Database['public']['Enums']['marketplace_listing_state']
+          reason: string
+          actor_type: Database['public']['Enums']['actor_type']
+          actor_user_id: string | null
+          actor_label: string | null
+          evidence: Json
+          ai_decision_id: string | null
+          occurred_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          channel_product_id: string
+          from_state?: Database['public']['Enums']['marketplace_listing_state'] | null
+          to_state: Database['public']['Enums']['marketplace_listing_state']
+          reason: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          channel_product_id?: string
+          from_state?: Database['public']['Enums']['marketplace_listing_state'] | null
+          to_state?: Database['public']['Enums']['marketplace_listing_state']
+          reason?: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'channel_listing_transitions_actor_user_id_fkey'
+            columns: ['actor_user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_listing_transitions_ai_decision_id_fkey'
+            columns: ['ai_decision_id']
+            isOneToOne: false
+            referencedRelation: 'ai_decisions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_listing_transitions_channel_product_id_fkey'
+            columns: ['channel_product_id']
+            isOneToOne: false
+            referencedRelation: 'channel_products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_listing_transitions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       channel_products: {
         Row: {
           id: string
@@ -701,6 +875,7 @@ export interface Database {
           is_demo: boolean
           created_at: string
           updated_at: string
+          workflow_state: Database['public']['Enums']['marketplace_listing_state']
         }
         Insert: {
           id?: string
@@ -723,6 +898,7 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          workflow_state?: Database['public']['Enums']['marketplace_listing_state']
         }
         Update: {
           id?: string
@@ -745,6 +921,7 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          workflow_state?: Database['public']['Enums']['marketplace_listing_state']
         }
         Relationships: [
           {
@@ -784,6 +961,129 @@ export interface Database {
           },
         ]
       }
+      channel_sync_runs: {
+        Row: {
+          id: string
+          org_id: string
+          channel_id: string
+          sync_type: string
+          status: string
+          started_at: string
+          finished_at: string | null
+          duration_ms: number | null
+          items_checked: number
+          items_updated: number
+          discrepancies_found: number
+          requests_made: number
+          error: string | null
+          summary: Json
+          idempotency_key: string | null
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          channel_id: string
+          sync_type: string
+          status?: string
+          started_at?: string
+          finished_at?: string | null
+          duration_ms?: number | null
+          items_checked?: number
+          items_updated?: number
+          discrepancies_found?: number
+          requests_made?: number
+          error?: string | null
+          summary?: Json
+          idempotency_key?: string | null
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          channel_id?: string
+          sync_type?: string
+          status?: string
+          started_at?: string
+          finished_at?: string | null
+          duration_ms?: number | null
+          items_checked?: number
+          items_updated?: number
+          discrepancies_found?: number
+          requests_made?: number
+          error?: string | null
+          summary?: Json
+          idempotency_key?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'channel_sync_runs_channel_id_fkey'
+            columns: ['channel_id']
+            isOneToOne: false
+            referencedRelation: 'channels'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_sync_runs_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      channel_webhook_events: {
+        Row: {
+          id: string
+          org_id: string
+          channel_id: string
+          event_type: string
+          external_event_id: string
+          payload: Json
+          status: string
+          received_at: string
+          processed_at: string | null
+          error: string | null
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          channel_id: string
+          event_type: string
+          external_event_id: string
+          payload: Json
+          status?: string
+          received_at?: string
+          processed_at?: string | null
+          error?: string | null
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          channel_id?: string
+          event_type?: string
+          external_event_id?: string
+          payload?: Json
+          status?: string
+          received_at?: string
+          processed_at?: string | null
+          error?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'channel_webhook_events_channel_id_fkey'
+            columns: ['channel_id']
+            isOneToOne: false
+            referencedRelation: 'channels'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_webhook_events_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       channels: {
         Row: {
           id: string
@@ -799,6 +1099,13 @@ export interface Database {
           next_retry_at: string | null
           created_at: string
           updated_at: string
+          status: Database['public']['Enums']['marketplace_connection_status']
+          api_version: string | null
+          rate_limit_per_minute: number | null
+          consecutive_failures: number
+          cached_listing_count: number
+          cached_order_count: number
+          webhook_endpoint_configured: boolean
         }
         Insert: {
           id?: string
@@ -814,6 +1121,13 @@ export interface Database {
           next_retry_at?: string | null
           created_at?: string
           updated_at?: string
+          status?: Database['public']['Enums']['marketplace_connection_status']
+          api_version?: string | null
+          rate_limit_per_minute?: number | null
+          consecutive_failures?: number
+          cached_listing_count?: number
+          cached_order_count?: number
+          webhook_endpoint_configured?: boolean
         }
         Update: {
           id?: string
@@ -829,6 +1143,13 @@ export interface Database {
           next_retry_at?: string | null
           created_at?: string
           updated_at?: string
+          status?: Database['public']['Enums']['marketplace_connection_status']
+          api_version?: string | null
+          rate_limit_per_minute?: number | null
+          consecutive_failures?: number
+          cached_listing_count?: number
+          cached_order_count?: number
+          webhook_endpoint_configured?: boolean
         }
         Relationships: [
           {
@@ -4317,6 +4638,7 @@ export interface Database {
       connector_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'
       decision_status: 'recommended' | 'awaiting_approval' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired' | 'superseded'
       differentiation_kind: 'bundle' | 'packaging' | 'instructions' | 'accessories' | 'positioning' | 'quality' | 'support' | 'warranty' | 'variation' | 'value'
+      discrepancy_field: 'stock' | 'price' | 'listing_status' | 'order_status' | 'fulfilment_status' | 'tracking'
       expense_category: 'supplier_goods' | 'supplier_shipping' | 'marketplace_fee' | 'payment_fee' | 'advertising' | 'software' | 'packaging' | 'shipping' | 'professional_fees' | 'refund' | 'other'
       fulfilment_status: 'pending' | 'awaiting_supplier' | 'submitted' | 'accepted' | 'shipped' | 'delivered' | 'failed' | 'cancelled'
       identifier_source: 'manufacturer' | 'supplier' | 'gs1' | 'marketplace' | 'owner_supplied' | 'gtin_exemption'
@@ -4324,6 +4646,8 @@ export interface Database {
       identifier_validation: 'valid' | 'invalid_format' | 'invalid_check_digit' | 'unverified' | 'exempt'
       invoice_kind: 'commercial_invoice' | 'vat_invoice' | 'receipt'
       invoice_status: 'draft' | 'issued' | 'sent' | 'paid' | 'void' | 'failed'
+      marketplace_connection_status: 'demo' | 'not_configured' | 'connected' | 'degraded' | 'error'
+      marketplace_listing_state: 'discovered' | 'evaluating' | 'approved' | 'ready_to_list' | 'pending_approval' | 'published' | 'paused' | 'ended' | 'blocked'
       member_role: 'owner' | 'admin' | 'analyst' | 'viewer'
       movement_reason: 'purchase_received' | 'sale' | 'reservation' | 'reservation_released' | 'return' | 'adjustment' | 'damage' | 'loss' | 'recount' | 'supplier_sync' | 'demo_seed'
       notification_severity: 'info' | 'success' | 'warning' | 'critical' | 'approval_required'

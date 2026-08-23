@@ -173,6 +173,35 @@ export interface SupplierConnectorSummary {
   consecutiveFailures: number
 }
 
+/** One row on the Marketplace / Channels page. */
+export interface MarketplaceChannelSummary {
+  channel: ChannelKey
+  label: string
+  connectorKey: string
+  status: string             // MarketplaceConnectionStatus, kept as string here to avoid a connector-module import in domain.ts
+  isDemo: boolean
+  apiVersion: string | null
+  lastSuccessAt: string | null
+  lastFailureAt: string | null
+  lastError: string | null
+  consecutiveFailures: number
+  listingCount: number
+  orderCount: number
+  inventorySyncStatus: 'ok' | 'discrepancies_found' | 'not_synced'
+  openDiscrepancyCount: number
+  pendingActionCount: number
+  requiresAttention: boolean
+}
+
+export interface ChannelDiscrepancySummary {
+  channel: ChannelKey
+  field: string
+  channelProductRef: string
+  ourValue: string
+  marketplaceValue: string
+  detectedAt: string
+}
+
 export interface SupplierSummary {
   id: string
   name: string

@@ -5,7 +5,7 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (Milestone 3 connector interface started).
+Last updated: 23 August 2026 (Milestone 4 complete).
 
 ## 1. What this is
 
@@ -97,7 +97,7 @@ None of these block development; they block going live.
 | Logo and brand colours | Invoices and customer email |
 | Supabase project | Everything in live mode |
 | Shopify Admin API credentials | Milestone 3 |
-| Amazon SP-API credentials and seller account | Milestone 4 |
+| Amazon SP-API app credentials, seller account, and separate AWS IAM credentials (`AMAZON_SP_AWS_ACCESS_KEY_ID`, `AMAZON_SP_AWS_SECRET_ACCESS_KEY`) for SigV4 request signing | Milestone 4 |
 | Resend API key and a verified sending domain | Milestone 7 |
 | Xero credentials | Milestone 8 |
 | Confirmation of the financial approval limits | Defaults are in `src/app/(dashboard)/settings/page.tsx` |
@@ -149,6 +149,10 @@ the hosting provider's environment settings.
   the point of display, never in the scoring engine itself. This was a real,
   live bug in the Milestone 2 supplier score breakdown UI, fixed while
   verifying Milestone 3.
+- Vitest's parser (oxc) chokes on a backslash-escaped apostrophe inside a
+  single-quoted test name (`it('brief\'s scenario', ...)`), even though that
+  is otherwise-valid JavaScript. Use a double-quoted string for a test title
+  containing an apostrophe instead.
 
 ## 9. Routes
 
@@ -164,6 +168,7 @@ the hosting provider's environment settings.
 | `/suppliers` | Suppliers with per-channel approval |
 | `/suppliers/new`, `/suppliers/[id]` | Supplier CRUD with live capability assessment, plus a "what if this supplier becomes unavailable" panel on the scenario supplier |
 | `/suppliers/connectors` | Supplier connector health and detected price changes |
+| `/marketplaces` | Shopify and Amazon UK connection status, sync history and reconciliation discrepancies |
 | `/compliance` | Blocks and reviews with reasons |
 | `/finance` | VAT position, threshold, cashflow |
 | `/audit` | Append-only action log |
@@ -314,11 +319,68 @@ milestone: the supplier score breakdown page displayed unrounded floating
 point scores (e.g. "76.02739726027399"). Fixed in
 `src/app/(dashboard)/suppliers/[id]/page.tsx` with `Math.round`.
 
-## 14. Next step
+## 14. Milestone 4 (marketplace connector foundation) — what was built
 
-Finish Milestone 3 (extend supplier scoring, or move on) or proceed to
-Milestone 4 (marketplace connector foundation: Shopify, then Amazon UK) —
-either is reasonable next; the connector interface built here is the pattern
-Milestone 4's marketplace connectors should also follow. Read
-`docs/PRINCIPLES.md` before starting either. Do not start Milestone 5 until
-whichever you choose is tested and working.
+- `src/lib/marketplaces/connectors/types.ts` — the `MarketplaceConnector`
+  interface, deliberately identical in shape to the Milestone 3 supplier
+  connector interface. Follow this file's pattern for any future connector.
+- `connectors/shopify.ts`, `connectors/amazon.ts` — real connector code.
+  **Read this classification carefully, it is load-bearing for anyone
+  considering these "done":**
+
+  | Piece | Status |
+  |---|---|
+  | Shopify REST calls (listings, orders, connection health) | IMPLEMENTED BUT NOT LIVE-VERIFIED |
+  | Shopify fee reporting | NOT YET IMPLEMENTED (honest error, not a guess) |
+  | Amazon LWA token exchange + SigV4 signing | IMPLEMENTED BUT NOT LIVE-VERIFIED |
+  | Amazon listings/orders calls | IMPLEMENTED BUT NOT LIVE-VERIFIED |
+  | Amazon inventory, fees, listing write | NOT YET IMPLEMENTED |
+  | Both connectors | BLOCKED BY CREDENTIALS — no real store or seller account exists to test against |
+
+  The AWS SigV4 implementation (`connectors/amazonSigning.ts`) deserves a
+  specific note: I could not fetch AWS's own published test vectors to
+  confirm a byte-exact signature (no internet access in this environment),
+  and typing one from memory did not match my implementation. Rather than
+  guess which was wrong, I removed the false "verified against AWS's test
+  suite" claim entirely and tested only what is independently checkable
+  without an external oracle: canonical request structure, determinism, and
+  that every meaningful input actually changes the signature. Treat this as
+  genuinely unverified until it either signs a real request successfully or
+  someone checks it against AWS's test suite with internet access.
+- `connectors/shopifyDemo.ts`, `connectors/amazonDemo.ts` — real, working demo
+  connectors. Always report `demo`, never `connected`.
+- `connectors/registry.ts` — `connectorForChannel(channel, isDemo)` is how
+  every caller gets the right connector; nothing else should reach for
+  `shopifyConnector`/`amazonConnector` directly.
+- `reconciliation.ts` — `reconcileInventory`/`reconcileListings`/`reconcileOrders`.
+  Pure functions; never resolve a discrepancy by picking a side.
+- `webhooks.ts` — `decideWebhookIngest`/`partitionWebhookBatch`. No HTTP route
+  exists yet (see below).
+- `retry.ts` — `withRetry` with injectable sleep and retryability, for any
+  connector call that should tolerate a transient failure.
+- `publicationGate.ts` — `assessPublicationReadiness`. The single place that
+  decides whether a product may actually be published to a channel; composes
+  Milestones 1-3's engines, never recalculates them.
+- `listingLifecycle.ts` — the per-channel listing workflow, distinct from
+  `channel_products.status`. See the comment at the top of the file for why
+  both exist.
+- Migrations `0015`-`0016`: extended `channels`/`channel_products` (from
+  Milestone 1) rather than duplicating them; added `channel_sync_runs`,
+  `channel_discrepancies`, `channel_webhook_events`, `channel_listing_transitions`.
+
+**What Milestone 4 deliberately does not do**, per the brief's own scope
+boundary: no advertising, no full order fulfilment, no live write operations
+against either marketplace, no public webhook endpoint. See
+`docs/MILESTONES.md` for the complete list.
+
+**No fake connected states were introduced.** Verified live: the Marketplaces
+page shows both channels as "Demo," never "Connected," and `/api/health`
+continues to report every real credential as genuinely absent.
+
+## 15. Next step
+
+Milestone 5 (order and fulfilment orchestration), per `docs/MILESTONES.md`.
+It is the natural next step: it uses the connector foundation, the
+publication gate, and the idempotency patterns built here. Read
+`docs/PRINCIPLES.md` first. Do not start Milestone 6 until Milestone 5 is
+tested and working.

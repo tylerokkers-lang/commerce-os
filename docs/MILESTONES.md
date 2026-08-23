@@ -178,17 +178,122 @@ Do not claim a supplier integration exists unless an official API or a real,
 permitted feed backs it; every connector with no real credentials reports
 `not_configured`, exactly as the research providers do.
 
-## Milestone 4 — Marketplace connector foundation
+## Milestone 4 — Marketplace connector foundation ✅ complete
 
-Build the connector architecture before implementing every live marketplace.
-A common interface covers connection health, authentication status,
-product/listing sync, inventory sync, orders, fulfilment updates, returns
-where supported, fees, marketplace-specific compliance, webhooks, and
-scheduled reconciliation. Build Shopify first (modern Admin API), then Amazon
-UK (official Selling Partner API). Secrets live in environment variables only.
-Demo connectors are clearly marked as demo; live mode requires explicit
-configuration, exactly as `COMMERCE_OS_MODE=live` already requires it for the
-rest of the system.
+- [x] Marketplace connector interface (`src/lib/marketplaces/connectors/types.ts`),
+      mirroring the Milestone 3 supplier connector interface exactly: a
+      declared descriptor (capabilities, credentials, rate limits, usage
+      policy), `isConfigured()` that cannot lie, and read methods
+      (`fetchListings`, `fetchInventory`, `fetchOrders`, `fetchFees`,
+      `getConnectionHealth`) each returning a `Result`.
+- [x] Five-state connection status (`demo` / `not_configured` / `connected` /
+      `degraded` / `error`) as its own enum, distinct from the seven-state
+      `connector_status` used for suppliers — a marketplace connection is
+      reported the way an owner actually thinks about it, not with the finer
+      detail a scheduler needs.
+- [x] A real Shopify Admin API connector (`connectors/shopify.ts`) —
+      REST calls, bearer-token auth, gated behind `SHOPIFY_STORE_DOMAIN` /
+      `SHOPIFY_ADMIN_ACCESS_TOKEN` / `SHOPIFY_API_VERSION`. **Implemented but
+      not live-verified**: written against Shopify's published REST Admin API
+      reference; never run against a real store.
+- [x] A real Amazon Selling Partner API connector (`connectors/amazon.ts`)
+      with a from-scratch AWS Signature Version 4 implementation
+      (`connectors/amazonSigning.ts`, no AWS SDK dependency) and LWA token
+      exchange. **Implemented but not live-verified**: the canonical-request
+      structure matches the documented SigV4 algorithm and is covered by 12
+      structural/determinism tests, but there is no seller account or SP-API
+      application to confirm a byte-exact signature against, so this is
+      explicitly not claimed as proven correct — see `tests/amazon-signing.test.ts`
+      for exactly what was and was not verified.
+- [x] Demo connectors for both channels (`shopifyDemo.ts`, `amazonDemo.ts`),
+      always reporting `demo` status and returning real computed data derived
+      from the same `PRODUCT_SEEDS` the rest of the demo business uses — not
+      a static fixture.
+- [x] Reconciliation engine (`src/lib/marketplaces/reconciliation.ts`):
+      compares Commerce OS's own record against a marketplace snapshot for
+      stock, price, listing status and order status, and reports a
+      discrepancy with both values rather than silently trusting either side.
+      The demo data includes one deliberate, real discrepancy (Shopify's
+      reported stock for CMO-1001 is 33; Commerce OS's own record is still 41)
+      that the engine genuinely finds — confirmed rendering live on the new
+      Marketplaces page, not just in a test.
+- [x] Idempotent webhook ingestion (`marketplaces/webhooks.ts` +
+      `channel_webhook_events` with `unique (org_id, channel_id, external_event_id)`):
+      a duplicate delivery is detected and recorded as ignored rather than
+      reprocessed, including within a single burst-delivered batch.
+- [x] Retry with exponential backoff (`marketplaces/retry.ts`): bounded
+      attempts, a configurable retryable/non-retryable classifier (so a 401
+      fails fast while a timeout retries), and a clean final failure rather
+      than a thrown exception.
+- [x] The publication gate (`marketplaces/publicationGate.ts`) — "a
+      successful API connection does not publish anything by itself,"
+      enforced in code: every publication is checked against product
+      lifecycle rules, supplier status, supplier fulfilment capability, the
+      profitability gate, channel-specific compliance, identifier
+      requirements and automation permission, with each requirement reported
+      individually. Composes the existing engines from Milestones 1-3
+      (`products/lifecycle.ts`, `suppliers/scoring.ts`, the profitability
+      engine, `compliance/rules.ts`) rather than recalculating any of them.
+      Publishing without approval is only permitted at the `autonomous`
+      automation level, and only once every other requirement has already
+      passed — a guardrail that cannot be bypassed by raising the automation
+      level, proven by a dedicated test.
+- [x] Marketplace listing state machine (`marketplaces/listingLifecycle.ts`):
+      `discovered → evaluating → approved → ready_to_list → pending_approval
+      → published → paused/ended/blocked`, mirroring the product lifecycle
+      state machine's structure — an `ALLOWED` transition map, a
+      `planListingTransition` that refuses anything not on it, and an
+      append-only `channel_listing_transitions` history table. Distinct from,
+      and beneath, `channel_products.status` (the coarser status the rest of
+      the app already renders).
+- [x] New Marketplaces page (`/marketplaces`) showing both channels'
+      connection status, listing/order counts, last successful/failed sync,
+      inventory sync status, and open discrepancies with both sides' values
+      — confirmed live to show Shopify as "Demo" (never "Connected") with a
+      genuine "needs attention" flag from the one real discrepancy, and
+      Amazon UK clean.
+- [x] Migrations `0015_marketplace_connectors.sql`, `0016_rls_marketplace.sql`:
+      extended the existing `channels`/`channel_products` tables (from
+      Milestone 1) rather than duplicating them, plus `channel_sync_runs`,
+      `channel_discrepancies`, `channel_webhook_events` (all append-only or
+      read-only through RLS) and `channel_listing_transitions`. 61 tables, 16
+      migrations.
+
+**Verified:** 332 unit/integration tests pass (up from 246, +86); 16
+migrations apply cleanly; typecheck, lint and build are clean; all 17+ routes
+return 200 in demo mode with no console errors; the Marketplaces page and its
+one deliberate discrepancy were confirmed rendering live in the browser;
+`/api/health` and `/integrations` continue to report every real credential as
+genuinely absent, with no regression from adding the new connector layer.
+
+**Not implemented / explicitly out of scope for this milestone** (per the
+brief: "do not build advertising yet... do not build full order fulfilment
+yet"):
+- Listing *write* operations (creating or updating a live Shopify/Amazon
+  listing) are declared as capabilities but not called anywhere — this
+  milestone is the read/reconciliation foundation Milestone 5 builds order
+  orchestration on top of.
+- Fee reporting for both real connectors returns an honest error rather than
+  a guess: Shopify's requires the separate Payments/Payouts API, Amazon's
+  requires the separate Finances API, neither of which is implemented.
+- Amazon's real connector does not implement stock reporting (a separate FBA
+  Inventory API call) or full listing price/stock (separate Pricing API
+  calls) — `fetchListings` says so in its own `warnings` array rather than
+  guessing at a number.
+- No public webhook HTTP endpoint exists yet. The idempotency logic
+  (`decideWebhookIngest`, `partitionWebhookBatch`) is built and tested, but
+  wiring it to a real, signature-verified incoming webhook route needs live
+  credentials to verify signatures against, so it is deferred rather than
+  built as something that could not be tested honestly.
+- `channel_sync_runs`, `channel_discrepancies`, `channel_webhook_events` and
+  `channel_listing_transitions` are not persisted for a live org — same
+  "no live data source, so no live writes" pattern as every prior milestone's
+  connector layer.
+
+**Blocked by credentials/API access:** live-verifying the Shopify and Amazon
+connectors requires a real Shopify store and a real Amazon seller account
+with an approved SP-API application respectively. Neither exists in this
+environment; §6 of `HANDOVER.md` lists what the owner needs to provide.
 
 ## Milestone 5 — Order and fulfilment orchestration
 
