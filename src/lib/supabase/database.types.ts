@@ -921,6 +921,8 @@ export interface Database {
           reviewed_at: string | null
           review_notes: string | null
           is_demo: boolean
+          ip_risk_reasons: string[]
+          ip_assessed_at: string | null
         }
         Insert: {
           id?: string
@@ -941,6 +943,8 @@ export interface Database {
           reviewed_at?: string | null
           review_notes?: string | null
           is_demo?: boolean
+          ip_risk_reasons?: string[]
+          ip_assessed_at?: string | null
         }
         Update: {
           id?: string
@@ -961,6 +965,8 @@ export interface Database {
           reviewed_at?: string | null
           review_notes?: string | null
           is_demo?: boolean
+          ip_risk_reasons?: string[]
+          ip_assessed_at?: string | null
         }
         Relationships: [
           {
@@ -1169,6 +1175,70 @@ export interface Database {
             columns: ['org_id']
             isOneToOne: false
             referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      differentiation_suggestions: {
+        Row: {
+          id: string
+          org_id: string
+          research_id: string | null
+          product_id: string | null
+          kind: Database['public']['Enums']['differentiation_kind']
+          suggestion: string
+          addresses_complaint: string | null
+          evidence_strength: string
+          estimated_cost_minor: number | null
+          generated_by: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          research_id?: string | null
+          product_id?: string | null
+          kind: Database['public']['Enums']['differentiation_kind']
+          suggestion: string
+          addresses_complaint?: string | null
+          evidence_strength?: string
+          estimated_cost_minor?: number | null
+          generated_by?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          research_id?: string | null
+          product_id?: string | null
+          kind?: Database['public']['Enums']['differentiation_kind']
+          suggestion?: string
+          addresses_complaint?: string | null
+          evidence_strength?: string
+          estimated_cost_minor?: number | null
+          generated_by?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'differentiation_suggestions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'differentiation_suggestions_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'differentiation_suggestions_research_id_fkey'
+            columns: ['research_id']
+            isOneToOne: false
+            referencedRelation: 'product_research'
             referencedColumns: ['id']
           },
         ]
@@ -1844,6 +1914,113 @@ export interface Database {
           },
         ]
       }
+      opportunity_projections: {
+        Row: {
+          id: string
+          org_id: string
+          research_id: string | null
+          product_id: string | null
+          channel: Database['public']['Enums']['channel_key']
+          supplier_id: string | null
+          selling_price_minor: number
+          landed_cost_minor: number
+          net_revenue_minor: number
+          contribution_minor: number
+          net_profit_minor: number
+          break_even_price_minor: number
+          currency: string
+          gross_margin_pct: number | null
+          contribution_margin_pct: number | null
+          net_margin_pct: number | null
+          gate_passes: boolean
+          gate_failures: string[]
+          gate_warnings: string[]
+          assumptions: Json
+          engine_version: string
+          computed_at: string
+          is_demo: boolean
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          research_id?: string | null
+          product_id?: string | null
+          channel: Database['public']['Enums']['channel_key']
+          supplier_id?: string | null
+          selling_price_minor: number
+          landed_cost_minor: number
+          net_revenue_minor: number
+          contribution_minor: number
+          net_profit_minor: number
+          break_even_price_minor: number
+          currency?: string
+          gross_margin_pct?: number | null
+          contribution_margin_pct?: number | null
+          net_margin_pct?: number | null
+          gate_passes: boolean
+          gate_failures?: string[]
+          gate_warnings?: string[]
+          assumptions?: Json
+          engine_version: string
+          computed_at?: string
+          is_demo?: boolean
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          research_id?: string | null
+          product_id?: string | null
+          channel?: Database['public']['Enums']['channel_key']
+          supplier_id?: string | null
+          selling_price_minor?: number
+          landed_cost_minor?: number
+          net_revenue_minor?: number
+          contribution_minor?: number
+          net_profit_minor?: number
+          break_even_price_minor?: number
+          currency?: string
+          gross_margin_pct?: number | null
+          contribution_margin_pct?: number | null
+          net_margin_pct?: number | null
+          gate_passes?: boolean
+          gate_failures?: string[]
+          gate_warnings?: string[]
+          assumptions?: Json
+          engine_version?: string
+          computed_at?: string
+          is_demo?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'opportunity_projections_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'opportunity_projections_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'opportunity_projections_research_id_fkey'
+            columns: ['research_id']
+            isOneToOne: false
+            referencedRelation: 'product_research'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'opportunity_projections_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       order_items: {
         Row: {
           id: string
@@ -2288,6 +2465,9 @@ export interface Database {
           verified_at: string | null
           verified_by: string | null
           created_at: string
+          validation: Database['public']['Enums']['identifier_validation']
+          validation_note: string | null
+          validated_at: string | null
         }
         Insert: {
           id?: string
@@ -2301,6 +2481,9 @@ export interface Database {
           verified_at?: string | null
           verified_by?: string | null
           created_at?: string
+          validation?: Database['public']['Enums']['identifier_validation']
+          validation_note?: string | null
+          validated_at?: string | null
         }
         Update: {
           id?: string
@@ -2314,6 +2497,9 @@ export interface Database {
           verified_at?: string | null
           verified_by?: string | null
           created_at?: string
+          validation?: Database['public']['Enums']['identifier_validation']
+          validation_note?: string | null
+          validated_at?: string | null
         }
         Relationships: [
           {
@@ -2448,6 +2634,18 @@ export interface Database {
           differentiation: Json
           notes: string | null
           is_demo: boolean
+          provider_id: string | null
+          run_id: string | null
+          status: Database['public']['Enums']['candidate_status']
+          rejected_reason: string | null
+          estimated_price_minor: number | null
+          estimated_unit_cost_minor: number | null
+          estimated_shipping_minor: number | null
+          estimated_monthly_units: number | null
+          currency: string
+          review_sample: Json
+          review_count: number | null
+          rating_avg: number | null
         }
         Insert: {
           id?: string
@@ -2463,6 +2661,18 @@ export interface Database {
           differentiation?: Json
           notes?: string | null
           is_demo?: boolean
+          provider_id?: string | null
+          run_id?: string | null
+          status?: Database['public']['Enums']['candidate_status']
+          rejected_reason?: string | null
+          estimated_price_minor?: number | null
+          estimated_unit_cost_minor?: number | null
+          estimated_shipping_minor?: number | null
+          estimated_monthly_units?: number | null
+          currency?: string
+          review_sample?: Json
+          review_count?: number | null
+          rating_avg?: number | null
         }
         Update: {
           id?: string
@@ -2478,6 +2688,18 @@ export interface Database {
           differentiation?: Json
           notes?: string | null
           is_demo?: boolean
+          provider_id?: string | null
+          run_id?: string | null
+          status?: Database['public']['Enums']['candidate_status']
+          rejected_reason?: string | null
+          estimated_price_minor?: number | null
+          estimated_unit_cost_minor?: number | null
+          estimated_shipping_minor?: number | null
+          estimated_monthly_units?: number | null
+          currency?: string
+          review_sample?: Json
+          review_count?: number | null
+          rating_avg?: number | null
         }
         Relationships: [
           {
@@ -2492,6 +2714,20 @@ export interface Database {
             columns: ['product_id']
             isOneToOne: false
             referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_research_provider_id_fkey'
+            columns: ['provider_id']
+            isOneToOne: false
+            referencedRelation: 'research_providers'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_research_run_id_fkey'
+            columns: ['run_id']
+            isOneToOne: false
+            referencedRelation: 'research_runs'
             referencedColumns: ['id']
           },
         ]
@@ -2553,6 +2789,83 @@ export interface Database {
             columns: ['research_id']
             isOneToOne: false
             referencedRelation: 'product_research'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      product_stage_transitions: {
+        Row: {
+          id: number
+          org_id: string
+          product_id: string
+          from_stage: Database['public']['Enums']['product_stage'] | null
+          to_stage: Database['public']['Enums']['product_stage']
+          reason: string
+          actor_type: Database['public']['Enums']['actor_type']
+          actor_user_id: string | null
+          actor_label: string | null
+          opportunity_score: number | null
+          evidence: Json
+          ai_decision_id: string | null
+          occurred_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          product_id: string
+          from_stage?: Database['public']['Enums']['product_stage'] | null
+          to_stage: Database['public']['Enums']['product_stage']
+          reason: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          opportunity_score?: number | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          product_id?: string
+          from_stage?: Database['public']['Enums']['product_stage'] | null
+          to_stage?: Database['public']['Enums']['product_stage']
+          reason?: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          opportunity_score?: number | null
+          evidence?: Json
+          ai_decision_id?: string | null
+          occurred_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'product_stage_transitions_actor_user_id_fkey'
+            columns: ['actor_user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_stage_transitions_ai_decision_id_fkey'
+            columns: ['ai_decision_id']
+            isOneToOne: false
+            referencedRelation: 'ai_decisions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_stage_transitions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_stage_transitions_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
             referencedColumns: ['id']
           },
         ]
@@ -2742,6 +3055,158 @@ export interface Database {
             columns: ['payment_id']
             isOneToOne: false
             referencedRelation: 'payments'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      research_providers: {
+        Row: {
+          id: string
+          org_id: string
+          provider_key: string
+          label: string
+          description: string | null
+          source_type: Database['public']['Enums']['provider_source_type']
+          status: Database['public']['Enums']['provider_status']
+          is_enabled: boolean
+          required_credentials: string[]
+          rate_limit_per_minute: number | null
+          rate_limit_per_day: number | null
+          min_seconds_between_runs: number
+          terms_url: string | null
+          permitted_use_note: string | null
+          respects_robots: boolean
+          last_success_at: string | null
+          last_failure_at: string | null
+          last_error: string | null
+          next_allowed_at: string | null
+          consecutive_failures: number
+          is_demo: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          provider_key: string
+          label: string
+          description?: string | null
+          source_type: Database['public']['Enums']['provider_source_type']
+          status?: Database['public']['Enums']['provider_status']
+          is_enabled?: boolean
+          required_credentials?: string[]
+          rate_limit_per_minute?: number | null
+          rate_limit_per_day?: number | null
+          min_seconds_between_runs?: number
+          terms_url?: string | null
+          permitted_use_note?: string | null
+          respects_robots?: boolean
+          last_success_at?: string | null
+          last_failure_at?: string | null
+          last_error?: string | null
+          next_allowed_at?: string | null
+          consecutive_failures?: number
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          provider_key?: string
+          label?: string
+          description?: string | null
+          source_type?: Database['public']['Enums']['provider_source_type']
+          status?: Database['public']['Enums']['provider_status']
+          is_enabled?: boolean
+          required_credentials?: string[]
+          rate_limit_per_minute?: number | null
+          rate_limit_per_day?: number | null
+          min_seconds_between_runs?: number
+          terms_url?: string | null
+          permitted_use_note?: string | null
+          respects_robots?: boolean
+          last_success_at?: string | null
+          last_failure_at?: string | null
+          last_error?: string | null
+          next_allowed_at?: string | null
+          consecutive_failures?: number
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'research_providers_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      research_runs: {
+        Row: {
+          id: string
+          org_id: string
+          provider_id: string
+          status: string
+          started_at: string
+          finished_at: string | null
+          duration_ms: number | null
+          candidates_found: number
+          candidates_accepted: number
+          candidates_rejected: number
+          requests_made: number
+          error: string | null
+          summary: Json
+          idempotency_key: string | null
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          provider_id: string
+          status?: string
+          started_at?: string
+          finished_at?: string | null
+          duration_ms?: number | null
+          candidates_found?: number
+          candidates_accepted?: number
+          candidates_rejected?: number
+          requests_made?: number
+          error?: string | null
+          summary?: Json
+          idempotency_key?: string | null
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          provider_id?: string
+          status?: string
+          started_at?: string
+          finished_at?: string | null
+          duration_ms?: number | null
+          candidates_found?: number
+          candidates_accepted?: number
+          candidates_rejected?: number
+          requests_made?: number
+          error?: string | null
+          summary?: Json
+          idempotency_key?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'research_runs_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'research_runs_provider_id_fkey'
+            columns: ['provider_id']
+            isOneToOne: false
+            referencedRelation: 'research_providers'
             referencedColumns: ['id']
           },
         ]
@@ -3313,6 +3778,19 @@ export interface Database {
           is_demo: boolean
           created_at: string
           updated_at: string
+          returns_policy: string | null
+          returns_window_days: number | null
+          accepts_faulty_returns: boolean
+          min_order_value_minor: number | null
+          supports_own_branding: boolean
+          notes: string | null
+          orders_placed: number
+          orders_late: number
+          orders_defective: number
+          quality_rating: number | null
+          communication_rating: number | null
+          current_score: number | null
+          current_score_at: string | null
         }
         Insert: {
           id?: string
@@ -3339,6 +3817,19 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          returns_policy?: string | null
+          returns_window_days?: number | null
+          accepts_faulty_returns?: boolean
+          min_order_value_minor?: number | null
+          supports_own_branding?: boolean
+          notes?: string | null
+          orders_placed?: number
+          orders_late?: number
+          orders_defective?: number
+          quality_rating?: number | null
+          communication_rating?: number | null
+          current_score?: number | null
+          current_score_at?: string | null
         }
         Update: {
           id?: string
@@ -3365,6 +3856,19 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           updated_at?: string
+          returns_policy?: string | null
+          returns_window_days?: number | null
+          accepts_faulty_returns?: boolean
+          min_order_value_minor?: number | null
+          supports_own_branding?: boolean
+          notes?: string | null
+          orders_placed?: number
+          orders_late?: number
+          orders_defective?: number
+          quality_rating?: number | null
+          communication_rating?: number | null
+          current_score?: number | null
+          current_score_at?: string | null
         }
         Relationships: [
           {
@@ -3563,14 +4067,17 @@ export interface Database {
       actor_type: 'user' | 'system' | 'ai' | 'integration'
       approval_status: 'approved' | 'blocked' | 'review_required' | 'not_assessed'
       automation_level: 'manual' | 'assisted' | 'supervised' | 'autonomous'
+      candidate_status: 'new' | 'scored' | 'promoted' | 'rejected' | 'duplicate' | 'archived'
       channel_key: 'shopify' | 'amazon_uk'
       channel_listing_status: 'not_listed' | 'draft' | 'review_required' | 'blocked' | 'testing' | 'live' | 'paused' | 'removed'
       compliance_verdict: 'pass' | 'fail' | 'review_required' | 'not_assessed'
       decision_status: 'recommended' | 'awaiting_approval' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired' | 'superseded'
+      differentiation_kind: 'bundle' | 'packaging' | 'instructions' | 'accessories' | 'positioning' | 'quality' | 'support' | 'warranty' | 'variation' | 'value'
       expense_category: 'supplier_goods' | 'supplier_shipping' | 'marketplace_fee' | 'payment_fee' | 'advertising' | 'software' | 'packaging' | 'shipping' | 'professional_fees' | 'refund' | 'other'
       fulfilment_status: 'pending' | 'awaiting_supplier' | 'submitted' | 'accepted' | 'shipped' | 'delivered' | 'failed' | 'cancelled'
       identifier_source: 'manufacturer' | 'supplier' | 'gs1' | 'marketplace' | 'owner_supplied' | 'gtin_exemption'
       identifier_type: 'sku' | 'upc' | 'ean' | 'gtin' | 'isbn' | 'asin' | 'mpn' | 'supplier_sku'
+      identifier_validation: 'valid' | 'invalid_format' | 'invalid_check_digit' | 'unverified' | 'exempt'
       invoice_kind: 'commercial_invoice' | 'vat_invoice' | 'receipt'
       invoice_status: 'draft' | 'issued' | 'sent' | 'paid' | 'void' | 'failed'
       member_role: 'owner' | 'admin' | 'analyst' | 'viewer'
@@ -3578,7 +4085,9 @@ export interface Database {
       notification_severity: 'info' | 'success' | 'warning' | 'critical' | 'approval_required'
       order_status: 'pending' | 'paid' | 'awaiting_fulfilment' | 'partially_fulfilled' | 'fulfilled' | 'delivered' | 'cancelled' | 'refunded' | 'partially_refunded' | 'failed'
       payment_status: 'pending' | 'authorised' | 'captured' | 'failed' | 'refunded' | 'partially_refunded'
-      product_stage: 'discovered' | 'researching' | 'supplier_review' | 'compliance_review' | 'approved' | 'testing' | 'proven' | 'scaling' | 'mature' | 'declining' | 'paused' | 'removed'
+      product_stage: 'discovered' | 'researching' | 'supplier_review' | 'compliance_review' | 'approved' | 'testing' | 'proven' | 'scaling' | 'mature' | 'declining' | 'rejected' | 'paused' | 'removed'
+      provider_source_type: 'official_api' | 'licensed_dataset' | 'permitted_public' | 'supplier_feed' | 'manual_entry' | 'simulated'
+      provider_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'
       refund_reason: 'customer_changed_mind' | 'damaged' | 'not_as_described' | 'not_delivered' | 'late_delivery' | 'faulty' | 'goodwill' | 'pricing_error' | 'other'
       research_source: 'google_trends' | 'amazon_api' | 'shopify_api' | 'tiktok_api' | 'supplier_catalogue' | 'licensed_dataset' | 'manual' | 'demo'
       supplier_document_type: 'invoice' | 'contract' | 'certificate_of_conformity' | 'safety_datasheet' | 'test_report' | 'insurance' | 'authorisation_letter' | 'other'

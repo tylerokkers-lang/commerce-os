@@ -5,7 +5,7 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 22 August 2026.
+Last updated: 23 August 2026.
 
 ## 1. What this is
 
@@ -137,17 +137,27 @@ the hosting provider's environment settings.
   `.claude/launch.json` as `commerce-os-dev` on port 3102, because that is the
   primary working directory of the session that created it. There is also a
   local `.claude/launch.json` here for when this repo is opened directly.
+- JSONB columns are typed `Json` in the generated types, which is not
+  assignable from `Record<string, unknown>`. Round-trip arbitrary evidence
+  through `JSON.parse(JSON.stringify(...))` before inserting (see
+  `toJson` in `src/lib/products/transitions.ts`) rather than casting.
+- A Supabase `.select('a, b, c')` string must be one literal, not a
+  concatenation of several — concatenating defeats the literal-type
+  inference the client relies on and every column resolves to `never`.
 
 ## 9. Routes
 
 | Path | Purpose |
 |---|---|
-| `/` | Dashboard: business, channels, approvals, winners, losers, stock, compliance, finance |
+| `/` | Dashboard: business, channels, approvals, winners, losers, stock, compliance, finance, product intelligence |
 | `/report` | Daily briefing |
 | `/approvals` | Decisions above the automatic limits |
 | `/products` | Catalogue with stage, health and per-channel status |
-| `/opportunities` | Scored candidates |
+| `/opportunities` | Scored candidates from the research pipeline |
+| `/opportunities/[id]` | Full analysis: profitability by channel, compliance, supplier comparison, complaints, differentiation, score breakdown |
+| `/research` | Research provider health and usage terms |
 | `/suppliers` | Suppliers with per-channel approval |
+| `/suppliers/new`, `/suppliers/[id]` | Supplier CRUD with live capability assessment |
 | `/compliance` | Blocks and reviews with reasons |
 | `/finance` | VAT position, threshold, cashflow |
 | `/audit` | Append-only action log |
@@ -156,7 +166,63 @@ the hosting provider's environment settings.
 | `/login` | Sign in (live mode only) |
 | `/api/health` | Liveness and configuration check |
 
-## 10. Next step
+## 10. Product intelligence (Milestone 2)
 
-Milestone 2, in `docs/MILESTONES.md`. Do not start Milestone 3 until Milestone 2
+The pipeline (`src/lib/research/pipeline.ts`) runs a research candidate through,
+in order: complaint analysis → differentiation → supplier selection → per-channel
+profitability → per-channel compliance → opportunity scoring → recommendation.
+The order is not arbitrary: supplier comes before compliance because most
+Amazon compliance answers depend on what the supplier can do, and compliance
+comes before scoring because a compliance failure is not something a good score
+overrides.
+
+**One profitability engine, still.** `src/lib/profitability/channels.ts` builds
+Shopify and Amazon cost assumptions (referral fee by category with the £0.25
+per-item minimum, payment fees, differing advertising assumptions) and hands
+them to the same `calculateProfitability` from Milestone 1. A test asserts the
+channel module's output is byte-identical to calling the base engine directly
+with the same inputs — this is how "single source of truth" is enforced, not
+just stated.
+
+**Compliance checks carry remediability.** A missing certificate or an
+unassessed supplier is `remediable: true` — it routes a candidate to
+`review_required` with a named remedy, not to rejection. A blocked category or
+high IP risk is `remediable: false` — it rejects outright, because no amount of
+paperwork fixes a decision already made. This distinction is what stops the
+pipeline from either rejecting fixable problems or waving through unfixable
+ones.
+
+**No identifier is ever generated.** `src/lib/products/identifiers.ts`
+validates GTIN/EAN/UPC against the real GS1 check-digit algorithm (verified
+against published reference barcodes) and ISBN-10/13 against their own
+standards. An Amazon listing without a valid, sourced GTIN is blocked, with the
+remedy always being "obtain one" or "apply for the exemption," never "generate
+one."
+
+**Suppliers are never chosen on price.** `src/lib/suppliers/scoring.ts` weights
+delivery and reliability together above cost. The demo AliExpress supplier is
+deliberately the cheapest of the three and scores worst; the UI always shows
+when a cheaper option was passed over and why.
+
+## 11. What Milestone 2 does not yet do
+
+- No live research provider is wired up. The provider registry
+  (`src/lib/research/providers/registry.ts`) declares Amazon SP-API, Shopify
+  Admin, a licensed trends dataset, TikTok Shop Partner and a supplier feed —
+  all report `not_configured` and refuse to run. This is intentional: the
+  architecture is provider-based specifically so a real one can be added
+  without touching the pipeline, but none has been added yet.
+- Opportunities, supplier scores, and stage transitions are not persisted for
+  a live (non-demo) org. `getOpportunities()`, `getSupplierDetail()` and
+  friends correctly return empty/null in live mode. The tables exist
+  (`product_research`, `product_scores`, `opportunity_projections`,
+  `differentiation_suggestions`, `product_stage_transitions`) and are
+  RLS-verified, but nothing writes to them outside the Server Actions that
+  already exist (`saveSupplier`, `changeProductStage`) — the read side of
+  live-mode product intelligence has no data source until a provider runs.
+- `changeProductStage` has not been exercised against a live Supabase project.
+
+## 12. Next step
+
+Milestone 3, in `docs/MILESTONES.md`. Do not start Milestone 4 until Milestone 3
 is tested and working.

@@ -1,15 +1,17 @@
-import { Badge, Card, EmptyState, PageHeader } from '@/components/ui'
+import Link from 'next/link'
+import { Badge, Card, CardHeader, EmptyState, PageHeader, StatTile } from '@/components/ui'
+import { ACTION_LABELS, ACTION_TONES } from '@/components/dashboard/RecommendationPanel'
 import { formatMoney } from '@/lib/core/money'
 import { formatPct } from '@/lib/utils'
-import { getOpportunities } from '@/lib/products/repository'
-import type { ComplianceVerdict } from '@/lib/core/domain'
+import { getIntelligenceSummary, getOpportunities } from '@/lib/products/opportunities'
+import type { ComplianceVerdict, OpportunitySummary } from '@/lib/core/domain'
 
 export const dynamic = 'force-dynamic'
 
 const VERDICT_LABELS: Record<ComplianceVerdict, string> = {
   pass: 'Pass',
   fail: 'Blocked',
-  review_required: 'Review required',
+  review_required: 'Review',
   not_assessed: 'Not assessed',
 }
 
@@ -20,72 +22,171 @@ const VERDICT_TONES: Record<ComplianceVerdict, 'positive' | 'negative' | 'cautio
   not_assessed: 'neutral',
 }
 
+function ChannelVerdict({
+  label,
+  verdict,
+  profitable,
+  netProfit,
+}: {
+  label: string
+  verdict: ComplianceVerdict
+  profitable: boolean
+  netProfit: OpportunitySummary['shopifyNetProfit']
+}) {
+  return (
+    <div className="rounded-lg border border-border px-3 py-2">
+      <p className="text-xs font-medium text-ink-subtle">{label}</p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <Badge tone={VERDICT_TONES[verdict]}>{VERDICT_LABELS[verdict]}</Badge>
+        <Badge tone={profitable ? 'positive' : 'negative'}>
+          {profitable ? 'Profitable' : 'Unprofitable'}
+        </Badge>
+      </div>
+      <p className="tabular mt-1.5 text-sm font-medium">
+        {formatMoney(netProfit)}
+        <span className="ml-1 text-xs font-normal text-ink-subtle">per unit</span>
+      </p>
+    </div>
+  )
+}
+
 export default async function OpportunitiesPage() {
-  const opportunities = await getOpportunities()
+  const [opportunities, summary] = await Promise.all([
+    getOpportunities(),
+    getIntelligenceSummary(),
+  ])
 
   return (
     <>
       <PageHeader
         title="Opportunities"
-        description="Candidate products scored on demand, competition, margin, risk and compliance. A high score is a reason to investigate, never a reason to launch: every candidate still has to clear the profitability and compliance gates."
+        description="Candidates that have been through the full pipeline: complaint analysis, supplier selection, per-channel profitability, compliance, then scoring. A high score is a reason to look closer, never a reason to launch."
       />
+
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Recommended for testing"
+          value={String(summary.recommendedForTesting)}
+          sublabel={`of ${summary.total} evaluated`}
+          tone={summary.recommendedForTesting > 0 ? 'positive' : 'neutral'}
+        />
+        <StatTile
+          label="Need review"
+          value={String(summary.needsReview)}
+          sublabel="Held pending a person"
+          tone={summary.needsReview > 0 ? 'caution' : 'neutral'}
+        />
+        <StatTile
+          label="Viable on one channel only"
+          value={String(summary.channelDivergent)}
+          sublabel="Blocked on the other"
+        />
+        <StatTile
+          label="Rejected"
+          value={String(summary.rejected)}
+          sublabel={summary.highIpRisk > 0 ? `${summary.highIpRisk} for IP risk` : 'On economics or compliance'}
+        />
+      </section>
 
       {opportunities.length === 0 ? (
         <Card>
           <EmptyState
             title="No candidates yet"
-            description="The research engine populates this once a data source is connected. It only uses official APIs and licensed or permitted data."
+            description="Opportunities appear once a research provider has run. Providers only use official APIs, licensed datasets and permitted sources, so each one needs to be configured before it can contribute."
           />
         </Card>
       ) : (
         <div className="grid gap-4">
           {opportunities.map((opportunity) => (
             <Card key={opportunity.id}>
-              <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm font-semibold">{opportunity.title}</h2>
-                    <Badge tone="neutral">{opportunity.category}</Badge>
+              <CardHeader
+                title={opportunity.title}
+                description={opportunity.headline}
+                action={
+                  <div className="text-right">
+                    <p className="tabular text-2xl font-semibold">{opportunity.opportunityScore}</p>
+                    <Badge tone={ACTION_TONES[opportunity.recommendedAction]}>
+                      {ACTION_LABELS[opportunity.recommendedAction]}
+                    </Badge>
                   </div>
-                  <p className="mt-2 max-w-2xl text-sm text-ink-muted">{opportunity.rationale}</p>
-                  <p className="mt-2 text-xs text-ink-subtle">Source: {opportunity.sourceLabel}</p>
-                </div>
-                <div className="text-right">
-                  <p className="tabular text-2xl font-semibold">{opportunity.opportunityScore}</p>
-                  <p className="text-xs text-ink-subtle">{opportunity.band}</p>
-                </div>
+                }
+              />
+
+              <div className="grid gap-3 px-5 py-4 sm:grid-cols-2">
+                <ChannelVerdict
+                  label="Shopify"
+                  verdict={opportunity.shopifyCompliance}
+                  profitable={opportunity.shopifyProfitable}
+                  netProfit={opportunity.shopifyNetProfit}
+                />
+                <ChannelVerdict
+                  label="Amazon UK"
+                  verdict={opportunity.amazonCompliance}
+                  profitable={opportunity.amazonProfitable}
+                  netProfit={opportunity.amazonNetProfit}
+                />
               </div>
 
-              <dl className="grid gap-px border-t border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+              <dl className="grid gap-px border-t border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
                 <div className="bg-surface px-5 py-3">
                   <dt className="text-xs text-ink-subtle">Estimated price</dt>
-                  <dd className="tabular mt-0.5 text-sm font-medium">{formatMoney(opportunity.estimatedSellingPrice)}</dd>
+                  <dd className="tabular mt-0.5 text-sm font-medium">
+                    {formatMoney(opportunity.estimatedSellingPrice)}
+                  </dd>
                 </div>
                 <div className="bg-surface px-5 py-3">
-                  <dt className="text-xs text-ink-subtle">Estimated unit cost</dt>
-                  <dd className="tabular mt-0.5 text-sm font-medium">{formatMoney(opportunity.estimatedUnitCost)}</dd>
+                  <dt className="text-xs text-ink-subtle">Unit cost</dt>
+                  <dd className="tabular mt-0.5 text-sm font-medium">
+                    {formatMoney(opportunity.estimatedUnitCost)}
+                  </dd>
                 </div>
                 <div className="bg-surface px-5 py-3">
-                  <dt className="text-xs text-ink-subtle">Estimated contribution margin</dt>
-                  <dd className="tabular mt-0.5 text-sm font-medium">{formatPct(opportunity.estimatedContributionMarginPct)}</dd>
+                  <dt className="text-xs text-ink-subtle">Best margin</dt>
+                  <dd className="tabular mt-0.5 text-sm font-medium">
+                    {formatPct(opportunity.estimatedContributionMarginPct)}
+                  </dd>
                 </div>
                 <div className="bg-surface px-5 py-3">
                   <dt className="text-xs text-ink-subtle">Supplier</dt>
+                  <dd className="mt-0.5 text-sm font-medium">
+                    {opportunity.supplierName ?? 'Not identified'}
+                    {opportunity.supplierScore !== null ? (
+                      <span className="ml-1 text-xs font-normal text-ink-subtle">
+                        {opportunity.supplierScore}/100
+                      </span>
+                    ) : null}
+                  </dd>
+                </div>
+                <div className="bg-surface px-5 py-3">
+                  <dt className="text-xs text-ink-subtle">IP risk</dt>
                   <dd className="mt-0.5">
-                    <Badge tone={opportunity.supplierIdentified ? 'positive' : 'caution'}>
-                      {opportunity.supplierIdentified ? 'Identified' : 'Not yet found'}
+                    <Badge
+                      tone={
+                        opportunity.ipRisk === 'high'
+                          ? 'negative'
+                          : opportunity.ipRisk === 'medium'
+                            ? 'caution'
+                            : 'positive'
+                      }
+                    >
+                      {opportunity.ipRisk}
                     </Badge>
                   </dd>
                 </div>
               </dl>
 
-              <div className="flex flex-wrap gap-2 border-t border-border px-5 py-3">
-                <Badge tone={VERDICT_TONES[opportunity.shopifyCompliance]}>
-                  Shopify · {VERDICT_LABELS[opportunity.shopifyCompliance]}
-                </Badge>
-                <Badge tone={VERDICT_TONES[opportunity.amazonCompliance]}>
-                  Amazon UK · {VERDICT_LABELS[opportunity.amazonCompliance]}
-                </Badge>
+              <div className="flex flex-wrap items-center gap-3 border-t border-border px-5 py-3">
+                <span className="text-xs text-ink-subtle">
+                  {opportunity.confidenceLabel} confidence ({Math.round(opportunity.confidence * 100)}%)
+                  {' · '}
+                  {opportunity.sourceLabel}
+                </span>
+                <Link
+                  href={`/opportunities/${opportunity.id}`}
+                  className="ml-auto text-sm text-accent hover:underline"
+                >
+                  Full analysis
+                </Link>
               </div>
             </Card>
           ))}

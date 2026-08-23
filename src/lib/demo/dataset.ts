@@ -1,6 +1,9 @@
 import { add, formatMoney, fromMajor, marginPct, money, multiply, subtract, zero } from '@/lib/core/money'
 import { calculateProfitability } from '@/lib/profitability'
 import { createRng } from './rng'
+import { demoEvaluations, demoSupplierScores } from './research'
+import { DEMO_SUPPLIERS } from './suppliers'
+import { assessAmazonCapability, assessShopifyCapability } from '@/lib/suppliers/scoring'
 import type {
   ApprovalItem,
   AuditEvent,
@@ -14,7 +17,7 @@ import type {
   OpportunitySummary,
   ProductSummary,
   StockAlert,
-  SupplierSummary,
+  SupplierListItem,
 } from '@/lib/core/domain'
 
 /**
@@ -250,66 +253,99 @@ export function demoChannels(): readonly ChannelSummary[] {
   return [forChannel('shopify', 0.42, 'Shopify'), forChannel('amazon_uk', 0.58, 'Amazon UK')]
 }
 
+/**
+ * Opportunities, derived from the real evaluation pipeline.
+ *
+ * Nothing below is authored. Each figure is whatever the scoring, supplier,
+ * profitability and compliance engines produced for the simulated candidates,
+ * which is the point: the demo exercises the gates rather than illustrating
+ * them.
+ */
 export function demoOpportunities(): readonly OpportunitySummary[] {
-  return [
-    {
-      id: 'opp-1', title: 'Magnetic Knife Rail, Walnut', category: 'Kitchen',
-      opportunityScore: 91, band: 'Exceptional',
-      estimatedContributionMarginPct: 31.4,
-      estimatedSellingPrice: fromMajor(32.0), estimatedUnitCost: fromMajor(8.6),
-      supplierIdentified: true,
-      amazonCompliance: 'review_required', shopifyCompliance: 'pass',
-      sourceLabel: 'Supplier catalogue and trend signals',
-      rationale:
-        'Steady year-round demand with a rising search trend, low return risk, and repeated complaints about competitors’ weak magnets that a better specification would address.',
-    },
-    {
-      id: 'opp-2', title: 'Under-Desk Footrest, Memory Foam', category: 'Home Office',
-      opportunityScore: 84, band: 'Strong',
-      estimatedContributionMarginPct: 28.9,
-      estimatedSellingPrice: fromMajor(26.99), estimatedUnitCost: fromMajor(7.4),
-      supplierIdentified: true,
-      amazonCompliance: 'pass', shopifyCompliance: 'pass',
-      sourceLabel: 'Marketplace demand data',
-      rationale:
-        'Adjacent to an existing winner in the same category, so it shares an approved supplier and an audience we already reach.',
-    },
-    {
-      id: 'opp-3', title: 'Bamboo Drawer Dividers, Expandable', category: 'Storage',
-      opportunityScore: 76, band: 'Test',
-      estimatedContributionMarginPct: 24.2,
-      estimatedSellingPrice: fromMajor(19.5), estimatedUnitCost: fromMajor(5.9),
-      supplierIdentified: false,
-      amazonCompliance: 'not_assessed', shopifyCompliance: 'pass',
-      sourceLabel: 'Trend detection',
-      rationale:
-        'Demand is growing but no supplier has been verified yet, so landed cost and delivery time are still estimates.',
-    },
-  ]
+  return demoEvaluations().map((evaluated) => {
+    const { candidate, score, recommendation, supplier, compliance, channels } = evaluated
+
+    const shopify = channels.projections.find((p) => p.channel === 'shopify')!
+    const amazon = channels.projections.find((p) => p.channel === 'amazon_uk')!
+    const best = shopify.profitability.netProfit.minor >= amazon.profitability.netProfit.minor ? shopify : amazon
+
+    return {
+      id: candidate.externalRef,
+      title: candidate.title,
+      category: candidate.category,
+      opportunityScore: score.total,
+      band: score.band,
+      bandLabel: score.bandLabel,
+      confidence: score.confidence,
+      confidenceLabel: score.confidenceLabel,
+      recommendedAction: recommendation.action,
+      headline: recommendation.headline,
+      estimatedContributionMarginPct: best.profitability.netMarginPct ?? 0,
+      estimatedSellingPrice: candidate.estimatedSellingPrice,
+      estimatedUnitCost: supplier.chosen?.signals.unitCost ?? candidate.estimatedUnitCost,
+      supplierIdentified: supplier.chosen !== null,
+      supplierName: supplier.chosen?.name ?? null,
+      supplierScore: supplier.chosenScore?.total ?? null,
+      amazonCompliance: compliance.amazon_uk.verdict,
+      shopifyCompliance: compliance.shopify.verdict,
+      shopifyProfitable: shopify.gate.passes,
+      amazonProfitable: amazon.gate.passes,
+      shopifyNetProfit: shopify.profitability.netProfit,
+      amazonNetProfit: amazon.profitability.netProfit,
+      ipRisk: compliance.amazon_uk.ip.level,
+      eligibleChannels: recommendation.eligibleChannels,
+      sourceLabel: 'Simulated research provider',
+      rationale: recommendation.headline,
+      dataSources: recommendation.dataSources,
+      requiresOwnerApproval: recommendation.requiresOwnerApproval,
+      lastUpdated: recommendation.lastUpdated,
+    } satisfies OpportunitySummary
+  })
 }
 
-export function demoSuppliers(): readonly SupplierSummary[] {
-  return [
-    {
-      id: 'sup-1', name: 'Meridian Housewares Ltd', country: 'GB', score: 88,
-      shopifyStatus: 'approved', amazonStatus: 'approved',
-      statusReason: 'Ships blind from a UK warehouse, provides tracking, handles returns, and issues invoices in our name.',
-      deliveryDaysMin: 2, deliveryDaysMax: 3, onTimeRatePct: 96.4, productCount: 4,
-    },
-    {
-      id: 'sup-2', name: 'Northwind Supply Co', country: 'GB', score: 74,
-      shopifyStatus: 'approved', amazonStatus: 'review_required',
-      statusReason: 'Blind shipping confirmed, but no written commitment on returns handling yet.',
-      deliveryDaysMin: 3, deliveryDaysMax: 5, onTimeRatePct: 89.2, productCount: 2,
-    },
-    {
-      id: 'sup-3', name: '港湾 Trading (AliExpress)', country: 'CN', score: 46,
-      shopifyStatus: 'review_required', amazonStatus: 'blocked',
-      statusReason:
-        'Cannot act as seller of record, includes third-party retailer branding in the parcel, and quotes 18 to 26 day delivery. Blocked for Amazon on all three counts.',
-      deliveryDaysMin: 18, deliveryDaysMax: 26, onTimeRatePct: 71.5, productCount: 3,
-    },
-  ]
+/**
+ * Suppliers, scored by the real supplier scoring engine rather than by hand.
+ *
+ * The AliExpress entry stays blocked for Amazon, and it is deliberately the
+ * cheapest of the three, so the engine has to demonstrate that it does not
+ * simply choose the lowest price.
+ */
+export function demoSuppliers(): readonly SupplierListItem[] {
+  const scores = demoSupplierScores()
+
+  return DEMO_SUPPLIERS.map((supplier) => {
+    const score = scores.get(supplier.id)!
+    const shopify = assessShopifyCapability(supplier.signals)
+    const amazon = assessAmazonCapability(supplier.signals)
+    const placed = supplier.signals.ordersPlaced ?? 0
+    const late = supplier.signals.ordersLate ?? 0
+
+    return {
+      id: supplier.id,
+      name: supplier.name,
+      country: supplier.country,
+      score: score.total,
+      band: score.bandLabel,
+      confidence: score.confidence,
+      strengths: score.strengths,
+      weaknesses: score.weaknesses,
+      shopifyStatus: shopify.status,
+      amazonStatus: amazon.status,
+      // The reason comes from whichever channel is more restrictive, because
+      // that is the one the owner needs to understand.
+      statusReason: (amazon.status === 'approved' ? shopify.reasons : amazon.reasons).join(' '),
+      deliveryDaysMin: supplier.signals.deliveryDaysMin ?? null,
+      deliveryDaysMax: supplier.signals.deliveryDaysMax ?? null,
+      onTimeRatePct: placed === 0 ? null : Math.round(((placed - late) / placed) * 1000) / 10,
+      productCount: supplier.supplies.length,
+      platform: supplier.platform,
+      providesTracking: supplier.signals.providesTracking,
+      handlesReturns: supplier.signals.handlesReturns,
+      supportsCustomInvoice: supplier.signals.supportsCustomInvoice,
+      supportsBlindShipping: supplier.signals.supportsBlindShipping,
+      ordersPlaced: placed,
+    } satisfies SupplierListItem
+  })
 }
 
 export function demoStockAlerts(): readonly StockAlert[] {

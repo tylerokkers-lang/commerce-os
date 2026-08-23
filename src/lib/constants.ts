@@ -17,6 +17,7 @@ export const NAV_SECTIONS = [
     items: [
       { href: '/products', label: 'Products' },
       { href: '/opportunities', label: 'Opportunities' },
+      { href: '/research', label: 'Research providers' },
       { href: '/suppliers', label: 'Suppliers' },
       { href: '/compliance', label: 'Compliance' },
     ],
@@ -53,6 +54,7 @@ export const STAGE_LABELS: Record<ProductStage, string> = {
   scaling: 'Scaling',
   mature: 'Mature',
   declining: 'Declining',
+  rejected: 'Rejected',
   paused: 'Paused',
   removed: 'Removed',
 }
@@ -68,6 +70,7 @@ export const STAGE_TONES: Record<ProductStage, Tone> = {
   scaling: 'positive',
   mature: 'neutral',
   declining: 'caution',
+  rejected: 'negative',
   paused: 'caution',
   removed: 'negative',
 }

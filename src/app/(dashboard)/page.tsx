@@ -5,24 +5,43 @@ import { formatMoney, formatMoneyCompact } from '@/lib/core/money'
 import { formatPct, formatRelative } from '@/lib/utils'
 import { getBusinessSummary, getCashflow, getChannelSummaries } from '@/lib/analytics/repository'
 import { getProducts, getStockAlerts } from '@/lib/products/repository'
+import {
+  getIntelligenceSummary,
+  getOpportunities,
+  getTrendingOpportunities,
+} from '@/lib/products/opportunities'
+import { ACTION_LABELS, ACTION_TONES } from '@/components/dashboard/RecommendationPanel'
 import { getComplianceIssues } from '@/lib/compliance/repository'
 import { getPendingApprovals } from '@/lib/automation/approvals'
 import { getFinanceSummary } from '@/lib/tax/repository'
+import { getSuppliers } from '@/lib/suppliers/repository'
 
 export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
-  const [business, channels, products, stockAlerts, compliance, approvals, finance, cashflow] =
-    await Promise.all([
-      getBusinessSummary(),
-      getChannelSummaries(),
-      getProducts(),
-      getStockAlerts(),
-      getComplianceIssues(),
-      getPendingApprovals(),
-      getFinanceSummary(),
-      getCashflow(),
-    ])
+  const [
+    business, channels, products, stockAlerts, compliance, approvals, finance, cashflow,
+    intelligence, opportunities, trending, suppliers,
+  ] = await Promise.all([
+    getBusinessSummary(),
+    getChannelSummaries(),
+    getProducts(),
+    getStockAlerts(),
+    getComplianceIssues(),
+    getPendingApprovals(),
+    getFinanceSummary(),
+    getCashflow(),
+    getIntelligenceSummary(),
+    getOpportunities(),
+    getTrendingOpportunities(),
+    getSuppliers(),
+  ])
+
+  const topOpportunities = [...opportunities]
+    .sort((a, b) => b.opportunityScore - a.opportunityScore)
+    .slice(0, 4)
+  const needsReview = opportunities.filter((o) => o.recommendedAction === 'review')
+  const rejected = opportunities.filter((o) => o.recommendedAction === 'reject')
 
   const ranked = [...products].sort((a, b) => b.contribution.minor - a.contribution.minor)
   const winners = ranked.filter((p) => p.contribution.minor > 0).slice(0, 3)
@@ -205,6 +224,211 @@ export default async function DashboardPage() {
           )}
         </Card>
       </div>
+
+      {/* --- Product intelligence ---------------------------------------- */}
+      <section className="grid gap-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-base font-semibold tracking-tight text-ink">Product intelligence</h2>
+          <Link href="/opportunities" className="text-sm text-accent hover:underline">
+            All opportunities
+          </Link>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <StatTile
+            label="New opportunities"
+            value={String(intelligence.total)}
+            sublabel={intelligence.topScore === null ? 'None evaluated' : `Top score ${intelligence.topScore}`}
+          />
+          <StatTile
+            label="Recommended for testing"
+            value={String(intelligence.recommendedForTesting)}
+            sublabel="Awaiting your approval"
+            tone={intelligence.recommendedForTesting > 0 ? 'positive' : 'neutral'}
+          />
+          <StatTile
+            label="Requiring review"
+            value={String(intelligence.needsReview)}
+            sublabel="Held pending a person"
+            tone={intelligence.needsReview > 0 ? 'caution' : 'neutral'}
+          />
+          <StatTile
+            label="Rejected"
+            value={String(intelligence.rejected)}
+            sublabel={intelligence.highIpRisk > 0 ? `${intelligence.highIpRisk} for IP risk` : 'On economics'}
+          />
+          <StatTile
+            label="One channel only"
+            value={String(intelligence.channelDivergent)}
+            sublabel="Viable on one, blocked on the other"
+          />
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card>
+            <CardHeader
+              title="Top opportunities"
+              description="Ranked by score. Every one has been through profitability and compliance."
+            />
+            {topOpportunities.length === 0 ? (
+              <EmptyState
+                title="Nothing evaluated yet"
+                description="Connect a research provider to start finding candidates."
+              />
+            ) : (
+              <ul className="divide-y divide-border">
+                {topOpportunities.map((opportunity) => (
+                  <li key={opportunity.id} className="px-5 py-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <Link
+                        href={`/opportunities/${opportunity.id}`}
+                        className="min-w-0 text-sm font-medium text-accent hover:underline"
+                      >
+                        {opportunity.title}
+                      </Link>
+                      <span className="tabular shrink-0 text-sm font-medium">
+                        {opportunity.opportunityScore}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <Badge tone={ACTION_TONES[opportunity.recommendedAction]}>
+                        {ACTION_LABELS[opportunity.recommendedAction]}
+                      </Badge>
+                      <Badge tone={opportunity.shopifyProfitable ? 'positive' : 'negative'}>
+                        Shopify {opportunity.shopifyProfitable ? 'viable' : 'not viable'}
+                      </Badge>
+                      <Badge tone={opportunity.amazonProfitable ? 'positive' : 'negative'}>
+                        Amazon {opportunity.amazonProfitable ? 'viable' : 'not viable'}
+                      </Badge>
+                    </div>
+                    <p className="mt-1.5 text-xs text-ink-subtle">
+                      {opportunity.supplierName
+                        ? `${opportunity.supplierName} · supplier score ${opportunity.supplierScore}`
+                        : 'No supplier identified'}
+                      {' · '}
+                      {opportunity.confidenceLabel.toLowerCase()} confidence
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="Trending"
+              description="Fastest rising demand, whatever the recommendation."
+            />
+            {trending.length === 0 ? (
+              <EmptyState title="No trend data" description="Trend signals arrive with a research provider." />
+            ) : (
+              <ul className="divide-y divide-border">
+                {trending.map((opportunity) => (
+                  <li key={opportunity.id} className="flex items-start justify-between gap-3 px-5 py-3.5">
+                    <div className="min-w-0">
+                      <Link
+                        href={`/opportunities/${opportunity.id}`}
+                        className="text-sm font-medium text-accent hover:underline"
+                      >
+                        {opportunity.title}
+                      </Link>
+                      <p className="mt-0.5 text-xs text-ink-subtle">{opportunity.category}</p>
+                    </div>
+                    <Badge tone={ACTION_TONES[opportunity.recommendedAction]}>
+                      {ACTION_LABELS[opportunity.recommendedAction]}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader
+            title="Supplier quality"
+            description="Approval is per channel. Amazon's requirements are stricter, so a supplier can be fine for one and unusable for the other."
+            action={<Link href="/suppliers" className="text-sm text-accent hover:underline">All suppliers</Link>}
+          />
+          <TableWrap>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-ink-subtle">
+                  <th className="px-5 py-2 font-medium">Supplier</th>
+                  <th className="px-3 py-2 text-right font-medium">Score</th>
+                  <th className="px-3 py-2 font-medium">Shopify</th>
+                  <th className="px-3 py-2 font-medium">Amazon UK</th>
+                  <th className="px-5 py-2 text-right font-medium">On time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {suppliers.map((supplier) => (
+                  <tr key={supplier.id} className="border-b border-border last:border-0">
+                    <td className="px-5 py-2.5">
+                      <Link href={`/suppliers/${supplier.id}`} className="font-medium text-accent hover:underline">
+                        {supplier.name}
+                      </Link>
+                    </td>
+                    <td className="tabular px-3 py-2.5 text-right">{supplier.score}</td>
+                    <td className="px-3 py-2.5">
+                      <Badge tone={supplier.shopifyStatus === 'approved' ? 'positive' : supplier.shopifyStatus === 'blocked' ? 'negative' : 'caution'}>
+                        {supplier.shopifyStatus.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <Badge tone={supplier.amazonStatus === 'approved' ? 'positive' : supplier.amazonStatus === 'blocked' ? 'negative' : 'caution'}>
+                        {supplier.amazonStatus.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="tabular px-5 py-2.5 text-right">{formatPct(supplier.onTimeRatePct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableWrap>
+        </Card>
+
+        {needsReview.length > 0 || rejected.length > 0 ? (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card>
+              <CardHeader
+                title="Requiring review"
+                description="Viable on the numbers, held until something is obtained or decided."
+              />
+              <ul className="divide-y divide-border">
+                {needsReview.map((opportunity) => (
+                  <li key={opportunity.id} className="px-5 py-3">
+                    <Link
+                      href={`/opportunities/${opportunity.id}`}
+                      className="text-sm font-medium text-accent hover:underline"
+                    >
+                      {opportunity.title}
+                    </Link>
+                    <p className="mt-1 text-xs text-ink-muted">{opportunity.headline}</p>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+
+            <Card>
+              <CardHeader title="Rejected" description="Kept so the same candidate is not researched twice." />
+              <ul className="divide-y divide-border">
+                {rejected.map((opportunity) => (
+                  <li key={opportunity.id} className="px-5 py-3">
+                    <Link
+                      href={`/opportunities/${opportunity.id}`}
+                      className="text-sm font-medium text-accent hover:underline"
+                    >
+                      {opportunity.title}
+                    </Link>
+                    <p className="mt-1 text-xs text-ink-muted">{opportunity.headline}</p>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+        ) : null}
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card>

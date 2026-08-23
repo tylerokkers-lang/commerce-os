@@ -74,20 +74,80 @@ export interface ProductSummary {
   daysOfStock: number | null
 }
 
+export type RecommendedAction = 'test' | 'watch' | 'reject' | 'review' | 'source_supplier'
+
 export interface OpportunitySummary {
   id: string
   title: string
   category: string
   opportunityScore: number
   band: string
+  bandLabel: string
+  /** 0-1. Simulated sources can never produce a high value here. */
+  confidence: number
+  confidenceLabel: string
+  recommendedAction: RecommendedAction
+  /** The one-line answer: what to do and why. */
+  headline: string
   estimatedContributionMarginPct: number
   estimatedSellingPrice: Money
   estimatedUnitCost: Money
   supplierIdentified: boolean
+  supplierName: string | null
+  supplierScore: number | null
   amazonCompliance: ComplianceVerdict
   shopifyCompliance: ComplianceVerdict
+  /** Per channel, because a product often works on one and not the other. */
+  shopifyProfitable: boolean
+  amazonProfitable: boolean
+  shopifyNetProfit: Money
+  amazonNetProfit: Money
+  ipRisk: 'low' | 'medium' | 'high' | 'unknown'
+  eligibleChannels: readonly ChannelKey[]
   sourceLabel: string
+  /** Kept as the short reason shown in the daily report. */
   rationale: string
+  dataSources: readonly string[]
+  requiresOwnerApproval: boolean
+  lastUpdated: string
+}
+
+/** What the suppliers list shows for each supplier. */
+export interface SupplierListItem extends SupplierSummary {
+  band: string
+  confidence: number
+  strengths: readonly string[]
+  weaknesses: readonly string[]
+  platform: string | null
+  providesTracking: boolean
+  handlesReturns: boolean
+  supportsCustomInvoice: boolean
+  supportsBlindShipping: boolean
+  ordersPlaced: number
+}
+
+/** One row on the research providers page. */
+export interface ResearchProviderSummary {
+  key: string
+  label: string
+  description: string
+  sourceType: string
+  status: string
+  isEnabled: boolean
+  isConfigured: boolean
+  missingCredentials: readonly string[]
+  rateLimitPerMinute: number | null
+  rateLimitPerDay: number | null
+  minSecondsBetweenRuns: number
+  termsUrl: string | null
+  permittedUseNote: string
+  respectsRobots: boolean
+  authenticatedFirstParty: boolean
+  lastSuccessAt: string | null
+  lastFailureAt: string | null
+  lastError: string | null
+  nextAllowedAt: string | null
+  consecutiveFailures: number
 }
 
 export interface SupplierSummary {
