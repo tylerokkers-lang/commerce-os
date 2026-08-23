@@ -36,6 +36,16 @@ export const supabaseServiceKey = () => require_('SUPABASE_SERVICE_ROLE_KEY')
 export const isSupabaseConfigured = (): boolean =>
   Boolean(read('NEXT_PUBLIC_SUPABASE_URL') && read('NEXT_PUBLIC_SUPABASE_ANON_KEY'))
 
+/**
+ * The shared secret an external scheduler (cron, a hosted worker, a
+ * serverless scheduled function) presents to `/api/automation/run`. This is
+ * what lets scheduled automation execute without Claude Code, ChatGPT, or
+ * any coding assistant left open — the route is a plain, stateless HTTP
+ * endpoint, and this secret is the only thing standing between it and the
+ * public internet.
+ */
+export const automationCronSecret = () => read('AUTOMATION_CRON_SECRET')
+
 export interface IntegrationCredentials {
   readonly key: string
   readonly label: string

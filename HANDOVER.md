@@ -5,7 +5,7 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (Milestone 5 complete).
+Last updated: 23 August 2026 (Milestone 6 complete).
 
 ## 1. What this is
 
@@ -445,12 +445,78 @@ generic pass/fail; `/marketplaces` and `/approvals` render with no regression.
 **Verified:** 424 tests (up from 332), 18 migrations, typecheck/lint/build
 clean, all 20+ routes return 200, `/orders` confirmed live in browser.
 
-## 17. Next step
+## 17. Milestone 6 (automation engine) — what was built
 
-Milestone 6 (automation engine), per `docs/MILESTONES.md`. It is the natural
-next step: it formalises the automation-level gating already enforced inline
-throughout Milestones 4-5 into one trigger → conditions → rules → decision →
-permission check → action → audit → monitoring pipeline, and is where the
-Approvals page's approve/reject actions (currently read-only) should actually
-get wired up. Read `docs/PRINCIPLES.md` first. Do not start Milestone 7 until
-Milestone 6 is tested and working.
+- `automation/policyEngine.ts` — the one place the kill switch, category
+  pauses and financial/percentage limits are checked, layered on top of
+  (never duplicating) each domain engine's own verdict. It only ever
+  narrows a domain outcome, never widens one.
+- `automation/supplierSwitching.ts`, `priceAutomation.ts`,
+  `inventoryAutomation.ts`, `monitoring.ts`, `publicationAutomation.ts`,
+  `orderAutomation.ts`, `refundAutomation.ts` — one module per capability
+  in the brief, each composing an existing engine (or, for price/inventory,
+  a genuinely new pure decision function) plus the policy engine. All are
+  pure and fully unit-tested.
+- `automation/jobs.ts` + `automation/worker.ts` + `POST /api/automation/run`
+  — the job queue that makes scheduled automation run without Claude Code,
+  ChatGPT, or any coding assistant staying open. Point any external
+  scheduler at that route on a timer, authenticated with
+  `AUTOMATION_CRON_SECRET`. **No job handler is registered yet** — the
+  queue mechanics (claim, retry with backoff, dead-letter) are real and
+  tested, but a live nightly sweep needs a data-plumbing layer (assembling
+  every real product/supplier/channel row into the shape the engines
+  expect) that this milestone left honestly undone. An unregistered job
+  type fails immediately and non-retryably, never silently.
+- `automation/actions.ts`, migration `0019` — `automation_actions`, the
+  fact-first record (facts, decision, policy result, execution outcome) for
+  every automation decision. `automation_jobs` is the queue; both are
+  read-only through RLS, written only by the service role.
+- `automation/killSwitch.ts` — a global pause plus six independently
+  pausable categories. A pause blocks new automatic *execution* only;
+  monitoring, alerts and approvals keep working.
+- `automation/approvalWorkflow.ts`, wired into `/approvals` for the first
+  time (Milestone 5 left it read-only). Approving replays the exact
+  `ai_decisions.action_payload` captured at proposal time; if the
+  underlying facts changed since, the approval is invalidated
+  (`factsHaveMaterializedChanged`) rather than executed stale. **Read this
+  limitation carefully:** approving does mark the decision approved and
+  does create an audited `automation_actions` row, but that row's execution
+  outcome honestly reports no live connector/writer exists yet to actually
+  switch a supplier, publish a listing, or issue a refund externally — same
+  boundary Milestones 4 and 5 already hit.
+- New `/automation` page: kill switch and category controls, today's
+  stats/risk counters/recent activity/pending jobs in live mode, and the
+  seven demo scenarios from the brief in demo mode. Building the demo
+  scenarios surfaced the same kind of bug Milestone 5's demo order data
+  had — a shared fixture (Northwind's real cost for the bamboo dividers)
+  couldn't isolate the "successful auto-switch" story because it was
+  genuinely unprofitable once the pessimistic default advertising
+  assumption applied. Fixed the same way: a bespoke, hand-controlled
+  fixture per scenario rather than forcing one shared one to fit every
+  story.
+- Also fixed while here: `/orders` was missing from the sidebar nav
+  entirely — a Milestone 5 gap, not a regression from this milestone.
+  `.env.example` was never actually committed (the `.gitignore`'s `.env*`
+  pattern swallowed it silently since Milestone 1); added a `!.env.example`
+  exception so `AUTOMATION_CRON_SECRET` and every other documented variable
+  actually reaches a fresh clone.
+
+**No fake connected/completed/executed states were introduced.** Verified
+live: all seven demo scenarios render their intended, isolated outcome;
+`POST /api/automation/run` correctly refuses to run in demo mode rather than
+pretending to; `/orders`, `/marketplaces` and `/approvals` render with no
+regression, and Approvals now explains demo mode's limitation instead of the
+Milestone 5 placeholder text.
+
+**Verified:** 492 tests (up from 424), 20 migrations, typecheck/lint/build
+clean, every route returns 200, all seven demo scenarios and the automation
+API route confirmed live in browser.
+
+## 18. Next step
+
+Milestone 7 (analytics and business intelligence), per `docs/MILESTONES.md`.
+Read `docs/PRINCIPLES.md` first. Before starting it, note that Milestone 8
+(CEO dashboard) is where `automation/repository.ts`'s `getAutomationStatus`
+should be surfaced a second time rather than re-summarised — read it, don't
+recompute it. Do not start Milestone 8 until Milestone 7 is tested and
+working.

@@ -104,3 +104,8 @@ fulfilment, or automation decisions must too.
   `max_auto_price_change_pct`, `max_daily_ad_spend_minor`, `min_roas`) —
   implement #5's guardrail requirement; every future automated capability
   gets its own such limit in this table rather than a hard-coded constant.
+- `src/lib/automation/policyEngine.ts` (Milestone 6) — the single place the
+  kill switch, category pauses and financial/percentage limits are checked,
+  layered on top of (never duplicating) each domain engine's own decision.
+  `automation_actions` is the fact-first record #1 and #6 require for every
+  automation decision: the facts used, the policy evaluated, and the result.

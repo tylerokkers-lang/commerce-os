@@ -3,6 +3,7 @@ import { formatMoney } from '@/lib/core/money'
 import { formatRelative } from '@/lib/utils'
 import { getPendingApprovals } from '@/lib/automation/approvals'
 import { getSession } from '@/lib/security/session'
+import { approveApproval, rejectApproval } from './actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,11 +54,29 @@ export default async function ApprovalsPage() {
                 {item.expiresAt ? (
                   <span className="text-xs text-ink-subtle">Expires {formatRelative(item.expiresAt).replace(' ago', ' from now')}</span>
                 ) : null}
-                <span className="ml-auto text-xs text-ink-subtle">
-                  {canApprove
-                    ? 'Approve and reject actions arrive with the automation engine in Milestone 5.'
-                    : `Your role (${session?.role}) cannot approve decisions.`}
-                </span>
+
+                {session?.isDemo ? (
+                  <span className="ml-auto text-xs text-ink-subtle">
+                    Demo mode has no database to approve or reject against.
+                  </span>
+                ) : canApprove ? (
+                  <div className="ml-auto flex gap-2">
+                    <form action={rejectApproval}>
+                      <input type="hidden" name="decisionId" value={item.id} />
+                      <button type="submit" className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-muted hover:bg-surface-muted">
+                        Reject
+                      </button>
+                    </form>
+                    <form action={approveApproval}>
+                      <input type="hidden" name="decisionId" value={item.id} />
+                      <button type="submit" className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90">
+                        Approve
+                      </button>
+                    </form>
+                  </div>
+                ) : (
+                  <span className="ml-auto text-xs text-ink-subtle">Your role ({session?.role}) cannot approve decisions.</span>
+                )}
               </div>
             </Card>
           ))}

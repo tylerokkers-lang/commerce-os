@@ -10,7 +10,9 @@ export const NAV_SECTIONS = [
       { href: '/', label: 'Dashboard' },
       { href: '/report', label: 'Daily report' },
       { href: '/approvals', label: 'Approvals' },
+      { href: '/automation', label: 'Automation' },
       { href: '/marketplaces', label: 'Marketplaces' },
+      { href: '/orders', label: 'Orders' },
     ],
   },
   {

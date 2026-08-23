@@ -449,6 +449,133 @@ for reconciliation, hourly for supplier checks, daily for scoring and the CEO
 briefing, weekly or slower for opportunity research. Frequency is configurable
 per job, not assumed to always be "faster is better."
 
+- [x] Automation levels formalised as a policy layer (`automation/policyEngine.ts`):
+      one function, `evaluateAutomationPolicy`, is the only place the kill
+      switch, category pauses and financial/percentage limits are checked.
+      It takes a domain engine's own verdict (blocked / pending_approval /
+      auto_permitted) and only ever narrows it — a domain-blocked action can
+      never be widened into an automatic one by anything in this layer.
+      Automation level itself still only controls *who* approves, exactly as
+      `docs/PRINCIPLES.md` §5 requires; every domain engine (redundancy,
+      publication, fulfilment submission, refunds, the new price/inventory
+      modules below) keeps deciding *whether* on its own.
+- [x] A typed action vocabulary and fact-first record (`automation_actions`,
+      migration `0019`): sixteen action types (`update_inventory` through
+      `alert_owner`), each recorded with its input facts, decision, policy
+      result, automation level, risk level and execution outcome — composing
+      rather than duplicating every existing engine's own reasoning.
+- [x] An application-level job queue (`automation_jobs` + `automation/jobs.ts`
+      + `automation/worker.ts` + `POST /api/automation/run`): scheduled,
+      delayed, retryable (exponential backoff, capped at one hour) and
+      dead-lettered jobs, claimed via an atomic `UPDATE ... WHERE status =
+      'pending'` rather than a locking `SELECT` (the Supabase/PostgREST
+      client this project uses cannot issue `FOR UPDATE SKIP LOCKED`
+      directly). The route is a plain HTTP endpoint authenticated by
+      `AUTOMATION_CRON_SECRET` — any external scheduler can call it on a
+      timer, and nothing about running it depends on Claude Code, ChatGPT,
+      or any coding assistant staying open.
+- [x] Automatic supplier switching (`automation/supplierSwitching.ts`): wraps
+      Milestone 3's `evaluateSupplierRedundancy` exactly as it stands, adding
+      only the kill switch and a configurable maximum cost-increase
+      percentage on top.
+- [x] Guarded price automation (`automation/priceAutomation.ts`, genuinely
+      new this milestone): calls `calculateProfitability` directly with both
+      the current and proposed price — there is no second margin formula.
+      `manual`/`assisted` only ever recommend; `supervised`/`autonomous` may
+      apply a change once it clears the minimum margin, the per-action
+      percentage limit, and the daily movement limit.
+- [x] Automatic inventory management (`automation/inventoryAutomation.ts`):
+      warns on low stock, recommends a supplier switch when a compliant
+      alternative exists, and proposes pausing (never deleting) when it does
+      not — composing `inventory/reservation.ts`'s existing race-condition
+      handling rather than reimplementing stock arithmetic.
+- [x] Automated product monitoring (`automation/monitoring.ts`): the
+      channel-independent half of the brief's fourteen-step checklist
+      (supplier/stock health, profitability); channel-specific compliance
+      and publication eligibility stay in `publicationAutomation.ts`,
+      evaluated separately per channel, per `docs/PRINCIPLES.md` §3.
+      An unprofitable product is flagged for a price or supplier review, not
+      paused or deleted automatically.
+- [x] Product publication and order automation
+      (`automation/publicationAutomation.ts`, `automation/orderAutomation.ts`):
+      thin wrappers around Milestone 4's `assessPublicationReadiness` and
+      Milestone 5's `runOrderPipeline`, adding only the kill switch and (for
+      orders) the daily automatic supplier-spend limit.
+- [x] Refund automation (`automation/refundAutomation.ts`): wraps Milestone
+      5's `planRefund`, adding a daily automatic-refund total and a
+      per-order refund count limit — the two things a single-refund-at-a-time
+      function cannot know on its own.
+- [x] Emergency stop and category-level pauses (`automation/killSwitch.ts`,
+      new `business_settings` columns): a global pause and six independently
+      pausable categories (publishing, pricing, supplier switching, supplier
+      ordering, refunds, fulfilment). A pause blocks new automatic
+      *execution* only — existing monitoring, alerts and the approval queue
+      keep working, per the brief's §14.
+- [x] The formal approval action pipeline (`automation/approvalWorkflow.ts`,
+      wired into `/approvals` for the first time since Milestone 5 left it
+      read-only): approving replays the *exact* action captured in
+      `ai_decisions.action_payload` at proposal time, never a recalculated
+      one; if the facts the decision was proposed on have since changed
+      (`factsHaveMaterializedChanged`), the approval is invalidated rather
+      than executed against stale data.
+- [x] New `/automation` page: kill switch, category controls, today's
+      stats, risk counters, recent activity and pending jobs in live mode;
+      the seven demo scenarios from the brief's §25 in demo mode, each
+      isolating exactly one behaviour (verified individually — building them
+      surfaced the same kind of scenario-construction bug Milestone 5's demo
+      order data had, fixed the same way: bespoke, hand-controlled fixtures
+      per scenario rather than forcing one shared fixture to fit every
+      story).
+- [x] Migrations `0019_automation_engine.sql`, `0020_rls_automation_engine.sql`:
+      `automation_actions`, `automation_jobs`, plus the kill switch and new
+      financial-limit columns on `business_settings`, and `risk_level`/
+      `action_payload` on `ai_decisions`. 65 tables, 20 migrations. Both new
+      tables are read-only through RLS, written only by the service role —
+      the same model as `ai_decisions` and `automation_runs` since 0009.
+
+**Verified:** 492 unit/integration tests pass (up from 424, +68); 20
+migrations apply cleanly against PGlite; typecheck, lint and build are clean;
+every route returns 200 in demo mode with no console errors; all seven demo
+automation scenarios were confirmed rendering live in the browser with their
+intended, isolated outcome; `POST /api/automation/run` was confirmed live,
+correctly refusing to run in demo mode ("no database and no job queue to
+process") rather than pretending to; `/orders`, `/marketplaces` and
+`/approvals` continue to render with no regression, and Approvals now
+explains demo mode's read-only limitation instead of the Milestone 5
+placeholder text.
+
+**Not implemented / explicitly out of scope for this milestone:**
+- No job handler is registered yet in `automation/worker.ts`. The job queue
+  and worker mechanics are real and tested (claim, execute, retry with
+  backoff, dead-letter); every business decision function they would call
+  (`priceAutomation`, `inventoryAutomation`, `supplierSwitching`,
+  `publicationAutomation`, `orderAutomation`, `monitoring`) is itself real
+  and fully tested — but assembling the *live* inputs a nightly sweep needs
+  (every real product, supplier and channel row from the database, correctly
+  shaped into `CostInputs`/`ComplianceContext`) is a data-plumbing task this
+  milestone left honestly undone rather than faked. An unregistered job type
+  fails immediately and non-retryably with that exact reason.
+- Approving a decision genuinely changes its status, is genuinely audited,
+  and genuinely creates an `automation_actions` record — but that record's
+  execution outcome honestly reports that no live connector or
+  supplier/marketplace writer exists yet to perform the actual external
+  write (switching a supplier, publishing a listing, issuing a refund),
+  consistent with the same limitation Milestones 4 and 5 already documented.
+- No CEO Dashboard exists yet (Milestone 8) for the brief's §20 to extend —
+  `automation/repository.ts`'s `getAutomationStatus` is written so that
+  dashboard can read from it directly once built, rather than growing a
+  second, possibly-diverging summary.
+- `runWorkerBatch` and everything else that writes to `automation_actions`/
+  `automation_jobs` is untested directly (it requires a live Supabase
+  project via `createServiceSupabase`, the same boundary every DB-writing
+  module in this codebase has had since Milestone 1); only the pure decision
+  functions underneath it are unit-tested.
+
+**Blocked by credentials/API access:** none specific to this milestone —
+everything built here is either pure decision logic (fully tested) or a
+database/queue mechanism (needs a live Supabase project to exercise, same as
+every prior milestone's write path).
+
 ## Milestone 7 — Analytics and business intelligence
 
 Revenue, orders, units, gross profit, contribution, contribution margin, ad

@@ -223,6 +223,8 @@ export interface Database {
           is_demo: boolean
           created_at: string
           expires_at: string | null
+          risk_level: Database['public']['Enums']['automation_risk_level']
+          action_payload: Json
         }
         Insert: {
           id?: string
@@ -248,6 +250,8 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           expires_at?: string | null
+          risk_level?: Database['public']['Enums']['automation_risk_level']
+          action_payload?: Json
         }
         Update: {
           id?: string
@@ -273,6 +277,8 @@ export interface Database {
           is_demo?: boolean
           created_at?: string
           expires_at?: string | null
+          risk_level?: Database['public']['Enums']['automation_risk_level']
+          action_payload?: Json
         }
         Relationships: [
           {
@@ -420,6 +426,168 @@ export interface Database {
           },
           {
             foreignKeyName: 'audit_logs_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      automation_actions: {
+        Row: {
+          id: string
+          org_id: string
+          correlation_id: string
+          idempotency_key: string | null
+          action_type: Database['public']['Enums']['automation_action_type']
+          entity_type: string
+          entity_id: string | null
+          reason: string
+          input_facts: Json
+          decision: Json
+          policy_result: Json
+          automation_level: Database['public']['Enums']['automation_level']
+          risk_level: Database['public']['Enums']['automation_risk_level']
+          expected_outcome: string | null
+          status: Database['public']['Enums']['automation_action_status']
+          error: string | null
+          actor_type: Database['public']['Enums']['actor_type']
+          ai_decision_id: string | null
+          job_id: string | null
+          is_demo: boolean
+          created_at: string
+          completed_at: string | null
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          correlation_id?: string
+          idempotency_key?: string | null
+          action_type: Database['public']['Enums']['automation_action_type']
+          entity_type: string
+          entity_id?: string | null
+          reason: string
+          input_facts?: Json
+          decision?: Json
+          policy_result?: Json
+          automation_level: Database['public']['Enums']['automation_level']
+          risk_level?: Database['public']['Enums']['automation_risk_level']
+          expected_outcome?: string | null
+          status?: Database['public']['Enums']['automation_action_status']
+          error?: string | null
+          actor_type?: Database['public']['Enums']['actor_type']
+          ai_decision_id?: string | null
+          job_id?: string | null
+          is_demo?: boolean
+          created_at?: string
+          completed_at?: string | null
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          correlation_id?: string
+          idempotency_key?: string | null
+          action_type?: Database['public']['Enums']['automation_action_type']
+          entity_type?: string
+          entity_id?: string | null
+          reason?: string
+          input_facts?: Json
+          decision?: Json
+          policy_result?: Json
+          automation_level?: Database['public']['Enums']['automation_level']
+          risk_level?: Database['public']['Enums']['automation_risk_level']
+          expected_outcome?: string | null
+          status?: Database['public']['Enums']['automation_action_status']
+          error?: string | null
+          actor_type?: Database['public']['Enums']['actor_type']
+          ai_decision_id?: string | null
+          job_id?: string | null
+          is_demo?: boolean
+          created_at?: string
+          completed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'automation_actions_ai_decision_id_fkey'
+            columns: ['ai_decision_id']
+            isOneToOne: false
+            referencedRelation: 'ai_decisions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'automation_actions_job_fk'
+            columns: ['job_id']
+            isOneToOne: false
+            referencedRelation: 'automation_jobs'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'automation_actions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      automation_jobs: {
+        Row: {
+          id: string
+          org_id: string
+          job_type: string
+          status: Database['public']['Enums']['automation_job_status']
+          payload: Json
+          run_at: string
+          idempotency_key: string | null
+          attempts: number
+          max_attempts: number
+          last_error: string | null
+          locked_at: string | null
+          locked_by: string | null
+          correlation_id: string
+          created_at: string
+          updated_at: string
+          completed_at: string | null
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          job_type: string
+          status?: Database['public']['Enums']['automation_job_status']
+          payload?: Json
+          run_at?: string
+          idempotency_key?: string | null
+          attempts?: number
+          max_attempts?: number
+          last_error?: string | null
+          locked_at?: string | null
+          locked_by?: string | null
+          correlation_id?: string
+          created_at?: string
+          updated_at?: string
+          completed_at?: string | null
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          job_type?: string
+          status?: Database['public']['Enums']['automation_job_status']
+          payload?: Json
+          run_at?: string
+          idempotency_key?: string | null
+          attempts?: number
+          max_attempts?: number
+          last_error?: string | null
+          locked_at?: string | null
+          locked_by?: string | null
+          correlation_id?: string
+          created_at?: string
+          updated_at?: string
+          completed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'automation_jobs_org_id_fkey'
             columns: ['org_id']
             isOneToOne: false
             referencedRelation: 'organisations'
@@ -581,6 +749,15 @@ export interface Database {
           created_at: string
           updated_at: string
           max_auto_refund_minor: number
+          automation_paused: boolean
+          automation_paused_at: string | null
+          automation_paused_reason: string | null
+          automation_paused_categories: string[]
+          max_daily_auto_refund_minor: number
+          max_refunds_per_order: number
+          max_daily_auto_supplier_spend_minor: number
+          max_auto_supplier_switch_cost_increase_pct: number
+          max_price_movement_per_day_pct: number
         }
         Insert: {
           org_id: string
@@ -626,6 +803,15 @@ export interface Database {
           created_at?: string
           updated_at?: string
           max_auto_refund_minor?: number
+          automation_paused?: boolean
+          automation_paused_at?: string | null
+          automation_paused_reason?: string | null
+          automation_paused_categories?: string[]
+          max_daily_auto_refund_minor?: number
+          max_refunds_per_order?: number
+          max_daily_auto_supplier_spend_minor?: number
+          max_auto_supplier_switch_cost_increase_pct?: number
+          max_price_movement_per_day_pct?: number
         }
         Update: {
           org_id?: string
@@ -671,6 +857,15 @@ export interface Database {
           created_at?: string
           updated_at?: string
           max_auto_refund_minor?: number
+          automation_paused?: boolean
+          automation_paused_at?: string | null
+          automation_paused_reason?: string | null
+          automation_paused_categories?: string[]
+          max_daily_auto_refund_minor?: number
+          max_refunds_per_order?: number
+          max_daily_auto_supplier_spend_minor?: number
+          max_auto_supplier_switch_cost_increase_pct?: number
+          max_price_movement_per_day_pct?: number
         }
         Relationships: [
           {
@@ -4786,7 +4981,11 @@ export interface Database {
     Enums: {
       actor_type: 'user' | 'system' | 'ai' | 'integration'
       approval_status: 'approved' | 'blocked' | 'review_required' | 'not_assessed'
+      automation_action_status: 'pending' | 'executing' | 'succeeded' | 'failed' | 'blocked' | 'requires_approval' | 'retry_pending' | 'stale_facts' | 'cancelled'
+      automation_action_type: 'update_inventory' | 'update_price' | 'pause_product' | 'resume_product' | 'publish_product' | 'unpublish_product' | 'switch_supplier' | 'submit_supplier_order' | 'update_fulfilment' | 'update_tracking' | 'process_refund' | 'cancel_order' | 'request_approval' | 'reconcile_marketplace' | 'reconcile_supplier' | 'alert_owner'
+      automation_job_status: 'pending' | 'running' | 'succeeded' | 'failed' | 'dead_letter' | 'cancelled'
       automation_level: 'manual' | 'assisted' | 'supervised' | 'autonomous'
+      automation_risk_level: 'low' | 'medium' | 'high' | 'unknown'
       candidate_status: 'new' | 'scored' | 'promoted' | 'rejected' | 'duplicate' | 'archived'
       channel_key: 'shopify' | 'amazon_uk'
       channel_listing_status: 'not_listed' | 'draft' | 'review_required' | 'blocked' | 'testing' | 'live' | 'paused' | 'removed'
