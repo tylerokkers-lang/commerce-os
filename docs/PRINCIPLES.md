@@ -109,3 +109,23 @@ fulfilment, or automation decisions must too.
   layered on top of (never duplicating) each domain engine's own decision.
   `automation_actions` is the fact-first record #1 and #6 require for every
   automation decision: the facts used, the policy evaluated, and the result.
+- `src/lib/automation/store.ts`'s `AutomationStore` interface (Milestone 6
+  verification pass) — the pattern for testing any code that would
+  otherwise require a live external service: define the interface the real
+  implementation (`supabaseStore.ts`) satisfies, then satisfy it a second
+  time with a real (not mocked) in-memory implementation
+  (`inMemoryStore.ts`) that a test can drive through the actual
+  orchestration entry points. This is what let
+  `tests/automation-engine-e2e.test.ts` prove the job queue and business
+  decision modules work correctly *together* without a live Supabase
+  project, catching two real bugs that unit-testing the pieces in isolation
+  had missed. Any future milestone that needs to prove an end-to-end flow
+  against something this environment cannot stand up for real (a live
+  payment provider, a real marketplace API) should follow the same pattern
+  rather than mocking function calls directly.
+- The runaway-automation safeguard (`RUNAWAY_MAX_ACTIONS_PER_WINDOW` in
+  `store.ts`) — a hard backstop inside `createAutomationAction` itself,
+  independent of any domain engine's verdict, implementing #5's "autonomy
+  with guardrails" against the specific failure mode of a rule that keeps
+  re-triggering itself. It cannot be bypassed by any automation level,
+  including autonomous.

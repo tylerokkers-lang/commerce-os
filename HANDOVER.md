@@ -5,7 +5,8 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 23 August 2026 (Milestone 6 complete).
+Last updated: 23 August 2026 (Milestone 6 complete and rigorously
+re-verified end to end — see §18 before trusting any automation claim).
 
 ## 1. What this is
 
@@ -512,7 +513,125 @@ Milestone 5 placeholder text.
 clean, every route returns 200, all seven demo scenarios and the automation
 API route confirmed live in browser.
 
-## 18. Next step
+## 18. Milestone 6 verification pass — read this before trusting "the automation engine works"
+
+The first Milestone 6 pass (§17) built real decision engines and a real job
+queue, but nothing actually *drove* them end to end — every test called a
+business function directly. This pass fixed that, and fixed two real bugs it
+found doing so. **If you only read one section of this file about
+automation, read this one.**
+
+**IMPLEMENTED AND VERIFIED** (proven by `tests/automation-engine-e2e.test.ts`,
+18 tests, driving the real `enqueueJob`/`runWorkerBatch` — never a business
+function directly):
+- The full loop: event → job created → worker claims it → facts loaded →
+  profitability + compliance checked (the real `evaluateSupplierRedundancy`)
+  → policy applied → action executed/blocked/held for approval → audited →
+  notified.
+- Job engine mechanics: creation, idempotent duplicate prevention, atomic
+  claiming (two concurrent `runWorkerBatch` calls can never both execute the
+  same job — proven with genuine async interleaving, not a lock), retry with
+  backoff, non-retryable immediate failure, dead-lettering on exhausted
+  attempts, stale/abandoned-claim recovery after a worker "crash", pending-job
+  cancellation, and organisation isolation.
+- The emergency stop, both global and per-category: ON executes, PAUSE
+  blocks the *same* action with a recorded reason and an audit entry,
+  RESUME executes again. This was explicitly demanded as mandatory and is
+  covered by its own test.
+- The runaway-automation loop safeguard (brief §15, new this pass): a hard
+  backstop in `createAutomationAction` — 5 actions of the same type for the
+  same entity within an hour forces the 6th to `blocked`, regardless of the
+  policy engine's own verdict.
+- The four supplier-autonomy scenarios named in the brief: a genuinely good
+  alternative switches automatically; one that fails profitability does not;
+  one that fails compliance (cannot serve a previously-approved channel)
+  does not; one that is valid but exceeds the cost-increase limit requires
+  approval instead.
+- The automation-level ladder (`automation-level-ladder.test.ts`): for the
+  same price change and the same supplier switch, manual/assisted only ever
+  recommend, supervised/autonomous execute automatically — and a genuine
+  compliance/profitability failure or an active kill switch blocks
+  *every* level, including autonomous.
+- Every money safeguard, both sides of the limit: maximum automatic
+  supplier order (newly wired — see bug list below), maximum daily
+  automatic supplier spend, maximum automatic refund, maximum daily
+  automatic refund total, maximum refunds per order, maximum price movement
+  (per action and per day), maximum supplier cost increase.
+- The approval bridge: a `requires_approval` decision now actually appears
+  on `/approvals` (`ai_decisions`, via the new `proposeApproval`), with the
+  exact action payload, facts, risk, automation level and a 7-day expiry —
+  not just an internal `automation_actions` row nobody could see.
+- Approval audit trail: REQUESTED, GRANTED, REJECTED, INVALIDATED (stale
+  facts), EXPIRED and EXECUTED all fire a distinct, attributed audit entry.
+- RLS, secret handling, org isolation, audit immutability (security review,
+  §20 of the original brief): `automation_actions`/`automation_jobs`
+  read-only through RLS exactly like `ai_decisions`; the cron route's shared
+  secret is compared with `timingSafeEqual`, never logged; every store
+  method takes and stores `orgId` explicitly, proven not to leak across
+  orgs by a dedicated test; `audit_logs` remains append-only (unchanged,
+  re-verified by `db:verify`).
+- Live browser verification: the automation dashboard, kill switch,
+  category controls, Approvals (now with working approve/reject), the new
+  `/automation/[id]` action-detail page, and the cron route itself, all
+  checked with no console errors.
+
+**Two real bugs found by this test suite, not by inspection** — the whole
+reason to build the harness rather than trust the code by reading it:
+1. `worker.ts` decided whether to mark an action `succeeded` from its own
+   stale copy of the policy verdict, not from what `createAutomationAction`
+   actually recorded — so the runaway-safeguard's `blocked` override was
+   silently reverted to `succeeded` moments later. Fixed: it now branches on
+   the store's returned `status`.
+2. An action's stored `reason` was always the domain engine's reason, even
+   when the kill switch (a concern the domain engine cannot see) was the
+   actual cause of a block — so a paused action's own record didn't say it
+   was paused. Fixed: the reason is always the policy's own, which passes
+   the domain reason through untouched whenever the domain is itself the
+   deciding factor.
+
+**REQUIRES PRODUCTION INFRASTRUCTURE** (this is the honest, explicit answer
+to "does this run 24/7 without Claude Code" — see also `docs/MILESTONES.md`):
+- **A deployed Supabase project.** Everything above proves the
+  orchestration logic is correct against a real implementation of the same
+  interface (`AutomationStore`) the production code uses — but the
+  `@supabase/supabase-js` client itself, talking to a real PostgREST server,
+  is not exercised by any test in this repository, because there is no way
+  to run PostgREST against an in-process database here (PGlite speaks the
+  Postgres wire protocol, not PostgREST's HTTP API, and standing up a real
+  PostgREST binary against it is outside what this environment can do).
+  This is a materially different claim from "untested" — the boundary is
+  precisely `supabaseStore.ts`'s pass-through to `jobs.ts`/`actions.ts`,
+  which are otherwise identical in shape to the in-memory implementation
+  that *is* proven correct.
+- **An external scheduler.** `POST /api/automation/run` is a plain,
+  stateless HTTP route — nothing about it depends on Claude Code, ChatGPT,
+  or any coding assistant. But nothing in this repository calls it on a
+  timer either; something outside the application must (a Vercel Cron
+  entry, a hosted worker's timer, a serverless scheduled function, or even
+  a `curl` line in a crontab against the deployed URL with
+  `AUTOMATION_CRON_SECRET`). Until that exists, jobs will queue but nothing
+  will claim them.
+- **A live product/supplier/channel data-assembly layer.** The one
+  registered handler (`supplier_availability_check`) is real and tested,
+  but it receives its "facts" from the job payload at enqueue time — nothing
+  in this codebase yet queries real `products`/`suppliers`/`channel_products`
+  rows and assembles them into that payload on a schedule. This is
+  deliberate, honestly-scoped future work, not a hidden gap: building it is
+  a data-plumbing task distinct from the engine itself.
+
+**NOT IMPLEMENTED:**
+- No live connector or supplier/marketplace writer performs the actual
+  external side of an approved/executed action (placing a supplier order,
+  publishing a listing, issuing a refund) — same limitation Milestones 4
+  and 5 already documented, now also true of automation-triggered actions.
+- No further job handlers exist beyond `supplier_availability_check` —
+  price, inventory, publication and order automation are real, tested pure
+  functions with no job-queue entry point yet.
+
+**BLOCKED BY CREDENTIALS:** none specific to this milestone beyond the
+Supabase project itself, already covered above.
+
+## 19. Next step
 
 Milestone 7 (analytics and business intelligence), per `docs/MILESTONES.md`.
 Read `docs/PRINCIPLES.md` first. Before starting it, note that Milestone 8

@@ -3,10 +3,11 @@ import 'server-only'
 import { recordAudit } from '@/lib/audit'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import type { Enums } from '@/lib/supabase/database.types'
-import type { AutomationActionType, AutomationLevel, PolicyResult } from './types'
+import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type CompleteActionOutcome, type CreateActionInput } from './store'
+import type { AutomationActionType } from './types'
 
 /**
- * The typed automation action record (brief §4).
+ * The typed automation action record (brief §4), Supabase-backed.
  *
  * Live mode only — demo mode has no database to persist a row against, and
  * demo scenarios (`automation/demoScenarios.ts`) render the same decision
@@ -18,30 +19,44 @@ import type { AutomationActionType, AutomationLevel, PolicyResult } from './type
  * entry via `recordAudit`, since the two serve different readers — this
  * table is queried by entity/action-type for "what has the engine done to
  * X", while `audit_logs` is the org-wide chronological ledger.
+ *
+ * Also enforces the runaway-automation safeguard (brief §15, `store.ts`):
+ * before inserting, counts how many actions of the exact same type have
+ * already been created for the exact same entity within the last
+ * `RUNAWAY_WINDOW_MINUTES`. At or past `RUNAWAY_MAX_ACTIONS_PER_WINDOW`, the
+ * action is forced to `blocked` regardless of what the policy engine
+ * decided — a hard backstop independent of any domain engine's own verdict,
+ * so a rule that keeps re-triggering itself (a flapping signal repeatedly
+ * "switching" and "switching back") cannot execute unboundedly.
  */
 
-export interface CreateActionInput {
-  orgId: string
-  correlationId?: string
-  idempotencyKey?: string | null
-  actionType: AutomationActionType
-  entityType: string
-  entityId?: string | null
-  reason: string
-  inputFacts: Record<string, unknown>
-  decision: Record<string, unknown>
-  policy: PolicyResult
-  automationLevel: AutomationLevel
-  expectedOutcome?: string | null
-  actorType?: Enums<'actor_type'>
-  aiDecisionId?: string | null
-  jobId?: string | null
-}
-
-const STATUS_BY_POLICY_OUTCOME: Record<PolicyResult['outcome'], Enums<'automation_action_status'>> = {
+const STATUS_BY_POLICY_OUTCOME: Record<'allow_automatic' | 'require_approval' | 'block', Enums<'automation_action_status'>> = {
   allow_automatic: 'executing',
   require_approval: 'requires_approval',
   block: 'blocked',
+}
+
+export async function countRecentActionsForEntity(
+  orgId: string,
+  entityType: string,
+  entityId: string | null,
+  actionType: AutomationActionType,
+  sinceIso: string,
+): Promise<number> {
+  const supabase = createServiceSupabase()
+  let query = supabase
+    .from('automation_actions')
+    .select('id', { count: 'exact', head: true })
+    .eq('org_id', orgId)
+    .eq('entity_type', entityType)
+    .eq('action_type', actionType)
+    .gte('created_at', sinceIso)
+
+  query = entityId === null ? query.is('entity_id', null) : query.eq('entity_id', entityId)
+
+  const { count, error } = await query
+  if (error) throw new Error(`Could not count recent automation actions: ${error.message}`)
+  return count ?? 0
 }
 
 /**
@@ -65,7 +80,15 @@ export async function createAutomationAction(
     if (existing) return { id: existing.id, status: existing.status, alreadyExisted: true }
   }
 
-  const status = STATUS_BY_POLICY_OUTCOME[input.policy.outcome]
+  const windowStart = new Date(Date.now() - RUNAWAY_WINDOW_MINUTES * 60_000).toISOString()
+  const recentCount = await countRecentActionsForEntity(input.orgId, input.entityType, input.entityId ?? null, input.actionType, windowStart)
+  const runawayTripped = recentCount >= RUNAWAY_MAX_ACTIONS_PER_WINDOW
+
+  const policyOutcome = input.policy.outcome
+  const status = runawayTripped ? 'blocked' : STATUS_BY_POLICY_OUTCOME[policyOutcome]
+  const reason = runawayTripped
+    ? `Blocked by the runaway-automation safeguard: ${recentCount} "${input.actionType}" actions already recorded for ${input.entityType} ${input.entityId ?? '(none)'} in the last ${RUNAWAY_WINDOW_MINUTES} minutes (limit ${RUNAWAY_MAX_ACTIONS_PER_WINDOW}). ${input.reason}`
+    : input.reason
 
   const { data, error } = await supabase
     .from('automation_actions')
@@ -76,7 +99,7 @@ export async function createAutomationAction(
       action_type: input.actionType,
       entity_type: input.entityType,
       entity_id: input.entityId ?? null,
-      reason: input.reason,
+      reason,
       input_facts: input.inputFacts as never,
       decision: input.decision as never,
       policy_result: input.policy as never,
@@ -89,7 +112,7 @@ export async function createAutomationAction(
       job_id: input.jobId ?? null,
       completed_at: status === 'executing' ? null : new Date().toISOString(),
     })
-    .select('id')
+    .select('*')
     .single()
 
   if (error) throw new Error(`Could not record automation action: ${error.message}`)
@@ -100,10 +123,10 @@ export async function createAutomationAction(
     entityType: input.entityType,
     entityId: input.entityId ?? undefined,
     actorType: input.actorType ?? 'system',
-    reason: input.reason,
+    reason,
     ruleKey: input.actionType,
     aiDecisionId: input.aiDecisionId ?? undefined,
-    metadata: { automationActionId: data.id, policyOutcome: input.policy.outcome },
+    metadata: { automationActionId: data.id, policyOutcome, runawayTripped, correlationId: input.correlationId },
   })
 
   return { id: data.id, status, alreadyExisted: false }
@@ -114,10 +137,7 @@ export async function createAutomationAction(
  * the caller must have actually attempted the underlying operation (a
  * supplier switch, a price change, a refund) before calling this.
  */
-export async function completeAutomationAction(
-  actionId: string,
-  outcome: { succeeded: boolean; error?: string | null; orgId: string; entityType: string; entityId?: string | null },
-): Promise<void> {
+export async function completeAutomationAction(actionId: string, outcome: CompleteActionOutcome): Promise<void> {
   const supabase = createServiceSupabase()
   const status: Enums<'automation_action_status'> = outcome.succeeded ? 'succeeded' : 'failed'
 

@@ -1,6 +1,14 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
 import { runWorkerBatch } from '@/lib/automation/worker'
+import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
+
+/** Constant-time comparison so a wrong guess cannot be narrowed down by response timing. */
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
 
 /**
  * The scheduled-automation entry point (brief §5, §30).
@@ -25,7 +33,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'AUTOMATION_CRON_SECRET is not configured; refusing to run against a live database.' }, { status: 503 })
     }
     const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
-    if (provided !== expected) {
+    if (!provided || !secretsMatch(provided, expected)) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
     }
   } else {
@@ -35,7 +43,7 @@ export async function POST(request: Request) {
     })
   }
 
-  const result = await runWorkerBatch(randomUUID())
+  const result = await runWorkerBatch(getSupabaseAutomationStore(), randomUUID())
   return Response.json({ status: 'ok', checkedAt: new Date().toISOString(), ...result })
 }
 

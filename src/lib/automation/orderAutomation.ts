@@ -11,8 +11,10 @@ import type { PolicyResult } from './types'
  * addition is the automation-engine layer the pipeline itself does not know
  * about: the kill switch (both the "fulfilment" and "supplier_ordering"
  * categories can gate an order, since submitting a fulfilment usually also
- * means placing or drawing down a supplier order) and the daily automatic
- * supplier-spend ceiling.
+ * means placing or drawing down a supplier order), the single-order spend
+ * ceiling (`max_auto_purchase_minor` — the same limit `settings/page.tsx`
+ * has always shown the owner, wired into automation for the first time
+ * here), and the daily automatic supplier-spend ceiling on top of it.
  */
 
 export interface OrderAutomationResult {
@@ -46,7 +48,12 @@ export function evaluateOrderAutomation(
     domainRequirements: pipeline.submission.requirements,
     financialChecks: [
       {
-        label: "Maximum daily automatic supplier spend",
+        label: 'Maximum automatic supplier order',
+        amountMinor: estimatedOrderCostMinor,
+        limitMinor: settings.maxAutoPurchaseMinor,
+      },
+      {
+        label: 'Maximum daily automatic supplier spend',
         amountMinor: supplierSpendAlreadyTodayMinor + estimatedOrderCostMinor,
         limitMinor: settings.maxDailyAutoSupplierSpendMinor,
       },

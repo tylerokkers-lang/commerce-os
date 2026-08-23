@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { Badge, Card, CardHeader, PageHeader, StatTile, type Tone } from '@/components/ui'
 import { formatMoney, money } from '@/lib/core/money'
 import { getAutomationStatus } from '@/lib/automation/repository'
@@ -195,14 +196,16 @@ export default async function AutomationPage() {
             ) : (
               <ul className="divide-y divide-border">
                 {status.recentActions.map((action) => (
-                  <li key={action.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{action.action_type.replace(/_/g, ' ')} — {action.entity_type} {action.entity_id ?? ''}</p>
-                      <p className="truncate text-xs text-ink-muted">{action.reason}</p>
-                    </div>
-                    <Badge tone={action.status === 'succeeded' ? 'positive' : action.status === 'failed' || action.status === 'blocked' ? 'negative' : 'caution'}>
-                      {action.status.replace(/_/g, ' ')}
-                    </Badge>
+                  <li key={action.id}>
+                    <Link href={`/automation/${action.id}`} className="flex items-center justify-between gap-3 px-5 py-3 text-sm hover:bg-surface-muted">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{action.action_type.replace(/_/g, ' ')} — {action.entity_type} {action.entity_id ?? ''}</p>
+                        <p className="truncate text-xs text-ink-muted">{action.reason}</p>
+                      </div>
+                      <Badge tone={action.status === 'succeeded' ? 'positive' : action.status === 'failed' || action.status === 'blocked' ? 'negative' : 'caution'}>
+                        {action.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </Link>
                   </li>
                 ))}
               </ul>

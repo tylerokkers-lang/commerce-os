@@ -52,4 +52,16 @@ describe('order automation', () => {
     expect(result.pipeline.submission.outcome).toBe('blocked')
     expect(result.policy.outcome).toBe('block')
   })
+
+  describe('maximum automatic supplier order (a single order, distinct from the daily total)', () => {
+    it('permits an order within the single-order limit', () => {
+      const result = evaluateOrderAutomation(BASE_INPUT, { ...DEMO_AUTOMATION_SETTINGS, maxAutoPurchaseMinor: 5000 }, 0)
+      expect(result.policy.outcome).toBe('allow_automatic')
+    })
+
+    it('requires approval once a single order exceeds the limit, even with no other spend today', () => {
+      const result = evaluateOrderAutomation(BASE_INPUT, { ...DEMO_AUTOMATION_SETTINGS, maxAutoPurchaseMinor: 500 }, 0)
+      expect(result.policy.outcome).toBe('require_approval')
+    })
+  })
 })

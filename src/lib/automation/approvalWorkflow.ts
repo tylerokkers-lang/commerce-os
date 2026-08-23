@@ -76,6 +76,16 @@ export async function approveDecision(
   }
   if (decision.expires_at && new Date(decision.expires_at) < new Date()) {
     await supabase.from('ai_decisions').update({ status: 'expired' }).eq('id', decisionId)
+    await recordAudit({
+      orgId: session.orgId,
+      action: 'APPROVAL_EXPIRED',
+      entityType: decision.entity_type,
+      entityId: decision.entity_id ?? undefined,
+      actorType: 'system',
+      actorLabel: 'Approval expiry check',
+      reason: `Expired at ${decision.expires_at}, before anyone approved or rejected it.`,
+      aiDecisionId: decisionId,
+    })
     return { status: 'invalidated', reason: 'This approval request has expired.' }
   }
 
@@ -135,17 +145,27 @@ export async function approveDecision(
     aiDecisionId: decisionId,
   })
 
-  // Honest limitation: no live connector in this codebase yet performs the
-  // external write side of these actions (see the module comment above).
-  await completeAutomationAction(created.id, {
-    succeeded: false,
-    error: 'Approved, but no live connector or supplier/marketplace writer is configured to execute this action automatically in this environment yet.',
-    orgId: session.orgId,
-    entityType: payload.entityType ?? decision.entity_type,
-    entityId: payload.entityId ?? decision.entity_id,
-  })
-
-  await supabase.from('ai_decisions').update({ status: 'failed', execution_error: 'No live executor configured yet.' }).eq('id', decisionId)
+  // `createAutomationAction` can still override the synthetic "allow_automatic"
+  // policy above — the runaway-automation safeguard forces `blocked`
+  // regardless of what the caller asked for — so this only marks completion
+  // when the action is genuinely `executing`, never blindly.
+  if (created.status === 'executing') {
+    // Honest limitation: no live connector in this codebase yet performs the
+    // external write side of these actions (see the module comment above).
+    await completeAutomationAction(created.id, {
+      succeeded: false,
+      error: 'Approved, but no live connector or supplier/marketplace writer is configured to execute this action automatically in this environment yet.',
+      orgId: session.orgId,
+      entityType: payload.entityType ?? decision.entity_type,
+      entityId: payload.entityId ?? decision.entity_id,
+    })
+    await supabase.from('ai_decisions').update({ status: 'failed', execution_error: 'No live executor configured yet.' }).eq('id', decisionId)
+  } else {
+    await supabase
+      .from('ai_decisions')
+      .update({ status: 'failed', execution_error: `Blocked at execution time: ${created.status}.` })
+      .eq('id', decisionId)
+  }
 
   return { status: 'approved', automationActionId: created.id }
 }

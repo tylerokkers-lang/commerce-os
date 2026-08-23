@@ -565,16 +565,139 @@ placeholder text.
   `automation/repository.ts`'s `getAutomationStatus` is written so that
   dashboard can read from it directly once built, rather than growing a
   second, possibly-diverging summary.
-- `runWorkerBatch` and everything else that writes to `automation_actions`/
-  `automation_jobs` is untested directly (it requires a live Supabase
-  project via `createServiceSupabase`, the same boundary every DB-writing
-  module in this codebase has had since Milestone 1); only the pure decision
-  functions underneath it are unit-tested.
+- The live Supabase/PostgREST HTTP path itself (as opposed to the
+  orchestration logic running against it) is unverified — see the
+  verification pass below for exactly what that means and what it would
+  take to close.
 
 **Blocked by credentials/API access:** none specific to this milestone —
 everything built here is either pure decision logic (fully tested) or a
 database/queue mechanism (needs a live Supabase project to exercise, same as
 every prior milestone's write path).
+
+### Milestone 6 verification pass (rigorous re-verification, same day)
+
+The user explicitly required proof that the automation engine is a real
+subsystem — that an event can enter it, be evaluated with the real
+profitability/compliance/supplier engines, pass through policy, execute,
+verify, notify and audit, all without Claude Code or any coding assistant
+involved — and rejected "the function exists" as sufficient evidence. This
+pass built the missing proof, found two real bugs in the process, and closed
+several gaps the first pass had left honestly undone but incomplete.
+
+**What changed:**
+
+- **`automation/store.ts`**: an `AutomationStore` interface covering every
+  persistence operation the engine needs (jobs, actions, audit, notify,
+  settings, approvals). `jobs.ts` and `actions.ts` were refactored to return
+  its plain `JobRecord`/`ActionRecord` shapes instead of raw Supabase rows,
+  so they are drop-in `AutomationStore` implementations
+  (`supabaseStore.ts`) rather than being Supabase-only. `inMemoryStore.ts`
+  implements the identical interface for testing — not a mock returning
+  canned responses, but a real (if simplified) implementation of the same
+  semantics: idempotency-key uniqueness, atomic job claiming (proven using
+  genuine async interleaving, not a lock), retry/backoff/dead-letter
+  transitions, and the new runaway-automation safeguard.
+- **`tests/automation-engine-e2e.test.ts`** (18 tests) drives the actual
+  orchestration entry points — `enqueueJob`, `runWorkerBatch` — end to end,
+  never calling a business decision function directly. It proves, against
+  the real `evaluateSupplierSwitchAutomation` (profitability + compliance +
+  policy): a permitted switch executes with a complete audit/notification
+  trail; a profitability failure, a compliance failure, and an
+  over-the-limit cost increase are each never executed; the emergency stop
+  (both global and category-level) blocks an otherwise-identical action,
+  reasons it, audits it, and resuming lets it execute again; two concurrent
+  workers can never both execute the same job; duplicate events never
+  create a second job; a retryable failure schedules backoff, a
+  non-retryable one fails immediately, and exhausting attempts dead-letters;
+  an unregistered job type fails safely, never silently succeeding; a
+  crashed worker's claim is recovered after the lock timeout; one org's
+  actions never leak into another's counts; and the runaway-automation
+  safeguard blocks a sixth action for the same entity/action-type within an
+  hour regardless of what the policy engine itself decided.
+- **Two real bugs found and fixed by this test suite** (exactly the kind of
+  thing "prove it, don't assume it" is for): the job handler was deciding
+  whether to mark an action `succeeded` from its own stale copy of the
+  policy's verdict rather than from `createAutomationAction`'s returned
+  status — meaning the runaway-automation safeguard's `blocked` override was
+  silently reverted back to `succeeded` immediately afterward. And the
+  action's stored `reason` was always the domain engine's reason, even when
+  the kill switch was the actual cause of a block — so a paused action's
+  record didn't say it was paused. Both are fixed; `worker.ts` now branches
+  on the store's authoritative `created.status`, and the reason field is
+  always the policy's own (which passes the domain reason through untouched
+  whenever the domain is itself the deciding factor).
+- **A real job handler is registered**: `supplier_availability_check` in
+  `worker.ts`, running the full brief §1 pipeline (facts loaded from the job
+  payload → `evaluateSupplierRedundancy`'s profitability + compliance →
+  `policyEngine.ts` → action recorded → notified). Assembling the payload
+  from *live* product/supplier/channel rows remains the one honestly
+  undone piece — the handler itself is real and tested.
+- **The approval bridge** (`automation/proposeApproval.ts`): a
+  `requires_approval` decision now actually creates an `ai_decisions` row
+  with the full required shape (proposed action, reason, facts, financial
+  impact, risk, automation level, expiry) — before this pass it only ever
+  produced an `automation_actions` row that never appeared on `/approvals`
+  at all. `approvalWorkflow.ts` also gained a fix in the same spirit as the
+  worker bug above: it now only marks an approved action `executing` when
+  the store's own status says so, rather than assuming its synthetic
+  "approved" policy always wins.
+- **Job cancellation** (`cancelJob`): a pending (not yet claimed) job can be
+  cancelled, using the same atomic `UPDATE ... WHERE status = 'pending'`
+  pattern as claiming, so a job a worker has already picked up cannot be
+  cancelled out from under it.
+- **The runaway-automation safeguard** (brief §15): a hard backstop in
+  `createAutomationAction` itself, independent of any domain engine's
+  verdict — at `RUNAWAY_MAX_ACTIONS_PER_WINDOW` (5) actions of the same type
+  for the same entity within `RUNAWAY_WINDOW_MINUTES` (60), the next one is
+  forced to `blocked` regardless of what the policy engine decided.
+- **Two real wiring gaps closed**: `max_auto_purchase_minor` (a single
+  automatic supplier order's ceiling) was read into settings but never
+  actually checked anywhere — `orderAutomation.ts` now checks it alongside
+  the daily total. Approval expiry silently changed status without an audit
+  entry — `APPROVAL_EXPIRED` now fires one, completing the
+  REQUESTED/APPROVED/REJECTED/EXPIRED/INVALIDATED/EXECUTED trail brief §11
+  asked for.
+- **`/automation/[id]`**: a minimal action-detail page (brief §14),
+  rendering only fields actually present on the `automation_actions` row —
+  what happened, why (the policy's own requirements), the facts used, the
+  domain decision, and the result. No fabricated explanation text.
+- **Constant-time secret comparison** on `/api/automation/run` (`timingSafeEqual`),
+  closing a minor timing side-channel on the shared secret.
+- 39 new tests across `automation-engine-e2e.test.ts` (18),
+  `automation-level-ladder.test.ts` (4, demonstrating manual/assisted/
+  supervised/autonomous side by side for the same decision), and additions
+  to `automation-order.test.ts` (the new single-order limit) — 516 total, up
+  from 492.
+
+**What this proves, precisely, and what it does not:**
+
+The orchestration logic — event → job → worker → facts → profitability →
+compliance → policy → action → verification → audit → notification — is
+proven correct by running the real code (`enqueueJob`, `runWorkerBatch`,
+the real business modules) against a swapped persistence layer. This is the
+standard way to test code that would otherwise require a live external
+service, and it is not "calling the final function from a test": the test
+only calls the same two functions a production HTTP request would call.
+What it does **not** prove is the Supabase/PostgREST HTTP path itself — the
+`@supabase/supabase-js` client has no way to run against an in-process
+Postgres instance (PGlite, already used for schema verification, speaks the
+Postgres wire protocol but not PostgREST's HTTP API), so exercising that
+specific path for real needs a deployed Supabase project. This is the one
+piece genuinely requiring production infrastructure — documented in full in
+`HANDOVER.md` §19.
+
+**No fake connected/completed/executed states were introduced.** Verified
+live: the automation dashboard, kill switch, category controls, approvals
+(now with working approve/reject), automation history, the new action-detail
+page and the automation API route were all checked live in the browser with
+no console errors beyond a stale cached message from a since-closed tab
+(confirmed unrelated by opening a fresh tab and re-checking — documented as
+a browser-tooling artifact, not an application bug).
+
+**Verified:** 516 tests (up from 492, +24); 20 migrations; typecheck, lint
+and build all clean; every route returns 200 with no regression;
+`informax-site` confirmed untouched throughout.
 
 ## Milestone 7 — Analytics and business intelligence
 

@@ -4,9 +4,10 @@ import { recordAudit } from '@/lib/audit'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import type { Tables } from '@/lib/supabase/database.types'
 import { computeBackoffSeconds } from './backoff'
+import type { EnqueueJobInput, JobOutcome, JobRecord } from './store'
 
 /**
- * The application-level job queue (brief §5).
+ * The application-level job queue (brief §5), Supabase-backed.
  *
  * This is what makes automation run without Claude Code, ChatGPT or any
  * other coding assistant open: `automation_jobs` is a plain Postgres table,
@@ -25,22 +26,36 @@ import { computeBackoffSeconds } from './backoff'
  * change and matches zero rows — the same guarantee `FOR UPDATE SKIP LOCKED`
  * gives, achieved through the row-level atomicity of a single UPDATE
  * statement rather than an explicit lock.
+ *
+ * Returns the plain `JobRecord` shape from `store.ts` (not the raw Supabase
+ * row) so this module is a drop-in `AutomationStore` implementation
+ * (assembled in `supabaseStore.ts`) and shares its exact types with
+ * `inMemoryStore.ts`, the test double used to verify the engine end-to-end.
  */
 
 const LOCK_TIMEOUT_SECONDS = 300 // A claim older than this is treated as an abandoned worker, not a live one.
 
 export { computeBackoffSeconds } from './backoff'
 
-export type AutomationJob = Tables<'automation_jobs'>
-
-export interface EnqueueJobInput {
-  orgId: string
-  jobType: string
-  payload?: Record<string, unknown>
-  runAt?: string
-  idempotencyKey?: string | null
-  maxAttempts?: number
-  correlationId?: string
+function toJobRecord(row: Tables<'automation_jobs'>): JobRecord {
+  return {
+    id: row.id,
+    orgId: row.org_id,
+    jobType: row.job_type,
+    status: row.status,
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    runAt: row.run_at,
+    idempotencyKey: row.idempotency_key,
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    lastError: row.last_error,
+    lockedAt: row.locked_at,
+    lockedBy: row.locked_by,
+    correlationId: row.correlation_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  }
 }
 
 /** Enqueues a job. Idempotent: the same `idempotencyKey` returns the existing job rather than duplicating it. */
@@ -90,7 +105,7 @@ export async function enqueueJob(input: EnqueueJobInput): Promise<{ id: string; 
  * worker's claim is recovered automatically once `LOCK_TIMEOUT_SECONDS` has
  * passed, rather than stranding the job in `running` forever.
  */
-export async function claimNextJob(workerId: string): Promise<AutomationJob | null> {
+export async function claimNextJob(workerId: string): Promise<JobRecord | null> {
   const supabase = createServiceSupabase()
   const nowIso = new Date().toISOString()
   const lockCutoff = new Date(Date.now() - LOCK_TIMEOUT_SECONDS * 1000).toISOString()
@@ -122,21 +137,43 @@ export async function claimNextJob(workerId: string): Promise<AutomationJob | nu
       .select('*')
       .maybeSingle()
 
-    if (!error && claimed) return claimed
+    if (!error && claimed) return toJobRecord(claimed)
     // 0 rows updated means another worker won the race for this row; try the next candidate.
   }
 
   return null
 }
 
-export interface JobOutcome {
-  succeeded: boolean
-  error?: string | null
-  retryable?: boolean
+/**
+ * Cancels a job that has not started running yet — the same atomic
+ * `UPDATE ... WHERE status = 'pending'` pattern as claiming, so a job a
+ * worker has already picked up cannot be cancelled out from under it.
+ */
+export async function cancelJob(jobId: string, reason: string): Promise<boolean> {
+  const supabase = createServiceSupabase()
+  const { data, error } = await supabase
+    .from('automation_jobs')
+    .update({ status: 'cancelled', last_error: reason, completed_at: new Date().toISOString() })
+    .eq('id', jobId)
+    .eq('status', 'pending')
+    .select('org_id, job_type')
+    .maybeSingle()
+
+  if (error || !data) return false
+
+  await recordAudit({
+    orgId: data.org_id,
+    action: 'AUTOMATION_JOB_CANCELLED',
+    entityType: 'automation_job',
+    entityId: jobId,
+    actorType: 'user',
+    reason: `Cancelled "${data.job_type}": ${reason}`,
+  })
+  return true
 }
 
 /** Records a job's outcome: success, a scheduled retry, or dead-lettering once attempts are exhausted. */
-export async function completeJob(job: AutomationJob, outcome: JobOutcome): Promise<void> {
+export async function completeJob(job: JobRecord, outcome: JobOutcome): Promise<void> {
   const supabase = createServiceSupabase()
 
   if (outcome.succeeded) {
@@ -148,7 +185,7 @@ export async function completeJob(job: AutomationJob, outcome: JobOutcome): Prom
   }
 
   const retryable = outcome.retryable ?? true
-  const exhausted = job.attempts >= job.max_attempts
+  const exhausted = job.attempts >= job.maxAttempts
 
   if (!retryable || exhausted) {
     await supabase
@@ -161,14 +198,14 @@ export async function completeJob(job: AutomationJob, outcome: JobOutcome): Prom
       .eq('id', job.id)
 
     await recordAudit({
-      orgId: job.org_id,
+      orgId: job.orgId,
       action: exhausted ? 'AUTOMATION_JOB_DEAD_LETTERED' : 'AUTOMATION_ACTION_FAILED',
       entityType: 'automation_job',
       entityId: job.id,
       actorType: 'system',
       reason: exhausted
-        ? `"${job.job_type}" exhausted ${job.max_attempts} attempts.`
-        : `"${job.job_type}" failed with a non-retryable error.`,
+        ? `"${job.jobType}" exhausted ${job.maxAttempts} attempts.`
+        : `"${job.jobType}" failed with a non-retryable error.`,
       result: 'failure',
       error: outcome.error ?? undefined,
     })

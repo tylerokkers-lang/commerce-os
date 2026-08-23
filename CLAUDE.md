@@ -18,6 +18,12 @@ application depends on Claude Code, or any other coding assistant, staying
 open. Automation decisions never bypass compliance, profitability, or the
 financial limits in `business_settings` — see `docs/PRINCIPLES.md` §5 and
 `src/lib/automation/policyEngine.ts`, the one place those limits are checked.
+The orchestration loop (event → job → worker → facts → policy → action →
+audit → notification) is proven end to end in
+`tests/automation-engine-e2e.test.ts` against `automation/inMemoryStore.ts`,
+a real (not mocked) implementation of the same `AutomationStore` interface
+`supabaseStore.ts` implements for production — read `HANDOVER.md` §18 before
+claiming anything about "the automation engine works" is proven beyond that.
 
 Before pushing any change:
 
