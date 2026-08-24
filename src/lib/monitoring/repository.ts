@@ -6,7 +6,9 @@ import { demoMonitoringScenarios, type MonitoringDemoScenario } from '@/lib/demo
 import { isSupabaseConfigured, automationCronSecret } from '@/lib/core/env'
 import { isMonitorDue } from './eventTypes'
 import { MONITORS } from './registry'
+import { MARKET_CATALOG, resolveMarketStatus } from '@/lib/markets/catalog'
 import type { Tables } from '@/lib/supabase/database.types'
+import type { MarketConnectorStatus } from '@/lib/markets/types'
 
 export type DomainEventRow = Tables<'domain_events'>
 export type MonitorRunRow = Tables<'monitor_runs'>
@@ -50,6 +52,16 @@ export interface MonitoringStatus {
     listingsOutOfSync: readonly string[]
     failedExternalActions: readonly string[]
   }
+  /** Milestone 9: global expansion intelligence — FX and market-scoped events, plus the real (never hardcoded) marketplace readiness catalog. */
+  expansionIntelligence: {
+    fxRatesStale: readonly string[]
+    fxSignificantMovements: readonly string[]
+    marketsWithProfitabilityDeterioration: readonly string[]
+    marketsRequiringComplianceRecheck: readonly string[]
+    marketsWithSupplierCapabilityChanges: readonly string[]
+    marketsBecameViable: readonly string[]
+  }
+  marketReadiness: readonly { marketKey: string; label: string; countryLabel: string; status: MarketConnectorStatus }[]
   recentEvents: readonly DomainEventRow[]
   demoScenarios: readonly MonitoringDemoScenario[]
 }
@@ -64,6 +76,9 @@ const EMPTY_PRODUCT_INTELLIGENCE: MonitoringStatus['productIntelligence'] = {
   newlyProfitable: [], losingProfitability: [], risingSales: [], decliningSales: [], requiringReview: [],
 }
 const EMPTY_MARKETPLACE_INTELLIGENCE: MonitoringStatus['marketplaceIntelligence'] = { listingsOutOfSync: [], failedExternalActions: [] }
+const EMPTY_EXPANSION_INTELLIGENCE: MonitoringStatus['expansionIntelligence'] = {
+  fxRatesStale: [], fxSignificantMovements: [], marketsWithProfitabilityDeterioration: [], marketsRequiringComplianceRecheck: [], marketsWithSupplierCapabilityChanges: [], marketsBecameViable: [],
+}
 
 /** event_type -> which grouping in `MonitoringStatus` it drills into. Explicit and inspectable, same discipline as `EVENT_TO_JOB_MAPPING`. */
 const SUPPLIER_DISPATCH_EVENTS = ['SUPPLIER_DISPATCH_DELAYED']
@@ -78,6 +93,12 @@ const MARKETPLACE_OUT_OF_SYNC_EVENTS = ['LISTING_OUT_OF_SYNC', 'LISTING_PRICE_CH
 const MARKETPLACE_FAILED_ACTION_EVENTS = ['EXTERNAL_ACTION_FAILED', 'EXTERNAL_ACTION_UNVERIFIED']
 const COMPLIANCE_RECHECK_EVENTS = ['COMPLIANCE_RECHECK_REQUIRED', 'COMPLIANCE_ASSESSMENT_STALE']
 const SUPPLIER_UNAVAILABLE_EVENTS = ['SUPPLIER_OUT_OF_STOCK', 'SUPPLIER_FEED_FAILED']
+const FX_STALE_EVENTS = ['FX_RATE_STALE', 'FX_RATE_UNAVAILABLE']
+const FX_MOVEMENT_EVENTS = ['FX_RATE_SIGNIFICANT_MOVEMENT']
+const MARKET_PROFITABILITY_EVENTS = ['MARKET_PROFITABILITY_DETERIORATED']
+const MARKET_COMPLIANCE_EVENTS = ['MARKET_COMPLIANCE_RECHECK_REQUIRED']
+const MARKET_SUPPLIER_EVENTS = ['MARKET_SUPPLIER_CAPABILITY_CHANGED']
+const MARKET_VIABLE_EVENTS = ['MARKET_BECAME_VIABLE']
 
 function distinctSubjectIds(events: readonly Pick<DomainEventRow, 'event_type' | 'subject_id'>[], eventTypes: readonly string[]): readonly string[] {
   return [...new Set(events.filter((e) => eventTypes.includes(e.event_type) && e.subject_id).map((e) => e.subject_id as string))]
@@ -103,6 +124,17 @@ export async function getMonitoringStatus(): Promise<MonitoringStatus> {
   const schedulerConfigured = isSupabaseConfigured() && automationCronSecret() !== undefined
   const monitorKeys = Object.keys(MONITORS)
 
+  // Real for both demo and live: reads each market's actual connector
+  // status (or `planned` when none exists) the same way `/marketplaces`
+  // and `/automation`'s production-readiness card already do — never a
+  // hardcoded LIVE/DEMO/PLANNED label.
+  const marketReadiness = await Promise.all(
+    MARKET_CATALOG.map(async (market) => {
+      const snapshot = await resolveMarketStatus(market)
+      return { marketKey: market.marketKey, label: market.label, countryLabel: market.countryLabel, status: snapshot.status }
+    }),
+  )
+
   if (session.isDemo) {
     return {
       isDemo: true,
@@ -112,6 +144,8 @@ export async function getMonitoringStatus(): Promise<MonitoringStatus> {
       supplierIntelligence: EMPTY_SUPPLIER_INTELLIGENCE,
       productIntelligence: EMPTY_PRODUCT_INTELLIGENCE,
       marketplaceIntelligence: EMPTY_MARKETPLACE_INTELLIGENCE,
+      expansionIntelligence: EMPTY_EXPANSION_INTELLIGENCE,
+      marketReadiness,
       recentEvents: [],
       demoScenarios: await demoMonitoringScenarios(),
     }
@@ -178,6 +212,15 @@ export async function getMonitoringStatus(): Promise<MonitoringStatus> {
       listingsOutOfSync: distinctSubjectIds(events, MARKETPLACE_OUT_OF_SYNC_EVENTS),
       failedExternalActions: distinctSubjectIds(events, MARKETPLACE_FAILED_ACTION_EVENTS),
     },
+    expansionIntelligence: {
+      fxRatesStale: distinctSubjectIds(events, FX_STALE_EVENTS),
+      fxSignificantMovements: distinctSubjectIds(events, FX_MOVEMENT_EVENTS),
+      marketsWithProfitabilityDeterioration: distinctSubjectIds(events, MARKET_PROFITABILITY_EVENTS),
+      marketsRequiringComplianceRecheck: distinctSubjectIds(events, MARKET_COMPLIANCE_EVENTS),
+      marketsWithSupplierCapabilityChanges: distinctSubjectIds(events, MARKET_SUPPLIER_EVENTS),
+      marketsBecameViable: distinctSubjectIds(events, MARKET_VIABLE_EVENTS),
+    },
+    marketReadiness,
     recentEvents: recentEvents ?? [],
     demoScenarios: [],
   }

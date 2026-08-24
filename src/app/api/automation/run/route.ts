@@ -5,6 +5,9 @@ import { runWorkerBatch } from '@/lib/automation/worker'
 import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
 import { getSupabaseFactsLoader } from '@/lib/automation/facts'
 import { getMarketplaceConnector } from '@/lib/marketplaces/connectors/registry'
+import { getSupabaseFxStore } from '@/lib/fx/fxStore'
+import { getSupabaseSupplierMarketFactsLoader } from '@/lib/markets/supplierMarketFactsStore'
+import { getSupabaseMarketRepository } from '@/lib/markets/supabaseMarketRepository'
 
 /**
  * The scheduled-automation entry point (brief §5, §30).
@@ -39,7 +42,8 @@ export async function POST(request: Request) {
     })
   }
 
-  const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID())
+  const marketDeps = { supplierMarketFacts: getSupabaseSupplierMarketFactsLoader(), fxStore: getSupabaseFxStore(), marketRepository: getSupabaseMarketRepository() }
+  const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), 10, marketDeps)
   return Response.json({ status: 'ok', checkedAt: new Date().toISOString(), ...result })
 }
 

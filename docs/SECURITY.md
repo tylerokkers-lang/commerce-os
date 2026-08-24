@@ -29,7 +29,17 @@ pattern exactly — checked in `0020_rls_automation_engine.sql`. Milestone
 8's `domain_events`, `monitor_observations` and `monitor_runs` follow the
 identical pattern — checked in `0023_rls_monitoring_events.sql` — for the
 same reason: a monitoring history a viewer could edit or delete would not
-be a history.
+be a history. Milestone 9's four tables are all read-only through RLS as
+well — checked in `0025_rls_global_markets.sql` — org members read,
+service role writes, with no exception: `exchange_rates` and
+`market_expansion_assessments` are append-only history (the same
+`forbid_mutation` trigger as `audit_logs`); `supplier_market_capabilities`
+and `market_compliance_assessments` are mutable current-state tables (a
+`touch_updated_at` trigger, matching `supplier_products`/
+`compliance_records`) but still writable only by the service role — a
+member cannot forge a compliance pass or a supplier capability by writing
+to the table directly, only cause one to be recorded through the real
+assessment/monitoring code.
 
 **Not verified**: real RLS *enforcement* under an authenticated Supabase
 session with a real JWT. `npm run db:verify` checks that policies exist and
@@ -156,6 +166,37 @@ asserts every monitor's real `enqueueJob` calls agree with this table, and
 separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
+
+## What Milestone 9 changed here
+
+- Extended the read-only-history RLS pattern to four new tables
+  (`exchange_rates`, `supplier_market_capabilities`,
+  `market_compliance_assessments`, `market_expansion_assessments`) —
+  checked in `0025_rls_global_markets.sql`.
+- Extended `worker.ts`'s closed `HANDLERS` set with two more entries
+  (`market_recheck`, `fx_recheck`) rather than a second dispatch mechanism
+  — the "a job payload only ever supplies data to a fixed handler" rule
+  above holds unchanged; neither new handler evaluates anything from a
+  payload as code.
+- `handleMarketRecheck` never executes an expansion decision itself — a
+  `ready` recommendation only ever creates a `request_approval` action
+  through the existing approval workflow (`proposeApproval.ts`, gated by
+  `canApprove`/`owner` exactly as every other approval in this codebase
+  is); every other outcome (`promising`/`requires_review`/`blocked`/
+  `insufficient_facts`) only ever notifies, never acts. This is the same
+  "monitoring/automation observes and proposes, a human or existing policy
+  decides" boundary Milestone 8 established, extended to international
+  expansion specifically because the brief required that a high opportunity
+  score can never override a compliance failure or auto-launch a product in
+  a new country.
+- `fxMonitor`/`marketMonitor` follow the identical "no monitor imports a
+  write method" rule as every other monitor — both call only `FxRateStore`/
+  `SupplierMarketFactsLoader` read methods and the existing profitability
+  engine, never a marketplace connector or an execution pipeline.
+- No new credential types were introduced. `demoRates.ts` is an in-memory
+  seed with no network call at all — there is no live FX provider
+  credential to protect yet, and none is referenced anywhere in the new
+  code.
 
 ## What Milestone 8 changed here
 

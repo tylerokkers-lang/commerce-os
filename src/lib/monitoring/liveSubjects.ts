@@ -10,6 +10,8 @@ import type { MarketplaceListingSubject } from './monitors/marketplaceMonitor'
 import type { ComplianceMonitorSubject } from './monitors/complianceMonitor'
 import type { ProfitabilityMonitorSubject } from './monitors/profitabilityMonitor'
 import type { PerformanceMonitorSubject, PerformanceWindow } from './monitors/performanceMonitor'
+import type { FxPairSubject } from './monitors/fxMonitor'
+import { MARKET_CATALOG } from '@/lib/markets/catalog'
 
 /**
  * Live production subject discovery (Milestone 8.5 §1–2), completing the
@@ -277,6 +279,24 @@ async function discoverSalesPerformance(orgId: string, windowHours: number = SAL
   return { subjects, errors }
 }
 
+/**
+ * FX pairs worth watching (Milestone 9 §10): the org's own reporting
+ * currency (`business_settings.base_currency`) against every distinct
+ * currency the market catalog actually uses — real, bounded, and derived
+ * from data this codebase already has, rather than a hardcoded currency
+ * list or an "org markets" table this milestone deliberately did not
+ * build (see `catalog.ts`'s module comment).
+ */
+async function discoverFxPairs(orgId: string): Promise<SubjectDiscoveryResult<FxPairSubject>> {
+  const supabase = createServiceSupabase()
+  const { data, error } = await supabase.from('organisations').select('base_currency').eq('id', orgId).maybeSingle()
+  if (error) return { subjects: [], errors: [`organisations: ${error.message}`] }
+
+  const base = (data?.base_currency ?? 'GBP') as FxPairSubject['base']
+  const quoteCurrencies = new Set(MARKET_CATALOG.map((m) => m.currency).filter((c) => c !== base))
+  return { subjects: [...quoteCurrencies].map((quote) => ({ base, quote })), errors: [] }
+}
+
 export const getLiveSubjects: SubjectProvider = async (orgId, monitorKey) => {
   try {
     switch (monitorKey) {
@@ -286,6 +306,15 @@ export const getLiveSubjects: SubjectProvider = async (orgId, monitorKey) => {
       case 'compliance_freshness': return await discoverComplianceFreshness(orgId)
       case 'profitability_safety_net': return await discoverProfitabilitySafetyNet(orgId)
       case 'sales_performance': return await discoverSalesPerformance(orgId)
+      case 'fx_rates': return await discoverFxPairs(orgId)
+      // `market_expansion` genuinely has no live discovery yet: a
+      // MarketMonitorSubject needs a full `ComplianceContext` assembled
+      // from live product/supplier/IP-risk facts — the same class of gap
+      // Milestone 7 documented for `product_compliance_recheck`'s own
+      // context assembly, not built here. The monitor, engine and job
+      // handler are all real and fully tested; only "which products to
+      // evaluate against which markets today" is undiscovered live.
+      case 'market_expansion': return { subjects: [], errors: [] }
       default: return { subjects: [], errors: [] }
     }
   } catch (error) {

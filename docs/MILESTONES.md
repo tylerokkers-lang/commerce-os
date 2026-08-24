@@ -561,7 +561,7 @@ placeholder text.
   supplier/marketplace writer exists yet to perform the actual external
   write (switching a supplier, publishing a listing, issuing a refund),
   consistent with the same limitation Milestones 4 and 5 already documented.
-- No CEO Dashboard exists yet (Milestone 10) for the brief's §20 to extend —
+- No CEO Dashboard exists yet (Milestone 11) for the brief's §20 to extend —
   `automation/repository.ts`'s `getAutomationStatus` is written so that
   dashboard can read from it directly once built, rather than growing a
   second, possibly-diverging summary.
@@ -1041,7 +1041,7 @@ notification.
   `tests/monitoring-registry.test.ts`'s consistency check, fixed to match.
 - **Business intelligence / live operations** (`monitoring/repository.ts`,
   `/automation` page): there is still no dedicated CEO Dashboard (that
-  remains Milestone 10) — this extends the same `/automation` page
+  remains Milestone 11) — this extends the same `/automation` page
   Milestone 7's production-readiness view already established. Shows
   monitors registered/run-in-24h/failed-in-24h/never-run, open
   critical/warning events, unavailable-supplier/reconciliation/compliance
@@ -1124,8 +1124,9 @@ completion pass below except where noted**:
   listing's actual channel key rather than assuming Shopify.
 - ~~No live sales/order aggregation query feeds `performanceMonitor`~~ —
   **resolved**: `orders/salesAggregation.ts` aggregates real
-  `orders`/`order_items`/`refunds` rows; Milestone 9 should extend this
-  module rather than build a second one.
+  `orders`/`order_items`/`refunds` rows; Milestone 10 (analytics and
+  business intelligence) should extend this module rather than build a
+  second one.
 - ~~Supplier delivery/dispatch/cancellation-rate/connector-health
   monitoring... is not built~~ — **resolved** for dispatch, delivery,
   cancellation rate, fulfilment reliability and feed staleness (a new
@@ -1135,7 +1136,7 @@ completion pass below except where noted**:
 - No dedicated CEO Dashboard route — **still not built**; the
   business-intelligence section (now including supplier/product/marketplace
   intelligence drill-downs) extends `/automation` per this milestone's
-  brief; Milestone 10 remains the dedicated dashboard.
+  brief; Milestone 11 remains the dedicated dashboard.
 
 **Verified:** 596 tests (up from 539, +57); 23 migrations (68 tables);
 typecheck, lint and `npm run build` all clean;
@@ -1188,7 +1189,205 @@ total does not yet incorporate the new operational facts (deliberate — see
 event (judged redundant with `PRODUCT_UNDERPERFORMING` plus the existing
 surge/decline events).
 
-## Milestone 9 — Analytics and business intelligence
+## Milestone 9 — Global market intelligence & international expansion ✅ complete
+
+Every milestone through 8.5 answered "is this product right for the UK,
+sold on Shopify or Amazon UK?" This milestone asks the same questions
+across countries, currencies and marketplaces, without ever pretending a
+compliance pass, a profitability number, or an exchange rate is known when
+it isn't. Six non-negotiable principles carried through the whole build:
+no universal "product is compliant" boolean (every result is scoped to
+product + marketplace + country + assessment version + time); no silent
+cross-currency arithmetic; exchange rates are versioned facts with
+provenance and freshness, never invented; one profitability engine, reused
+via an explicit FX-normalisation step, never duplicated; compliance is
+assessed before automation ever considers acting, and unknown compliance
+never silently becomes compliant; country rulesets are versioned and
+attributable, never a hardcoded global legal database.
+
+- **`src/lib/fx/`**: `types.ts` (`ExchangeRateFact`, `fresh`/`stale`/
+  `unknown`/`unavailable` freshness states, per-use-case staleness windows —
+  6h for automation, 24h for product evaluation and order fulfilment, 7
+  days for strategic expansion), `convert.ts` (`convertMoney` returns a
+  `Result`, rejects same-currency no-ops and mismatched-pair rates as
+  explicit errors), `inMemoryFxStore.ts` / `fxStore.ts` (the interface
+  satisfied twice, `server-only` on the Supabase side), `demoRates.ts`.
+- **`src/lib/markets/`**: `catalog.ts` (`MARKET_CATALOG`, a closed,
+  pure-TypeScript registry of 9 country/marketplace combinations — 2 backed
+  by the real Shopify/Amazon UK connectors, 7 explicitly `connectorKey:
+  null` and reported as `planned`, never claimed live); `resolveMarketStatus`
+  derives each market's live `LIVE`/`DEMO`/`PLANNED`/`NOT_CONFIGURED` state
+  at read time from the real connector registry (`deriveMarketplaceStatus`,
+  Milestone 4), so it can't drift once credentials are configured;
+  `countryCompliance.ts` (`assessMarketCompliance` delegates to the real
+  `assessCompliance` engine for GB and returns an honest `not_assessed` for
+  every other country — no invented ruleset); `marketCostProfiles.ts`
+  (seed fee/fulfilment/tax assumptions per market, each documented as a
+  seed, not a live lookup); `marketProfitability.ts`
+  (`resolveMarketProjectionInput` does FX normalisation *before*
+  `projectMarketProfitability` calls the one existing profitability engine
+  — this is what lets a real FX movement flip a market's native pass/fail,
+  not just a side "comparison" figure); `expansion.ts`
+  (`evaluateMarketExpansion`, a deterministic rule engine: fatal checks
+  — compliance fail, supplier cannot ship, profitability fails outright —
+  are checked and can block *before* the transparent, renormalised
+  0–100 score is ever consulted, so a high score can never override a
+  compliance failure; outcomes are `ready`/`promising`/`requires_review`/
+  `blocked`/`insufficient_facts`); `supplierMarketFacts.ts` /
+  `supplierMarketFactsStore.ts` (can-ship, shipping cost/currency, delivery
+  window, cancellation rate, per supplier per destination country);
+  `repository.ts` / `inMemoryMarketRepository.ts` /
+  `supabaseMarketRepository.ts` (append-only `market_expansion_assessments`
+  persistence, each row storing the exact job payload that produced it so a
+  chained FX recheck can replay it verbatim).
+- **New monitors**: `fxMonitor.ts` (movement/staleness/unavailability,
+  registered as `fx_rates`) and `marketMonitor.ts` (profitability
+  deterioration/recovery, compliance recheck required, supplier capability
+  changed, market became viable, registered as `market_expansion`) — both
+  added to `registry.ts`'s `MONITORS` map and `EVENT_TO_JOB_MAPPING`
+  (`fx_recheck`, `market_recheck`).
+- **New job handlers**: `automation/handlers/marketHandlers.ts`
+  (`handleMarketRecheck` re-runs `evaluateMarketExpansion` against current
+  facts and persists the assessment — only a `ready` outcome creates a
+  `request_approval` action; nothing is ever auto-executed;
+  `handleFxRecheck` finds every stored assessment that used the affected
+  currency pair and re-enqueues a `market_recheck` for each, from its
+  stored payload). `JobHandler`'s type gained an optional 5th
+  `marketDeps` parameter — all 14 existing handlers stay assignable
+  unchanged because TypeScript's structural typing doesn't require it.
+  Monitoring → event → job → worker → existing automation policy/approval
+  path is reused end to end; no parallel automation system was built.
+- **UI**: `/automation`'s business-intelligence section gained a "Global
+  expansion intelligence" card (FX staleness/movements, markets with
+  profitability deterioration, compliance rechecks required, supplier
+  capability changes, markets that became viable) and a "Market readiness"
+  card (every `MARKET_CATALOG` entry's real, resolved status). The product
+  detail page (`/opportunities/[id]`) gained a "Global expansion matrix"
+  section rendering real `evaluateMarketExpansion` output per market
+  (Market / Compliance / Profitability / Supplier / Marketplace / Score /
+  Status) — no new route created, per the brief's explicit instruction not
+  to build one if the existing product detail page already fits.
+- **Schema**: `0024_global_markets.sql` — `exchange_rates` (append-only),
+  `supplier_market_capabilities` (mutable, current-state), 
+  `market_compliance_assessments` (mutable, current-state),
+  `market_expansion_assessments` (append-only, `source_payload jsonb`
+  column storing the triggering job payload, plus a check constraint
+  keeping comparison-currency and comparison-profit columns paired).
+  `0025_rls_global_markets.sql` — all four read-only through RLS to org
+  members, service-role-only writes, matching every prior milestone's
+  pattern. `CurrencyCode` extended from `GBP`/`EUR`/`USD` to also include
+  `CAD`/`AUD`.
+- **Demo data**: `demo/marketExpansion.ts` builds all 5 scenarios the brief
+  required, each computed through the real engines rather than
+  hardcoded — UK ready / Germany insufficient-facts / US blocked, each for
+  a different genuine reason; a real FX movement flipping a market's
+  compliant-and-profitable assessment to a loss through the actual
+  FX→monitor→event→job→profitability-recheck chain (not faked); one market
+  passing and another failing from real market-specific cost assumptions;
+  excellent profitability blocked by unknown compliance; passing
+  compliance and profitability blocked by a supplier that cannot ship to
+  the destination country.
+- **Real bugs found by deliberate probing, not by inspection** (the same
+  pattern every milestone since Milestone 6 has followed):
+  1. **FX rate timestamp-tie race**: `inMemoryFxStore.getLatestRate`'s
+     `reduce` used a strict `>` comparison, which on an exact-timestamp tie
+     silently kept the *first*-inserted rate rather than the most recently
+     recorded one. The identical bug existed in the production
+     `fxStore.ts` Supabase query. Fixed in both by adding a stable
+     insertion-order tiebreaker (`.getTime() >=` in memory, a secondary
+     `.order('id', {ascending:false})` in the live query) — the same
+     failure class the M8.5 dedupe-key bug belonged to, caught before it
+     shipped this time because the brief explicitly asked for FX
+     oscillation probing.
+  2. **React duplicate-key warning** on `/opportunities/[id]`, found via a
+     live browser console check: the currency-movement demo scenario
+     renders the same market twice (before/after), and the table key was
+     market-key-only. Fixed with an index-qualified key plus an explicit
+     "(before)"/"(after)" label.
+  3. Concurrent-evaluation and partial-discovery-failure bug hunts (10-way
+     `Promise.all` races against `fxMonitor` and `marketMonitor`; one
+     monitor's subject discovery failing outright in the same sweep as
+     another's success) found no further defects — both are covered by
+     regression tests (`tests/markets-bug-hunting.test.ts`) precisely so a
+     future change that reintroduces either failure mode is caught
+     immediately rather than found again by hand.
+
+**IMPLEMENTED AND VERIFIED:**
+
+- Currency-mismatch rejection, FX-conversion provenance, and staleness
+  detection (`tests/fx-convert.test.ts`).
+- The deterministic expansion engine's full outcome space and its
+  fatal-check-before-score ordering (`tests/markets-expansion.test.ts`).
+- Country-scoped compliance divergence — a GB pass never implies anything
+  about any other country, and every other country returns an honest
+  `not_assessed` (also `tests/markets-expansion.test.ts`).
+- The full monitoring→event→job→worker→FX-normalisation→profitability→
+  expansion-assessment chain through real entry points only
+  (`runDueMonitors` + `runWorkerBatch`, never business functions called
+  directly) — `tests/markets-integration-e2e.test.ts`, with hand-verified
+  numbers proving a real FX rate movement flips a market's native
+  profitability pass/fail, not just a comparison figure.
+- Concurrency safety (10-way races, both new monitors) and partial
+  subject-discovery-failure isolation — `tests/markets-bug-hunting.test.ts`.
+- Job-handler behaviour: `handleMarketRecheck` only ever requests approval
+  on a `ready` outcome and never auto-executes; `handleFxRecheck` correctly
+  re-enqueues every affected assessment from its stored payload —
+  `tests/market-handlers.test.ts`.
+- All 5 required demo scenarios, computed through the real engines —
+  `tests/demo-market-expansion.test.ts`.
+- All 5 in-scope routes (`/automation`, `/opportunities/[id]`,
+  `/marketplaces`, `/orders`, `/approvals`) confirmed live in the browser
+  with no console errors after the duplicate-key fix.
+
+**IMPLEMENTED BUT NOT LIVE-VERIFIED:**
+
+- Every Supabase-backed path (`fxStore.ts`,
+  `supplierMarketFactsStore.ts`, `supabaseMarketRepository.ts`, the live
+  branch of `discoverFxPairs`) — proven against the identical `FxRateStore`
+  / `SupplierMarketFactsLoader` / `MarketExpansionRepository` interfaces
+  production code uses, never against a real deployed Postgres instance,
+  because none exists in this environment. Same standing caveat as every
+  live Supabase path since Milestone 1.
+
+**REQUIRES PRODUCTION INFRASTRUCTURE:**
+
+- A real FX rate provider/connector — `demoRates.ts` is an explicit demo
+  seed, not a live feed; the `FxRateStore` interface is provider-agnostic
+  by design so a real connector can be added without touching any
+  consuming code.
+- Real supplier capability data per destination country — the current
+  facts are seed data via `createInMemorySupplierMarketFactsLoader`'s seed
+  records and the equivalent Supabase table, not a live supplier-quoted
+  feed.
+- Real marketplace connectors for the 7 `planned` markets in
+  `MARKET_CATALOG` — building them was explicitly out of scope for this
+  milestone; `resolveMarketStatus` will report `LIVE` automatically the
+  moment a real connector is registered, no market-model change needed.
+
+**NOT IMPLEMENTED (deliberately, not a hidden gap):**
+
+- Country-specific legal/tax rulesets beyond GB — `countryCompliance.ts`
+  returns an explicit, reasoned `not_assessed` for every other country
+  rather than guessing; adding a second country's ruleset is future work
+  requiring genuine legal research, not an architecture change.
+- `market_expansion` subject discovery in `liveSubjects.ts` (live branch)
+  still returns `{subjects: [], errors: []}` with a documented-gap
+  comment — assembling a live `ComplianceContext` per product per market
+  from real facts was judged out of scope for this pass; the demo branch
+  and the flagship integration test both exercise the full chain via
+  directly-constructed subjects instead.
+- A market opportunity leaderboard/ranking UI beyond the per-product
+  expansion matrix (the brief's Part 8 was satisfied via the existing
+  product detail page, per its own explicit instruction not to build an
+  unnecessary new route).
+
+**Verified:** 687 tests (up from 626, +61); 25 migrations (72 tables, up
+from 68); typecheck, lint and `npm run build` all clean; `/automation`,
+`/opportunities/[id]`, `/marketplaces`, `/orders`, `/approvals` confirmed
+live with no console errors; `informax-site` confirmed untouched
+throughout.
+
+## Milestone 10 — Analytics and business intelligence
 
 Revenue, orders, units, gross profit, contribution, contribution margin, ad
 spend, CAC, ROAS, MER, refunds, returns, supplier/delivery/marketplace/product
@@ -1198,7 +1397,7 @@ interchangeably. Standard comparison periods (today, yesterday, this/last
 week, month to date, previous month, custom range), and every comparison
 states its comparison period explicitly.
 
-## Milestone 10 — CEO dashboard
+## Milestone 11 — CEO dashboard
 
 The dashboard the owner actually reads every day: an AI CEO briefing (every
 claim traceable per the fact-first principle), a business pulse, an
@@ -1212,7 +1411,7 @@ workers, last sync, failed jobs), and an emergency stop that can pause
 automation categories while preserving critical order processing, itself
 logged like any other consequential action.
 
-## Milestone 11 — Commerce Intelligence chat
+## Milestone 12 — Commerce Intelligence chat
 
 An AI chat interface answering real questions about the actual business
 through a controlled tool/query layer with explicit per-tool permissions —
@@ -1221,7 +1420,7 @@ categories (facts, calculations, rules, analysis, predictions, uncertainty)
 and the system can say "I don't have enough current data to answer that
 reliably." Credentials never enter conversational memory.
 
-## Milestone 12 — AI actions
+## Milestone 13 — AI actions
 
 Four interaction modes — ask, analyse, recommend, execute — where "execute"
 still passes through the same automation-level and approval machinery as any
@@ -1229,7 +1428,7 @@ other action. The AI is never the source of authority: rules, permissions,
 validation and the action layer built in Milestones 5–6 remain authoritative
 regardless of what the AI recommends.
 
-## Milestone 13 — Advertising intelligence
+## Milestone 14 — Advertising intelligence
 
 Advertising platform integrations (Amazon Ads, Meta, Google, TikTok as
 applicable) evaluated on contribution after advertising, never on ROAS alone —
@@ -1239,13 +1438,31 @@ daily and per-product limits, maximum percentage changes, approval thresholds,
 cooldowns, rollback logic and audit logging, with no path to unlimited
 automated spend.
 
-## Milestone 14 — International expansion
+## Milestone 15 — International expansion
 
 Country/marketplace/currency/tax/shipping/documentation modelled explicitly,
 with product-marketplace eligibility, supplier delivery capability, delivery
 acceptability, profitability, documentation and tax configuration each
 assessed independently per destination. Unknown resolves to review, never to
 approval, exactly as in Milestone 2's compliance model.
+
+**Note:** Milestone 9 already delivered this milestone's foundational
+architecture — the country/currency/marketplace market model
+(`src/lib/markets/catalog.ts`), FX intelligence with provenance and
+freshness (`src/lib/fx/`), country-aware compliance delegation
+(`countryCompliance.ts`), market-specific profitability via the one
+existing engine, and a deterministic expansion-recommendation engine
+(`expansion.ts`), all wired into monitoring and automation end to end. What
+remains scoped to this milestone is genuinely new country rulesets beyond
+GB (real legal/tax research, not an architecture change), real marketplace
+connectors for the `planned` entries in `MARKET_CATALOG`, a real FX
+provider/connector to replace the demo rate seed, real supplier
+destination-capability data to replace the seed facts, and live subject
+discovery for the `market_expansion` monitor (currently a documented gap
+in `liveSubjects.ts`). Read `docs/MILESTONES.md`'s Milestone 9 section and
+`HANDOVER.md`'s corresponding section before starting any of this — the
+model is designed to extend without a schema redesign; it should not be
+rebuilt.
 
 ## Cross-cutting, ongoing
 

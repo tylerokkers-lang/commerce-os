@@ -103,7 +103,7 @@ None of these block development; they block going live.
 | Shopify Admin API credentials | Milestone 3 |
 | Amazon SP-API app credentials, seller account, and separate AWS IAM credentials (`AMAZON_SP_AWS_ACCESS_KEY_ID`, `AMAZON_SP_AWS_SECRET_ACCESS_KEY`) for SigV4 request signing | Milestone 4 |
 | Resend API key and a verified sending domain | Milestone 7 |
-| Xero credentials | Milestone 9 |
+| Xero credentials | Milestone 10 |
 | Confirmation of the financial approval limits | Defaults are in `src/app/(dashboard)/settings/page.tsx` |
 
 Current defaults, all changeable in business settings: minimum gross margin 25%,
@@ -724,7 +724,7 @@ This section originally pointed at "Milestone 8 (analytics and business
 intelligence)" as the next step. The roadmap was renumbered again when a
 different Milestone 8 — continuous intelligence, monitoring & event
 generation — was inserted ahead of it: what this section called Milestone 8
-is now Milestone 9, and CEO dashboard is now Milestone 10. See
+is now Milestone 10, and CEO dashboard is now Milestone 11. See
 `docs/MILESTONES.md` for the current numbering and §21 below for what was
 actually built as Milestone 8.
 
@@ -758,7 +758,7 @@ things you need to know before touching this code.
 - **Business intelligence section on `/automation`**
   (`monitoring/repository.ts`): monitor health, open critical/warning
   events, and a recent-events feed — extends the existing page rather than
-  building a second CEO Dashboard (that remains Milestone 10). Demo mode
+  building a second CEO Dashboard (that remains Milestone 11). Demo mode
   runs the 5 required scenarios live (`demo/monitoring.ts`).
 - **Three real bugs found by this milestone's own tests, not by
   inspection** — the pattern repeats every milestone, and it is the reason
@@ -921,13 +921,93 @@ against real (non-mocked) in-memory stores.
   model was not changed in a way that affects its future readiness either
   way.
 
-## 23. Next step
+## 23. Milestone 9 (global market intelligence & international expansion) — what was built
 
-Milestone 9 (analytics and business intelligence), per `docs/MILESTONES.md`.
+Every milestone through 8.5 assumed the UK, Amazon UK and Shopify. This
+milestone makes the architecture genuinely capable of evaluating a product
+in a different country, currency and marketplace without ever pretending a
+fact it doesn't have. Full detail in `docs/MILESTONES.md`'s Milestone 9
+section — this is the short version plus what you need to know before
+touching this code.
+
+- **`src/lib/fx/`**: exchange rates as versioned facts with provenance
+  (`fresh`/`stale`/`unknown`/`unavailable`, per-use-case staleness
+  windows), `convertMoney` returning a `Result` that rejects mismatched
+  currency pairs, an in-memory store and a `server-only` Supabase store
+  satisfying the same `FxRateStore` interface, and `demoRates.ts` as an
+  explicit demo seed (not a live feed — no FX provider exists yet).
+- **`src/lib/markets/`**: `MARKET_CATALOG`, a closed, pure-TypeScript
+  registry of 9 country/marketplace combinations (2 backed by real
+  connectors, 7 explicitly `planned` — `resolveMarketStatus` derives each
+  one's real status from the connector registry at read time, so it can't
+  drift once credentials are configured); `assessMarketCompliance`
+  delegates to the real compliance engine for GB and returns an honest
+  `not_assessed` everywhere else; `resolveMarketProjectionInput` does FX
+  normalisation *before* the one existing profitability engine runs, which
+  is what lets a real FX movement flip a market's native pass/fail rather
+  than just a side comparison figure; `evaluateMarketExpansion` is a
+  deterministic engine where fatal checks (compliance fail, supplier can't
+  ship, profitability fails outright) are checked and can block *before*
+  the transparent score is ever consulted — a high score can never
+  override a compliance failure.
+  `channel_key` (the existing `shopify`/`amazon_uk` enum) was left
+  untouched; `market_key` (plain text, e.g. `amazon_de`) is a new,
+  orthogonal, code-only catalog concept that links back to a real channel
+  only when one exists.
+- **New monitors and job handlers**: `fxMonitor`/`marketMonitor` (both
+  registered, both feeding `market_recheck`/`fx_recheck` jobs through the
+  existing `EVENT_TO_JOB_MAPPING`), `handleMarketRecheck`/`handleFxRecheck`
+  in `automation/handlers/marketHandlers.ts` — only a `ready` recommendation
+  ever creates a `request_approval` action; nothing is auto-executed. No
+  parallel automation system was built; the existing monitoring→event→
+  job→worker→policy→approval path was reused end to end.
+- **UI**: `/automation` gained a "Global expansion intelligence" card and a
+  "Market readiness" card; `/opportunities/[id]` gained a "Global expansion
+  matrix" table (real `evaluateMarketExpansion` output) — no new route,
+  per the brief's own instruction not to build one where the product detail
+  page already fits.
+- **Schema**: `0024_global_markets.sql`/`0025_rls_global_markets.sql` — 4
+  new tables (`exchange_rates`, `supplier_market_capabilities`,
+  `market_compliance_assessments`, `market_expansion_assessments`), all
+  read-only through RLS, service-role-only writes. `CurrencyCode` extended
+  with `CAD`/`AUD`.
+- **Two real bugs found by deliberate probing**: an FX-rate
+  timestamp-tie race (`inMemoryFxStore.getLatestRate`'s `reduce` used
+  strict `>` and silently kept the earlier-inserted rate on an exact tie —
+  fixed in memory and in the identical production Supabase query with a
+  secondary `id` sort); a React duplicate-key warning on
+  `/opportunities/[id]` found via a live browser console check (the
+  currency-movement demo scenario renders the same market twice — fixed
+  with an index-qualified key). 10-way concurrent-evaluation and
+  partial-discovery-failure probes (matching the brief's explicit request)
+  found no further defects and are now regression tests.
+
+**Verified:** 687 tests (up from 626); 25 migrations (72 tables, up from
+68); typecheck, lint (one stray unused-import warning found and fixed) and
+`npm run build` all clean; `db:verify` re-run clean; `/automation`,
+`/opportunities/[id]`, `/marketplaces`, `/orders`, `/approvals` confirmed
+live in the browser with no console errors; `informax-site` confirmed
+untouched throughout (git status checked before and after).
+
+**Still not built, documented not hidden**: country rulesets beyond GB
+(genuine legal research, not an architecture change); real marketplace
+connectors for the 7 `planned` markets; a real FX provider to replace the
+demo seed; real supplier destination-capability data to replace the seed
+facts; live subject discovery for the `market_expansion` monitor in
+`liveSubjects.ts` (still a documented gap — the demo branch and the
+flagship integration test exercise the full chain via directly-constructed
+subjects instead).
+
+## 24. Next step
+
+Milestone 10 (analytics and business intelligence), per `docs/MILESTONES.md`.
 Its live sales/order aggregation is now substantially built
 (`orders/salesAggregation.ts`) — extend it rather than building a second
-one. Read `docs/PRINCIPLES.md` first. Do not start Milestone 10 (CEO
-dashboard) until Milestone 9 is tested and working — when it is built, it
+one. Read `docs/PRINCIPLES.md` first. Do not start Milestone 11 (CEO
+dashboard) until Milestone 10 is tested and working — when it is built, it
 should read from `automation/repository.ts`'s `getAutomationStatus` and
 `monitoring/repository.ts`'s `getMonitoringStatus` directly, not
-re-summarise either.
+re-summarise either. When international expansion is eventually revisited
+as Milestone 15, read Milestone 9's section first — the market model, FX
+intelligence, country-aware compliance delegation and expansion engine it
+built are designed to extend without a schema redesign, not be rebuilt.

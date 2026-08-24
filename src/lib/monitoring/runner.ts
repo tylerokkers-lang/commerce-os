@@ -5,6 +5,8 @@ import type { AutomationStore } from '@/lib/automation/store'
 import type { FactsLoader } from '@/lib/automation/factsTypes'
 import type { AutomationSettings } from '@/lib/automation/settingsTypes'
 import type { ConnectorLookup } from '@/lib/automation/worker'
+import type { FxRateStore } from '@/lib/fx/types'
+import type { SupplierMarketFactsLoader } from '@/lib/markets/supplierMarketFacts'
 
 /**
  * The monitoring scheduler runner (brief's "scheduler integration" and
@@ -61,6 +63,9 @@ export interface RunMonitorsInput {
   now?: Date
   /** Restrict to specific monitor keys — used by tests and by a manual "run this one monitor now" trigger. Defaults to every registered monitor. */
   monitorKeys?: readonly string[]
+  /** Milestone 9: threaded into `MonitorContext` for `fxMonitor`/`marketMonitor` only — every other monitor ignores them, the same optionality `MonitorContext` itself declares. */
+  fxStore?: FxRateStore
+  supplierMarketFacts?: SupplierMarketFactsLoader
 }
 
 export interface MonitorRunSummary {
@@ -93,7 +98,7 @@ export async function runDueMonitors(input: RunMonitorsInput): Promise<readonly 
     }
 
     const { id: runId } = await input.events.startMonitorRun(input.orgId, key)
-    const ctx: MonitorContext = { orgId: input.orgId, store: input.store, events: input.events, facts: input.facts, connectors: input.connectors, settings: input.settings, now }
+    const ctx: MonitorContext = { orgId: input.orgId, store: input.store, events: input.events, facts: input.facts, connectors: input.connectors, settings: input.settings, now, fxStore: input.fxStore, supplierMarketFacts: input.supplierMarketFacts }
 
     try {
       // Subject enumeration is inside the same try as the run itself: a

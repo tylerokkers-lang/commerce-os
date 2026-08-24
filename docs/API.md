@@ -36,7 +36,9 @@ function, or a `curl` line in a crontab.
 Each call claims up to 10 due jobs (`automation_jobs`, across every
 organisation) and runs them through the registered job-handler for their
 `job_type` (`src/lib/automation/worker.ts`). See `docs/MILESTONES.md`'s
-Milestone 7 section for the full list of 14 handler types.
+Milestone 7 section for the full list of 14 handler types — Milestone 9
+added two more, `market_recheck` and `fx_recheck` (see below), for a total
+of 16.
 
 **Authentication**: a shared secret, not a user session — required once
 Supabase is configured.
@@ -109,7 +111,7 @@ never a replacement for it. Same shape, same authentication, and
 deliberately the same shared secret (`AUTOMATION_CRON_SECRET`), reused
 rather than adding a second one, via `src/lib/core/schedulerAuth.ts`.
 
-Each call iterates every organisation and runs whichever of the 5
+Each call iterates every organisation and runs whichever of the 8
 registered monitors (`src/lib/monitoring/registry.ts`) are due per that
 org's own configured schedule (`config_values`), via
 `runDueMonitors` (`src/lib/monitoring/runner.ts`). A due monitor run loads
@@ -177,11 +179,19 @@ convention.
 
 ### Production infrastructure this route needs
 
-Documented in full in `HANDOVER.md` §22 (Milestone 8.5). All 6 registered
-monitors — supplier stock/price, supplier operations, marketplace listings,
-compliance, profitability, and sales performance (now backed by real
-`orders`/`order_items`/`refunds` aggregation) — have real, paginated,
-org-scoped subject discovery. The standard "no external scheduler calls
-this yet" caveat still applies, and discovery itself enumerates every
-eligible row per page rather than a genuine SQL "is this one actually due"
-predicate — a real optimisation for future scale, not built yet.
+Documented in full in `HANDOVER.md` §22 (Milestone 8.5) and §23 (Milestone
+9). All 6 pre-existing monitors — supplier stock/price, supplier
+operations, marketplace listings, compliance, profitability, and sales
+performance (now backed by real `orders`/`order_items`/`refunds`
+aggregation) — have real, paginated, org-scoped subject discovery. The two
+Milestone 9 monitors are split: `fx_rates` has real, live subject discovery
+(`discoverFxPairs`, every distinct currency in `MARKET_CATALOG` paired
+against the org's base currency); `market_expansion` does not yet — its
+live branch returns no subjects, a documented gap, because assembling a
+live `ComplianceContext` per product per market was judged out of scope for
+this pass (the demo branch and the flagship integration test exercise the
+full chain via directly-constructed subjects instead). The standard "no
+external scheduler calls this yet" caveat still applies, and discovery
+itself enumerates every eligible row per page rather than a genuine SQL "is
+this one actually due" predicate — a real optimisation for future scale,
+not built yet.

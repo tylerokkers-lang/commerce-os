@@ -4,6 +4,8 @@ import { marketplaceListingMonitor } from './monitors/marketplaceMonitor'
 import { complianceMonitor } from './monitors/complianceMonitor'
 import { profitabilityMonitor } from './monitors/profitabilityMonitor'
 import { performanceMonitor } from './monitors/performanceMonitor'
+import { fxMonitor } from './monitors/fxMonitor'
+import { marketMonitor } from './monitors/marketMonitor'
 import type { Monitor, MonitorContext, MonitorRunOutcome } from './eventTypes'
 
 /**
@@ -21,6 +23,8 @@ export const MONITORS: Record<string, Monitor<never>> = {
   [complianceMonitor.descriptor.key]: complianceMonitor as Monitor<never>,
   [profitabilityMonitor.descriptor.key]: profitabilityMonitor as Monitor<never>,
   [performanceMonitor.descriptor.key]: performanceMonitor as Monitor<never>,
+  [fxMonitor.descriptor.key]: fxMonitor as Monitor<never>,
+  [marketMonitor.descriptor.key]: marketMonitor as Monitor<never>,
 }
 
 export async function runMonitor(key: string, ctx: MonitorContext, subjects: readonly unknown[]): Promise<MonitorRunOutcome> {
@@ -78,4 +82,14 @@ export const EVENT_TO_JOB_MAPPING: Record<string, string | null> = {
   PRODUCT_REFUND_RATE_INCREASED: null,
   REVENUE_DECLINED: null,
   AD_SPEND_EXCEEDED: null,
+  // Milestone 9 — global market intelligence & international expansion.
+  FX_RATE_UNAVAILABLE: null,
+  FX_RATE_STALE: null,
+  FX_RATE_RECOVERED: null,
+  FX_RATE_SIGNIFICANT_MOVEMENT: 'fx_recheck',
+  MARKET_PROFITABILITY_DETERIORATED: 'market_recheck',
+  MARKET_PROFITABILITY_RECOVERED: null,
+  MARKET_COMPLIANCE_RECHECK_REQUIRED: 'market_recheck',
+  MARKET_SUPPLIER_CAPABILITY_CHANGED: 'market_recheck',
+  MARKET_BECAME_VIABLE: 'market_recheck',
 }

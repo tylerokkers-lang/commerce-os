@@ -1,17 +1,24 @@
 # Database
 
-68 tables across 23 migrations (as of Milestone 8; unchanged by the
-Milestone 8.5 completion pass — it reads existing columns, adding none),
-applied in filename order. Every migration is executed against a real
-Postgres engine by `npm run db:verify`, so nothing in here is untested SQL.
-This file describes the conventions that have held since Milestone 1; see
+72 tables across 25 migrations (as of Milestone 9), applied in filename
+order. Every migration is executed against a real Postgres engine by
+`npm run db:verify`, so nothing in here is untested SQL. This file
+describes the conventions that have held since Milestone 1; see
 `docs/MILESTONES.md` for what each later migration specifically added.
 
 Milestone 8.5's monitoring reads `supplier_products.dispatch_days_min/max`,
 `.cancellation_rate_pct`, `.fulfilment_success_rate_pct` and
 `supplier_connectors.status`/`.last_success_at` — all added by Milestone 3
 (`0013_supplier_connectors.sql`) but unread by any application code until
-now.
+then.
+
+Milestone 9 added 4 new tables (`exchange_rates`,
+`supplier_market_capabilities`, `market_compliance_assessments`,
+`market_expansion_assessments`) — see `0024`/`0025` below. It deliberately
+did **not** add a table for `MARKET_CATALOG` (the country/marketplace
+registry): that is a closed, pure-TypeScript set, not a changing fact, so
+it lives in code (`src/lib/markets/catalog.ts`) rather than the database —
+only genuinely changing facts got migrations.
 
 ## Conventions
 
@@ -72,6 +79,8 @@ past decision can be replayed against the inputs that produced it.
 | `0021_external_action_verification.sql` | `external_ref`/`verification_status`/`reconciliation_status` on `automation_actions` (Milestone 7) |
 | `0022_monitoring_events.sql` | `domain_events`, `monitor_observations`, `monitor_runs` (Milestone 8) |
 | `0023_rls_monitoring_events.sql` | RLS for the three Milestone 8 tables |
+| `0024_global_markets.sql` | `exchange_rates` (append-only), `supplier_market_capabilities`, `market_compliance_assessments`, `market_expansion_assessments` (append-only, `source_payload jsonb`) (Milestone 9) |
+| `0025_rls_global_markets.sql` | RLS for the four Milestone 9 tables |
 
 ## Access model
 
@@ -83,6 +92,13 @@ past decision can be replayed against the inputs that produced it.
   `monitor_observations`, `monitor_runs`) are **read-only through RLS**.
   Writes to them go through the service role in server-side code, so a
   viewer can still cause an audit entry without being able to forge one.
+- All four Milestone 9 tables are read-only through RLS too: `exchange_rates`
+  and `market_expansion_assessments` are append-only history (same
+  `forbid_mutation` trigger pattern as the tables above);
+  `supplier_market_capabilities` and `market_compliance_assessments` are
+  mutable-in-place current-state tables (a `touch_updated_at` trigger,
+  matching `supplier_products`/`compliance_records`), but still writable
+  only by the service role.
 - The service role bypasses RLS entirely, which is exactly why that key must
   never reach the browser.
 

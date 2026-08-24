@@ -1981,6 +1981,53 @@ export interface Database {
           },
         ]
       }
+      exchange_rates: {
+        Row: {
+          id: number
+          org_id: string
+          base_currency: string
+          quote_currency: string
+          rate: number
+          source: string
+          observed_at: string
+          retrieved_at: string
+          is_demo: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          base_currency: string
+          quote_currency: string
+          rate: number
+          source: string
+          observed_at: string
+          retrieved_at?: string
+          is_demo?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          base_currency?: string
+          quote_currency?: string
+          rate?: number
+          source?: string
+          observed_at?: string
+          retrieved_at?: string
+          is_demo?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'exchange_rates_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       expenses: {
         Row: {
           id: string
@@ -2521,6 +2568,162 @@ export interface Database {
             columns: ['org_id']
             isOneToOne: false
             referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      market_compliance_assessments: {
+        Row: {
+          id: string
+          org_id: string
+          product_id: string
+          market_key: string
+          country_code: string
+          verdict: Database['public']['Enums']['compliance_verdict']
+          checks: Json
+          blocking_reasons: string[]
+          missing_facts: string[]
+          ruleset_version: string
+          assessed_at: string
+          is_demo: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          product_id: string
+          market_key: string
+          country_code: string
+          verdict?: Database['public']['Enums']['compliance_verdict']
+          checks?: Json
+          blocking_reasons?: string[]
+          missing_facts?: string[]
+          ruleset_version: string
+          assessed_at?: string
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          product_id?: string
+          market_key?: string
+          country_code?: string
+          verdict?: Database['public']['Enums']['compliance_verdict']
+          checks?: Json
+          blocking_reasons?: string[]
+          missing_facts?: string[]
+          ruleset_version?: string
+          assessed_at?: string
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'market_compliance_assessments_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'market_compliance_assessments_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      market_expansion_assessments: {
+        Row: {
+          id: number
+          org_id: string
+          product_id: string
+          market_key: string
+          country_code: string
+          currency: string
+          recommendation: Database['public']['Enums']['market_expansion_recommendation']
+          score: number
+          score_components: Json
+          native_profit_minor: number | null
+          native_margin_pct: number | null
+          comparison_currency: string | null
+          comparison_profit_minor: number | null
+          fx_rate_used: number | null
+          fx_observed_at: string | null
+          blockers: string[]
+          missing_facts: string[]
+          source_payload: Json
+          engine_version: string
+          assessed_at: string
+          is_demo: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          product_id: string
+          market_key: string
+          country_code: string
+          currency: string
+          recommendation: Database['public']['Enums']['market_expansion_recommendation']
+          score: number
+          score_components?: Json
+          native_profit_minor?: number | null
+          native_margin_pct?: number | null
+          comparison_currency?: string | null
+          comparison_profit_minor?: number | null
+          fx_rate_used?: number | null
+          fx_observed_at?: string | null
+          blockers?: string[]
+          missing_facts?: string[]
+          source_payload?: Json
+          engine_version: string
+          assessed_at?: string
+          is_demo?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          product_id?: string
+          market_key?: string
+          country_code?: string
+          currency?: string
+          recommendation?: Database['public']['Enums']['market_expansion_recommendation']
+          score?: number
+          score_components?: Json
+          native_profit_minor?: number | null
+          native_margin_pct?: number | null
+          comparison_currency?: string | null
+          comparison_profit_minor?: number | null
+          fx_rate_used?: number | null
+          fx_observed_at?: string | null
+          blockers?: string[]
+          missing_facts?: string[]
+          source_payload?: Json
+          engine_version?: string
+          assessed_at?: string
+          is_demo?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'market_expansion_assessments_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'market_expansion_assessments_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
             referencedColumns: ['id']
           },
         ]
@@ -4520,6 +4723,72 @@ export interface Database {
           },
         ]
       }
+      supplier_market_capabilities: {
+        Row: {
+          id: string
+          org_id: string
+          supplier_id: string
+          country_code: string
+          can_ship: boolean
+          shipping_cost_minor: number | null
+          shipping_currency: string | null
+          delivery_days_min: number | null
+          delivery_days_max: number | null
+          cancellation_rate_pct: number | null
+          last_verified_at: string | null
+          is_demo: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          supplier_id: string
+          country_code: string
+          can_ship?: boolean
+          shipping_cost_minor?: number | null
+          shipping_currency?: string | null
+          delivery_days_min?: number | null
+          delivery_days_max?: number | null
+          cancellation_rate_pct?: number | null
+          last_verified_at?: string | null
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          supplier_id?: string
+          country_code?: string
+          can_ship?: boolean
+          shipping_cost_minor?: number | null
+          shipping_currency?: string | null
+          delivery_days_min?: number | null
+          delivery_days_max?: number | null
+          cancellation_rate_pct?: number | null
+          last_verified_at?: string | null
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'supplier_market_capabilities_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_market_capabilities_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       supplier_order_items: {
         Row: {
           id: string
@@ -5239,6 +5508,7 @@ export interface Database {
       identifier_validation: 'valid' | 'invalid_format' | 'invalid_check_digit' | 'unverified' | 'exempt'
       invoice_kind: 'commercial_invoice' | 'vat_invoice' | 'receipt'
       invoice_status: 'draft' | 'issued' | 'sent' | 'paid' | 'void' | 'failed'
+      market_expansion_recommendation: 'ready' | 'promising' | 'requires_review' | 'blocked' | 'insufficient_facts'
       marketplace_connection_status: 'demo' | 'not_configured' | 'connected' | 'degraded' | 'error'
       marketplace_listing_state: 'discovered' | 'evaluating' | 'approved' | 'ready_to_list' | 'pending_approval' | 'published' | 'paused' | 'ended' | 'blocked'
       member_role: 'owner' | 'admin' | 'analyst' | 'viewer'

@@ -6,8 +6,10 @@ import { ScoreBreakdown, ScoreDial } from '@/components/dashboard/ScoreBreakdown
 import { formatMoney } from '@/lib/core/money'
 import { formatPct } from '@/lib/utils'
 import { getOpportunityDetail } from '@/lib/products/opportunities'
+import { getMarketExpansionDemo } from '@/lib/markets/opportunityMarketsRepository'
 import type { ComplianceCheck } from '@/lib/compliance/rules'
 import type { ChannelKey } from '@/lib/core/domain'
+import type { ExpansionRecommendation } from '@/lib/markets/expansion'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,9 +29,21 @@ const OUTCOME_LABELS: Record<ComplianceCheck['outcome'], string> = {
 
 const CHANNEL_LABELS: Record<ChannelKey, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK' }
 
+const RECOMMENDATION_TONES: Record<ExpansionRecommendation, 'positive' | 'negative' | 'caution' | 'neutral'> = {
+  ready: 'positive',
+  promising: 'positive',
+  requires_review: 'caution',
+  blocked: 'negative',
+  insufficient_facts: 'neutral',
+}
+const RECOMMENDATION_LABELS: Record<ExpansionRecommendation, string> = {
+  ready: 'Ready', promising: 'Promising', requires_review: 'Requires review', blocked: 'Blocked', insufficient_facts: 'Insufficient facts',
+}
+const COMPLIANCE_VERDICT_LABELS: Record<string, string> = { pass: 'Pass', fail: 'Fail', review_required: 'Review required', not_assessed: 'Unknown' }
+
 export default async function OpportunityDetailPage(props: PageProps<'/opportunities/[id]'>) {
   const { id } = await props.params
-  const evaluated = await getOpportunityDetail(id)
+  const [evaluated, marketScenarios] = await Promise.all([getOpportunityDetail(id), getMarketExpansionDemo()])
   if (!evaluated) notFound()
 
   const { candidate, score, recommendation, supplier, channels, compliance, complaints } = evaluated
@@ -345,6 +359,69 @@ export default async function OpportunityDetailPage(props: PageProps<'/opportuni
           </div>
         ) : null}
       </Card>
+
+      {/* --- Global expansion matrix (Milestone 9) --------------------------- */}
+      {marketScenarios ? (
+        <Card>
+          <CardHeader
+            title="Global expansion matrix"
+            description="Every market, evaluated separately, from the real compliance/profitability/supplier-capability engines — never a single global status. Demo scenarios illustrating the architecture; see docs/MILESTONES.md."
+          />
+          {marketScenarios.map((scenario) => (
+            <div key={scenario.key} className="border-t border-border">
+              <div className="px-5 py-3">
+                <p className="text-sm font-medium">{scenario.label}</p>
+                <p className="mt-0.5 text-xs text-ink-muted">{scenario.description}</p>
+              </div>
+              <TableWrap>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs text-ink-subtle">
+                      <th className="px-5 py-2 font-medium">Market</th>
+                      <th className="px-3 py-2 font-medium">Compliance</th>
+                      <th className="px-3 py-2 font-medium">Profitability</th>
+                      <th className="px-3 py-2 font-medium">Supplier</th>
+                      <th className="px-3 py-2 font-medium">Marketplace</th>
+                      <th className="px-3 py-2 text-right font-medium">Score</th>
+                      <th className="px-3 py-2 text-right font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scenario.results.map((result, index) => (
+                      <tr key={`${scenario.key}:${result.marketKey}:${index}`} className="border-b border-border last:border-0">
+                        <td className="px-5 py-2.5">
+                          <span className="font-medium">{result.countryCode}</span>
+                          <span className="ml-1.5 text-xs text-ink-subtle">{result.marketKey}</span>
+                          {scenario.results.filter((r) => r.marketKey === result.marketKey).length > 1 ? (
+                            <span className="ml-1.5 text-xs text-ink-subtle">({index === 0 ? 'before' : 'after'})</span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs">{COMPLIANCE_VERDICT_LABELS[result.compliance.verdict] ?? result.compliance.verdict}</td>
+                        <td className="px-3 py-2.5 text-xs">
+                          {result.profitability ? (result.profitability.gate.passes ? `Pass (${result.profitability.native.netMarginPct}%)` : 'Fail') : 'Unknown'}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs">
+                          {result.supplierCapability.canShip.value === true ? 'Ready' : result.supplierCapability.canShip.value === false ? 'Cannot ship' : 'Unknown'}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs capitalize">{result.marketplaceStatus.replace(/_/g, ' ')}</td>
+                        <td className="tabular px-3 py-2.5 text-right text-xs">{result.score}/100</td>
+                        <td className="px-3 py-2.5 text-right">
+                          <Badge tone={RECOMMENDATION_TONES[result.recommendation]}>{RECOMMENDATION_LABELS[result.recommendation]}</Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableWrap>
+              <ul className="space-y-1 border-t border-border px-5 py-3">
+                {scenario.narrative.map((line, i) => (
+                  <li key={i} className="text-xs text-ink-muted">{line}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </Card>
+      ) : null}
     </>
   )
 }

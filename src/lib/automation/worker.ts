@@ -13,6 +13,7 @@ import {
   handleMarketplaceReconciliation,
 } from './handlers/marketplaceHandlers'
 import { handleOrderProcessing } from './handlers/orderHandlers'
+import { handleMarketRecheck, handleFxRecheck, type MarketHandlerDeps } from './handlers/marketHandlers'
 import type { AutomationStore, JobRecord } from './store'
 import type { FactsLoader } from './factsTypes'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
@@ -49,7 +50,13 @@ export interface JobHandlerResult {
   retryable?: boolean
 }
 
-export type JobHandler = (job: JobRecord, store: AutomationStore, facts: FactsLoader, connectors: ConnectorLookup) => Promise<JobHandlerResult>
+/**
+ * `marketDeps` (Milestone 9) is the 5th, optional parameter every existing
+ * handler simply never declares — a function with fewer parameters is
+ * assignable to a type expecting more, so none of the 14 existing handlers
+ * needed to change. Only `handleMarketRecheck`/`handleFxRecheck` read it.
+ */
+export type JobHandler = (job: JobRecord, store: AutomationStore, facts: FactsLoader, connectors: ConnectorLookup, marketDeps?: MarketHandlerDeps) => Promise<JobHandlerResult>
 
 /**
  * The job-handler registry (Milestone 7 brief §2). Every handler orchestrates
@@ -78,6 +85,8 @@ export const HANDLERS: Record<string, JobHandler> = {
   fulfilment_update: handleFulfilmentUpdate,
   tracking_check: handleTrackingCheck,
   marketplace_reconciliation: handleMarketplaceReconciliation,
+  market_recheck: handleMarketRecheck,
+  fx_recheck: handleFxRecheck,
 }
 
 export interface WorkerBatchResult {
@@ -93,6 +102,7 @@ export async function runWorkerBatch(
   connectors: ConnectorLookup,
   workerId: string,
   maxJobs = 10,
+  marketDeps?: MarketHandlerDeps,
 ): Promise<WorkerBatchResult> {
   const result: WorkerBatchResult = { claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 }
 
@@ -103,7 +113,7 @@ export async function runWorkerBatch(
 
     const handler = HANDLERS[job.jobType]
     const outcome: JobHandlerResult = handler
-      ? await handler(job, store, facts, connectors).catch((error) => ({
+      ? await handler(job, store, facts, connectors, marketDeps).catch((error) => ({
           succeeded: false,
           error: error instanceof Error ? error.message : String(error),
           retryable: true,

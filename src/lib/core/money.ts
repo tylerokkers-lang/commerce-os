@@ -6,7 +6,7 @@
  * curiosity in most software and a mis-stated VAT return here.
  */
 
-export type CurrencyCode = 'GBP' | 'EUR' | 'USD'
+export type CurrencyCode = 'GBP' | 'EUR' | 'USD' | 'CAD' | 'AUD'
 
 export interface Money {
   readonly minor: number

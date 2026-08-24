@@ -346,8 +346,37 @@ export default async function AutomationPage() {
               { label: 'Failed external actions', ids: monitoring.marketplaceIntelligence.failedExternalActions },
             ]}
           />
+          <IntelligenceCard
+            title="Global expansion intelligence"
+            groups={[
+              { label: 'FX rates stale/unavailable', ids: monitoring.expansionIntelligence.fxRatesStale },
+              { label: 'Significant FX movements', ids: monitoring.expansionIntelligence.fxSignificantMovements },
+              { label: 'Market profitability deteriorating', ids: monitoring.expansionIntelligence.marketsWithProfitabilityDeterioration },
+              { label: 'Market compliance recheck required', ids: monitoring.expansionIntelligence.marketsRequiringComplianceRecheck },
+              { label: 'Supplier capability changed', ids: monitoring.expansionIntelligence.marketsWithSupplierCapabilityChanges },
+              { label: 'Markets became viable', ids: monitoring.expansionIntelligence.marketsBecameViable, tone: 'positive' },
+            ]}
+          />
         </div>
       ) : null}
+
+      <Card>
+        <CardHeader title="Market readiness" description="Every market in the catalog, and its real connector status — never LIVE or DEMO unless a connector genuinely reports it." />
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-3">
+          {monitoring.marketReadiness.map((market) => (
+            <div key={market.marketKey} className="bg-surface px-4 py-3">
+              <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">{market.label}</p>
+              <p className="mt-0.5 text-xs text-ink-subtle">{market.countryLabel}</p>
+              <Badge
+                tone={market.status === 'connected' || market.status === 'demo' ? 'positive' : market.status === 'error' ? 'negative' : market.status === 'degraded' ? 'caution' : 'neutral'}
+                className="mt-1.5"
+              >
+                {market.status.replace(/_/g, ' ')}
+              </Badge>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {monitoring.isDemo ? (
         <div className="grid gap-4">

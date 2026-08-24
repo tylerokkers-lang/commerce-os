@@ -8,6 +8,8 @@ import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
 import { getSupabaseFactsLoader } from '@/lib/automation/facts'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { getMarketplaceConnector } from '@/lib/marketplaces/connectors/registry'
+import { getSupabaseFxStore } from '@/lib/fx/fxStore'
+import { getSupabaseSupplierMarketFactsLoader } from '@/lib/markets/supplierMarketFactsStore'
 
 /**
  * The scheduled-monitoring entry point (Milestone 8), the same shape and
@@ -43,12 +45,15 @@ export async function POST(request: Request) {
   const store = getSupabaseAutomationStore()
   const events = getSupabaseEventStore()
   const facts = getSupabaseFactsLoader()
+  const fxStore = getSupabaseFxStore()
+  const supplierMarketFacts = getSupabaseSupplierMarketFactsLoader()
 
   const results = []
   for (const org of orgs ?? []) {
     const settings = await getAutomationSettingsForOrg(org.id)
     const summaries = await runDueMonitors({
       orgId: org.id, store, events, facts, connectors: getMarketplaceConnector, settings, subjectsFor: getLiveSubjects,
+      fxStore, supplierMarketFacts,
     })
     results.push({ orgId: org.id, monitors: summaries })
   }

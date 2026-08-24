@@ -71,6 +71,9 @@ src/lib/
   automation/    policy engine, job queue, live facts, execution pipelines,
                  approvals — see below
   monitoring/    monitors, domain events, the scheduler runner — see below
+  fx/            exchange rate facts, provenance, currency conversion — see below
+  markets/       country/currency/marketplace model, country-aware
+                 compliance, market profitability, expansion engine — see below
   notifications/ read + write (write added Milestone 6)
   integrations/  connection health
   tax/           VAT and finance reads
@@ -123,10 +126,11 @@ convention — no monitor imports a marketplace connector's write methods or
 ```
 eventTypes.ts             pure interfaces/types (EventStore, Monitor, MonitorContext)
 eventStore.ts, inMemoryEventStore.ts   Supabase-backed and in-memory EventStore
-monitors/*.ts              the 6 monitors (supplier stock/price, supplier
+monitors/*.ts              the 8 monitors (supplier stock/price, supplier
                            operations, marketplace, compliance,
-                           profitability, sales performance), each composing
-                           an existing engine, never duplicating one
+                           profitability, sales performance, fx rates,
+                           market expansion), each composing an existing
+                           engine, never duplicating one
 registry.ts                closed MONITORS map + explicit EVENT_TO_JOB_MAPPING
 runner.ts                  runDueMonitors: schedule check -> subject discovery
                            -> monitor run -> events -> jobs; SubjectProvider
@@ -159,6 +163,78 @@ partial unique index on `domain_events(org_id, dedupe_key)` where
 `status = 'open'` is what actually prevents a supplier outage checked every
 15 minutes for 6 hours from becoming 24 separate events — see
 `docs/DATABASE.md`.
+
+### `src/lib/fx/` and `src/lib/markets/` (Milestone 9)
+
+`fx/` treats exchange rates as facts with provenance, never bare numbers:
+
+```
+types.ts      ExchangeRateFact, fresh/stale/unknown/unavailable freshness,
+              per-use-case staleness windows (automation/product-evaluation/
+              order-fulfilment/strategic-expansion)
+convert.ts    convertMoney(original, targetCurrency, rate, freshness) ->
+              Result<ConversionResult, FxConversionError> — rejects
+              same-currency no-ops and mismatched currency pairs explicitly
+inMemoryFxStore.ts, fxStore.ts   FxRateStore satisfied twice (tests, and
+              server-only Supabase production)
+demoRates.ts  deterministic seed rates — an explicit demo seed, not a live
+              feed; no FX provider exists yet
+```
+
+`markets/` composes with the existing UK-only channel/compliance/
+profitability code rather than reworking it — it never introduces a second
+profitability calculator or a global "compliant" boolean:
+
+```
+types.ts, catalog.ts        MARKET_CATALOG: a closed, pure-TypeScript
+                             registry of country/marketplace combinations.
+                             resolveMarketStatus derives each entry's real
+                             LIVE/DEMO/PLANNED/NOT_CONFIGURED status from
+                             the connector registry at read time (never
+                             stored), reusing deriveMarketplaceStatus
+                             (Milestone 4)
+countryCompliance.ts        assessMarketCompliance delegates to the real
+                             assessCompliance engine for GB; every other
+                             country returns an honest not_assessed with a
+                             stated missing-fact reason — no invented
+                             ruleset
+marketCostProfiles.ts       seed fee/fulfilment/tax assumptions per market,
+                             each documented as a seed, not a live lookup
+marketProfitability.ts      resolveMarketProjectionInput does FX
+                             normalisation *before* projectMarketProfitability
+                             calls the one existing profitability engine —
+                             this is what lets an FX movement flip a
+                             market's native pass/fail, not just a
+                             comparison figure
+expansion.ts                evaluateMarketExpansion: a deterministic engine
+                             where fatal checks (compliance fail, supplier
+                             cannot ship, profitability fails outright) are
+                             checked and can block *before* the transparent,
+                             renormalised score is ever consulted — a high
+                             score can never override a compliance failure
+supplierMarketFacts.ts,
+supplierMarketFactsStore.ts SupplierMarketFactsLoader satisfied twice:
+                             can-ship / shipping cost & currency / delivery
+                             window / cancellation rate, per supplier per
+                             destination country
+repository.ts,
+inMemoryMarketRepository.ts,
+supabaseMarketRepository.ts MarketExpansionRepository satisfied twice —
+                             append-only persistence, each row storing the
+                             exact job payload that produced it so a
+                             chained FX recheck can replay it verbatim
+```
+
+`market_key` (plain text, e.g. `amazon_de`) is a new, orthogonal, code-only
+catalog concept — it is **not** `channel_key` (the existing
+`shopify`/`amazon_uk` enum the business actually operates on), and links
+back to a real channel only when one exists (`MarketDescriptor.channelKey`).
+`fxMonitor`/`marketMonitor` (`monitoring/monitors/`) and
+`handleMarketRecheck`/`handleFxRecheck` (`automation/handlers/
+marketHandlers.ts`) wire both modules into the existing monitoring and
+automation pipelines described above — no parallel automation system was
+built, and only a `ready` expansion recommendation ever creates a
+`request_approval` action.
 
 ## Rules the code follows
 

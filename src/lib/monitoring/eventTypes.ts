@@ -2,6 +2,8 @@ import type { AutomationStore } from '@/lib/automation/store'
 import type { FactsLoader } from '@/lib/automation/factsTypes'
 import type { AutomationSettings } from '@/lib/automation/settingsTypes'
 import type { ConnectorLookup } from '@/lib/automation/worker'
+import type { FxRateStore } from '@/lib/fx/types'
+import type { SupplierMarketFactsLoader } from '@/lib/markets/supplierMarketFacts'
 
 /**
  * The domain-event system (Milestone 8).
@@ -129,6 +131,15 @@ export interface MonitorContext {
   connectors: ConnectorLookup
   settings: AutomationSettings
   now: Date
+  /**
+   * Milestone 9: exchange-rate and supplier-destination-capability facts,
+   * used only by `fxMonitor`/`marketMonitor`. Optional so every other
+   * monitor's context construction (and every existing test) is
+   * unaffected — the same reasoning `connectors` already established for
+   * `marketplaceMonitor` alone.
+   */
+  fxStore?: FxRateStore
+  supplierMarketFacts?: SupplierMarketFactsLoader
 }
 
 export interface MonitorRunOutcome {
