@@ -1,10 +1,17 @@
 # Database
 
-68 tables across 23 migrations (as of Milestone 8), applied in filename
-order. Every migration is executed against a real Postgres engine by
-`npm run db:verify`, so nothing in here is untested SQL. This file describes
-the conventions that have held since Milestone 1; see `docs/MILESTONES.md`
-for what each later migration specifically added.
+68 tables across 23 migrations (as of Milestone 8; unchanged by the
+Milestone 8.5 completion pass — it reads existing columns, adding none),
+applied in filename order. Every migration is executed against a real
+Postgres engine by `npm run db:verify`, so nothing in here is untested SQL.
+This file describes the conventions that have held since Milestone 1; see
+`docs/MILESTONES.md` for what each later migration specifically added.
+
+Milestone 8.5's monitoring reads `supplier_products.dispatch_days_min/max`,
+`.cancellation_rate_pct`, `.fulfilment_success_rate_pct` and
+`supplier_connectors.status`/`.last_success_at` — all added by Milestone 3
+(`0013_supplier_connectors.sql`) but unread by any application code until
+now.
 
 ## Conventions
 

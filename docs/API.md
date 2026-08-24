@@ -177,8 +177,11 @@ convention.
 
 ### Production infrastructure this route needs
 
-Documented in full in `HANDOVER.md` §21. Two enumeration gaps beyond the
-standard "no external scheduler calls this yet" caveat: `liveSubjects.ts`
-only has real queries for 2 of the 5 monitors (supplier stock/price and
-marketplace listings), and `performanceMonitor` has no live sales
-aggregation to compare against yet — both documented, not hidden.
+Documented in full in `HANDOVER.md` §22 (Milestone 8.5). All 6 registered
+monitors — supplier stock/price, supplier operations, marketplace listings,
+compliance, profitability, and sales performance (now backed by real
+`orders`/`order_items`/`refunds` aggregation) — have real, paginated,
+org-scoped subject discovery. The standard "no external scheduler calls
+this yet" caveat still applies, and discovery itself enumerates every
+eligible row per page rather than a genuine SQL "is this one actually due"
+predicate — a real optimisation for future scale, not built yet.

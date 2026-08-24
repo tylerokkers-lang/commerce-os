@@ -90,6 +90,23 @@ describe('profitability safety-net monitor', () => {
     expect(outcome.eventsCreated).toBe(0)
     expect(outcome.observationsCreated).toBe(0)
   })
+
+  it('a second genuine cost change is not swallowed by the first still-open event — oscillation regression', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const factsBaseline = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(9), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: factsBaseline, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [subject]) // Baseline.
+
+    const factsFirstChange = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(10.76), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    await profitabilityMonitor.run({ ...ctx, facts: factsFirstChange }, [subject]) // Event #1, left open.
+
+    const factsSecondChange = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(13), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: factsSecondChange }, [subject]) // A further genuine rise.
+
+    expect(outcome.eventsCreated).toBe(1)
+    expect(events.getState().events.filter((e) => e.eventType === 'PRODUCT_PRICE_REVIEW_REQUIRED')).toHaveLength(2)
+  })
 })
 
 describe('sales & performance monitor', () => {
@@ -116,6 +133,23 @@ describe('sales & performance monitor', () => {
     expect(event).toBeTruthy()
     expect(event.facts.previousUnits).toBe(40)
     expect(event.facts.currentUnits).toBe(100)
+  })
+
+  it('a second surge from a new baseline is not swallowed by the first still-open surge event — oscillation regression', async () => {
+    const events = createInMemoryEventStore({ configNumbersByKey: { 'sales_performance:surge_threshold_pct': 50 } })
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const facts = createInMemoryFactsLoader()
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+
+    const first: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: window(100), previousWindow: window(40), adSpendLimitMinor: null }
+    await performanceMonitor.run(ctx, [first]) // Event #1, left open (nothing resolves a surge automatically).
+
+    // Sales keep climbing before anyone acted on the first alert.
+    const second: PerformanceMonitorSubject = { ...first, currentWindow: window(250) }
+    const outcome = await performanceMonitor.run(ctx, [second])
+
+    expect(outcome.eventsCreated).toBe(1)
+    expect(events.getState().events.filter((e) => e.eventType === 'PRODUCT_SALES_SURGING')).toHaveLength(2)
   })
 
   it('a decline beyond the threshold creates PRODUCT_SALES_DECLINING and enqueues a profitability recheck', async () => {
@@ -149,5 +183,44 @@ describe('sales & performance monitor', () => {
     const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: window(105), previousWindow: window(100), adSpendLimitMinor: null }
     await performanceMonitor.run(ctx, [subject])
     expect(events.getState().events).toHaveLength(0)
+  })
+
+  it('revenue declining beyond the threshold creates REVENUE_DECLINED even when unit volume is flat', async () => {
+    const { ctx, events } = makeCtx()
+    const previous = { ...window(100), netRevenueMinor: 100000 }
+    const current = { ...window(100), netRevenueMinor: 50000 } // Units flat, net revenue halved (e.g. heavy discounting).
+    const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: current, previousWindow: previous, adSpendLimitMinor: null }
+    await performanceMonitor.run(ctx, [subject])
+    expect(events.getState().events.some((e) => e.eventType === 'REVENUE_DECLINED')).toBe(true)
+  })
+
+  it('velocity below the configured floor creates PRODUCT_UNDERPERFORMING, and recovering above it resolves with PRODUCT_SALES_RECOVERED', async () => {
+    const { ctx, events } = makeCtx()
+    const low = { ...window(1), salesVelocityPerDay: 0.1 }
+    const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: low, previousWindow: window(1), adSpendLimitMinor: null }
+    await performanceMonitor.run(ctx, [subject])
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_UNDERPERFORMING' && e.status === 'open')).toBe(true)
+
+    const healthy = { ...window(20), salesVelocityPerDay: 3 }
+    const recoverySubject: PerformanceMonitorSubject = { ...subject, currentWindow: healthy }
+    await performanceMonitor.run(ctx, [recoverySubject])
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_SALES_RECOVERED')).toBe(true)
+  })
+
+  it('repeated runs while still underperforming deduplicate to one open event, not a flood', async () => {
+    const { ctx, events } = makeCtx()
+    const low = { ...window(1), salesVelocityPerDay: 0.1 }
+    const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: low, previousWindow: window(1), adSpendLimitMinor: null }
+    await performanceMonitor.run(ctx, [subject])
+    await performanceMonitor.run(ctx, [subject])
+    await performanceMonitor.run(ctx, [subject])
+    expect(events.getState().events.filter((e) => e.eventType === 'PRODUCT_UNDERPERFORMING' && e.status === 'open')).toHaveLength(1)
+  })
+
+  it('a product with no velocity data (not yet computed live) never triggers PRODUCT_UNDERPERFORMING — absence is not a guess', async () => {
+    const { ctx, events } = makeCtx()
+    const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: window(1), previousWindow: window(1), adSpendLimitMinor: null }
+    await performanceMonitor.run(ctx, [subject])
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_UNDERPERFORMING')).toBe(false)
   })
 })

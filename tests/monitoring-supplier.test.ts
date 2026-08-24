@@ -82,6 +82,35 @@ describe('supplier monitor', () => {
     expect(store.getState().jobs.some((j) => j.jobType === 'supplier_price_change')).toBe(true)
   })
 
+  it('a second genuine price increase is not swallowed by the first still-open event — price oscillation regression', async () => {
+    const events = createInMemoryEventStore({ configNumbersByKey: { 'supplier_stock_and_price:price_threshold_pct': 3 } })
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const facts1 = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(10), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: facts1, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await supplierMonitor.run(ctx, [SUBJECT]) // Baseline £10.
+
+    const facts2 = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(11), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    const outcome1 = await supplierMonitor.run({ ...ctx, facts: facts2 }, [SUBJECT]) // +10% -> event #1, left open (nothing resolves it automatically).
+    expect(outcome1.eventsCreated).toBe(1)
+
+    // The supplier raises its price again before anyone (or any
+    // automation) acted on the first event — this must still be visible,
+    // not silently absorbed into the still-open first alert.
+    const facts3 = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(13), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    const outcome2 = await supplierMonitor.run({ ...ctx, facts: facts3 }, [SUBJECT]) // +18% further increase.
+    expect(outcome2.eventsCreated).toBe(1)
+
+    const priceEvents = events.getState().events.filter((e) => e.eventType === 'SUPPLIER_PRICE_INCREASED')
+    expect(priceEvents).toHaveLength(2)
+    expect(priceEvents.every((e) => e.status === 'open')).toBe(true)
+
+    // But re-running against the SAME £13 condition again must still
+    // dedupe normally — the fix must not turn every tick into a new event.
+    const outcome3 = await supplierMonitor.run({ ...ctx, facts: facts3 }, [SUBJECT])
+    expect(outcome3.eventsCreated).toBe(0)
+    expect(events.getState().events.filter((e) => e.eventType === 'SUPPLIER_PRICE_INCREASED')).toHaveLength(2)
+  })
+
   it('a price change below the configured threshold never creates an event', async () => {
     const events = createInMemoryEventStore({ configNumbersByKey: { 'supplier_stock_and_price:price_threshold_pct': 5 } })
     const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })

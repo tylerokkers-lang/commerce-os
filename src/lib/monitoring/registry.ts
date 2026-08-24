@@ -1,4 +1,5 @@
 import { supplierMonitor } from './monitors/supplierMonitor'
+import { supplierOperationsMonitor } from './monitors/supplierOperationsMonitor'
 import { marketplaceListingMonitor } from './monitors/marketplaceMonitor'
 import { complianceMonitor } from './monitors/complianceMonitor'
 import { profitabilityMonitor } from './monitors/profitabilityMonitor'
@@ -15,6 +16,7 @@ import type { Monitor, MonitorContext, MonitorRunOutcome } from './eventTypes'
  */
 export const MONITORS: Record<string, Monitor<never>> = {
   [supplierMonitor.descriptor.key]: supplierMonitor as Monitor<never>,
+  [supplierOperationsMonitor.descriptor.key]: supplierOperationsMonitor as Monitor<never>,
   [marketplaceListingMonitor.descriptor.key]: marketplaceListingMonitor as Monitor<never>,
   [complianceMonitor.descriptor.key]: complianceMonitor as Monitor<never>,
   [profitabilityMonitor.descriptor.key]: profitabilityMonitor as Monitor<never>,
@@ -42,9 +44,12 @@ export const EVENT_TO_JOB_MAPPING: Record<string, string | null> = {
   SUPPLIER_PRICE_INCREASED: 'supplier_price_change',
   SUPPLIER_PRICE_DECREASED: 'supplier_price_change',
   SUPPLIER_DELIVERY_DELAYED: null,
-  SUPPLIER_DISPATCH_CHANGED: null,
-  SUPPLIER_CANCELLATION_RATE_DETERIORATED: null,
+  SUPPLIER_DISPATCH_DELAYED: null,
+  SUPPLIER_CANCELLATION_RATE_INCREASED: null,
+  SUPPLIER_FULFILMENT_RELIABILITY_DETERIORATED: null,
+  SUPPLIER_FULFILMENT_RELIABILITY_RECOVERED: null,
   SUPPLIER_FEED_FAILED: null,
+  SUPPLIER_FEED_STALE: null,
   SUPPLIER_FEED_RECOVERED: null,
   SUPPLIER_PRODUCT_UNAVAILABLE: 'supplier_availability_check',
   PRODUCT_MARGIN_DROPPED: 'product_profitability_recheck',
@@ -68,7 +73,9 @@ export const EVENT_TO_JOB_MAPPING: Record<string, string | null> = {
   PRODUCT_SALES_SURGING: null,
   PRODUCT_SALES_DECLINING: 'product_profitability_recheck',
   PRODUCT_UNDERPERFORMING: null,
+  PRODUCT_SALES_RECOVERED: null,
   PRODUCT_RETURN_RATE_INCREASED: null,
   PRODUCT_REFUND_RATE_INCREASED: null,
+  REVENUE_DECLINED: null,
   AD_SPEND_EXCEEDED: null,
 }

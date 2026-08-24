@@ -15,7 +15,7 @@ function makeInputs(overrides: { subjectsFor?: SubjectProvider; scheduleMinutesB
   const events = createInMemoryEventStore({ scheduleMinutesByKey: overrides.scheduleMinutesByKey })
   const facts = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(9), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
   const subject: SupplierMonitorSubject = { supplierId: 'sup-1', productId: 'prod-1', channelProductId: 'cp-1', entityId: 'prod-1' }
-  const subjectsFor: SubjectProvider = overrides.subjectsFor ?? (async (_orgId, monitorKey) => (monitorKey === SUPPLIER_KEY ? [subject] : []))
+  const subjectsFor: SubjectProvider = overrides.subjectsFor ?? (async (_orgId, monitorKey) => ({ subjects: monitorKey === SUPPLIER_KEY ? [subject] : [], errors: [] }))
   return { store, events, facts, subjectsFor }
 }
 
@@ -69,10 +69,13 @@ describe('runDueMonitors', () => {
 
   it('a subject-level failure is recorded as partial_success, not success, and never hides the error', async () => {
     const { store, events, facts } = makeInputs()
-    const subjectsFor: SubjectProvider = async () => [
-      { supplierId: 'sup-1', productId: 'prod-1', channelProductId: 'cp-1', entityId: 'prod-1' },
-      { supplierId: 'sup-1', productId: 'prod-broken', channelProductId: 'cp-2', entityId: 'prod-broken' },
-    ]
+    const subjectsFor: SubjectProvider = async () => ({
+      subjects: [
+        { supplierId: 'sup-1', productId: 'prod-1', channelProductId: 'cp-1', entityId: 'prod-1' },
+        { supplierId: 'sup-1', productId: 'prod-broken', channelProductId: 'cp-2', entityId: 'prod-broken' },
+      ],
+      errors: [],
+    })
     const brokenFacts = { ...facts, loadSupplierFactsForProduct: async (_orgId: string, _supplierId: string, productId: string) => {
       if (productId === 'prod-broken') throw new Error('feed exploded')
       return facts.loadSupplierFactsForProduct(_orgId, _supplierId, productId)
@@ -89,7 +92,7 @@ describe('runDueMonitors', () => {
 
   it('every subject failing is recorded as failed, never success', async () => {
     const { store, events, facts } = makeInputs()
-    const subjectsFor: SubjectProvider = async () => [{ supplierId: 'sup-1', productId: 'prod-broken', channelProductId: 'cp-1', entityId: 'prod-broken' }]
+    const subjectsFor: SubjectProvider = async () => ({ subjects: [{ supplierId: 'sup-1', productId: 'prod-broken', channelProductId: 'cp-1', entityId: 'prod-broken' }], errors: [] })
     const brokenFacts = { ...facts, loadSupplierFactsForProduct: async () => { throw new Error('total outage') } }
 
     await runDueMonitors({ orgId: ORG_A, store, events, facts: brokenFacts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, subjectsFor, monitorKeys: [SUPPLIER_KEY] })
@@ -97,7 +100,7 @@ describe('runDueMonitors', () => {
     expect(run?.status).toBe('failed')
   })
 
-  it('a failure enumerating subjects is recorded as a failed run, never crashes the sweep or leaves the run stuck at "running"', async () => {
+  it('a thrown failure enumerating subjects (e.g. the database itself is unreachable) is recorded as a failed run, never crashes the sweep or leaves the run stuck at "running"', async () => {
     const { store, events, facts } = makeInputs()
     const subjectsFor: SubjectProvider = async () => { throw new Error('subject enumeration exploded') }
 
@@ -109,11 +112,30 @@ describe('runDueMonitors', () => {
     expect(run?.error).toBe('subject enumeration exploded')
   })
 
+  it('one source failing during discovery (supplier B) does not lose supplier A or C, and is reported as partial_success, never success', async () => {
+    const { store, events, facts } = makeInputs()
+    const subjectsFor: SubjectProvider = async () => ({
+      subjects: [
+        { supplierId: 'sup-a', productId: 'prod-a', channelProductId: 'cp-a', entityId: 'prod-a' },
+        { supplierId: 'sup-c', productId: 'prod-c', channelProductId: 'cp-c', entityId: 'prod-c' },
+      ],
+      errors: ['sup-b: connector timed out'],
+    })
+
+    const summaries = await runDueMonitors({ orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, subjectsFor, monitorKeys: [SUPPLIER_KEY] })
+    expect(summaries[0].ran).toBe(true)
+    expect(summaries[0].subjectsChecked).toBe(2) // A and C were not silently discarded.
+    expect(summaries[0].errors).toContain('sup-b: connector timed out')
+
+    const run = await events.getLastMonitorRun(ORG_A, SUPPLIER_KEY)
+    expect(run?.status).toBe('partial_success') // Never "success" — B's failure is not invisible.
+  })
+
   it('two organisations are scheduled independently — one being due does not affect the other', async () => {
     const store = createInMemoryAutomationStore({ settingsByOrg: { 'org-a': DEMO_AUTOMATION_SETTINGS, 'org-b': DEMO_AUTOMATION_SETTINGS } })
     const events = createInMemoryEventStore({ scheduleMinutesByKey: { [SUPPLIER_KEY]: 15 } })
     const facts = createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(9), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
-    const subjectsFor: SubjectProvider = async () => [{ supplierId: 'sup-1', productId: 'prod-1', channelProductId: 'cp-1', entityId: 'prod-1' }]
+    const subjectsFor: SubjectProvider = async () => ({ subjects: [{ supplierId: 'sup-1', productId: 'prod-1', channelProductId: 'cp-1', entityId: 'prod-1' }], errors: [] })
     const now = new Date('2026-08-23T12:00:00Z')
 
     await runDueMonitors({ orgId: 'org-a', store, events, facts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, subjectsFor, monitorKeys: [SUPPLIER_KEY], now })

@@ -48,7 +48,7 @@ describe('Milestone 8 flagship: monitor -> event -> job -> worker -> facts -> po
     })
 
     const subject: SupplierMonitorSubject = { supplierId: SUPPLIER_ID, productId: PRODUCT_ID, channelProductId: CHANNEL_PRODUCT_ID, entityId: PRODUCT_ID }
-    const subjectsFor: SubjectProvider = async (_orgId, monitorKey) => (monitorKey === 'supplier_stock_and_price' ? [subject] : [])
+    const subjectsFor: SubjectProvider = async (_orgId, monitorKey) => ({ subjects: monitorKey === 'supplier_stock_and_price' ? [subject] : [], errors: [] })
 
     // Step 1: establish the baseline observation — the monitor's first-ever
     // look at this supplier/product pair, £9.10/unit.
@@ -153,7 +153,7 @@ describe('Milestone 8 flagship: monitor -> event -> job -> worker -> facts -> po
     const noFacts = createInMemoryFactsLoader() // No seeded offer at all -> the connector/feed is "down".
 
     const subject: SupplierMonitorSubject = { supplierId: SUPPLIER_ID, productId: PRODUCT_ID, channelProductId: CHANNEL_PRODUCT_ID, entityId: PRODUCT_ID }
-    const subjectsFor: SubjectProvider = async () => [subject]
+    const subjectsFor: SubjectProvider = async () => ({ subjects: [subject], errors: [] })
 
     await runDueMonitors({ orgId: ORG_A, store, events, facts: noFacts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, subjectsFor, monitorKeys: ['supplier_stock_and_price'] })
 

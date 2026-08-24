@@ -29,11 +29,26 @@ import type { ConnectorLookup } from '@/lib/automation/worker'
  * Enumerating *which subjects* a monitor should check is supplied by the
  * caller (`SubjectProvider`) — the same honest boundary Milestone 7 drew
  * for `FactsLoader` ("answers what's true for X, not which X to check").
- * A live per-org "enumerate every active product/supplier" sweep is
- * `docs/MILESTONES.md`'s documented next step, not faked here.
+ * `liveSubjects.ts` is the real, production discovery implementation
+ * (Milestone 8.5).
+ *
+ * Discovery itself can partially fail (one supplier's connector times out
+ * while the rest enumerate fine) — a `SubjectProvider` reports that by
+ * returning `errors` alongside whatever `subjects` it *could* gather,
+ * rather than throwing and losing every other source's results, or
+ * swallowing the failure and silently under-reporting coverage. Those
+ * errors are folded into this run's own error count below, so a partial
+ * discovery failure correctly yields `partial_success`, never a false
+ * `success`.
  */
 
-export type SubjectProvider = (orgId: string, monitorKey: string) => Promise<readonly unknown[]>
+export interface SubjectDiscoveryResult<T> {
+  subjects: readonly T[]
+  /** One entry per source that failed to enumerate — never thrown, never silently dropped. */
+  errors: readonly string[]
+}
+
+export type SubjectProvider = (orgId: string, monitorKey: string) => Promise<SubjectDiscoveryResult<unknown>>
 
 export interface RunMonitorsInput {
   orgId: string
@@ -85,15 +100,20 @@ export async function runDueMonitors(input: RunMonitorsInput): Promise<readonly 
       // failure here (e.g. the database is unreachable) must still leave a
       // "failed" monitor_runs row, never crash the whole scheduler sweep or
       // leave this monitor's run stuck at "running" forever.
-      const subjects = await input.subjectsFor(input.orgId, key)
-      const outcome = await runMonitor(key, ctx, subjects)
-      const status = outcome.errors.length === 0 ? 'success' : outcome.errors.length < subjects.length ? 'partial_success' : 'failed'
+      const discovery = await input.subjectsFor(input.orgId, key)
+      const outcome = await runMonitor(key, ctx, discovery.subjects)
+      const allErrors = [...discovery.errors, ...outcome.errors]
+      // Denominator includes discovery failures too: a supplier whose
+      // connector never even produced a subject to check is still a
+      // failure to account for, not something that shrinks the total.
+      const totalAttempted = discovery.subjects.length + discovery.errors.length
+      const status = allErrors.length === 0 ? 'success' : allErrors.length < totalAttempted ? 'partial_success' : 'failed'
       await input.events.completeMonitorRun(runId, {
         status, subjectsChecked: outcome.subjectsChecked, observationsCreated: outcome.observationsCreated,
         eventsCreated: outcome.eventsCreated, eventsDeduplicated: outcome.eventsDeduplicated,
-        error: outcome.errors.length > 0 ? outcome.errors.join('; ') : null,
+        error: allErrors.length > 0 ? allErrors.join('; ') : null,
       })
-      summaries.push({ monitorKey: key, ran: true, subjectsChecked: outcome.subjectsChecked, eventsCreated: outcome.eventsCreated, eventsDeduplicated: outcome.eventsDeduplicated, errors: outcome.errors })
+      summaries.push({ monitorKey: key, ran: true, subjectsChecked: outcome.subjectsChecked, eventsCreated: outcome.eventsCreated, eventsDeduplicated: outcome.eventsDeduplicated, errors: allErrors })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await input.events.completeMonitorRun(runId, { status: 'failed', subjectsChecked: 0, observationsCreated: 0, eventsCreated: 0, eventsDeduplicated: 0, error: message })

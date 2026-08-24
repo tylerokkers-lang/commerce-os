@@ -45,6 +45,11 @@ every query filters by it — there is no code path that reads or writes
 across organisations. `tests/automation-engine-e2e.test.ts` has a dedicated
 test proving one org's automation actions never appear in another org's
 `countRecentActionsForEntity` count, even for the identical entity id.
+`liveSubjects.ts`'s discovery queries (Milestone 8.5) follow the identical
+rule — every one of its paginated queries carries `.eq('org_id', orgId)`,
+including the joins across `supplier_products`/`products`/`channel_products`
+and the `orders`/`order_items`/`refunds` queries behind real sales
+aggregation.
 
 The job queue itself (`automation_jobs`) is *not* org-partitioned at the
 claim level — `claimNextJob` picks the next due job across all
@@ -166,6 +171,21 @@ type that does not exist.
 - No new credential types were introduced; `liveSubjects.ts` reads from the
   same Supabase tables every other server-only module already reads, via
   the same service-role client.
+
+## What Milestone 8.5 changed here
+
+- `liveSubjects.ts`'s discovery queries are bounded (500 rows/page, 20-page
+  ceiling per monitor per run) — a denial-of-resource guard as much as a
+  scale one: a single organisation's data cannot make one scheduler tick
+  loop unboundedly.
+- No new tables, no new RLS policies, no new credential types — every
+  Milestone 8.5 query reads columns an existing migration already created
+  and an existing RLS policy already governs.
+- The new `supplierOperationsMonitor` reads operational figures
+  (dispatch/cancellation/reliability) that no automation write path in this
+  codebase produces — confirmed by inspection, not assumed — so it carries
+  no new automation-loop risk (see `docs/DATABASE.md`/`docs/ARCHITECTURE.md`
+  for what it does read).
 
 ## What Milestone 7 changed here
 

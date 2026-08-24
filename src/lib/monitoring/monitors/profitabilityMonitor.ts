@@ -61,7 +61,11 @@ export const profitabilityMonitor: Monitor<ProfitabilityMonitorSubject> = {
         const result = await ctx.events.createEvent({
           orgId: ctx.orgId, eventType: 'PRODUCT_PRICE_REVIEW_REQUIRED', subjectType: 'product', subjectId: subject.productId,
           source: 'internal', severity: 'info', previousValue: { unitCostMinor: previousCostMinor }, currentValue: { unitCostMinor: currentCostMinor },
-          dedupeKey: `profitability:${subject.productId}:cost_changed`,
+          // Keyed on the resulting cost, not just "changed": a cost that
+          // keeps moving (£9 -> £10 -> £12) is a new fact each time, not
+          // one standing alert. See supplierMonitor.ts's price dedupeKey
+          // for the same fix and why it matters (Milestone 8.5).
+          dedupeKey: `profitability:${subject.productId}:cost_changed:${currentCostMinor}`,
         })
 
         if (!result.deduplicated) {

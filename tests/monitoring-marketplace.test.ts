@@ -53,6 +53,33 @@ describe('marketplace listing monitor', () => {
     expect(priceEvents).toHaveLength(1)
   })
 
+  it('a further genuine drift in the marketplace value is not swallowed by the first still-open mismatch event — oscillation regression', async () => {
+    const { ctx, events } = makeCtx()
+    const fetched = await shopifyDemoConnector.fetchListings({ limit: 250 })
+    if (!fetched.ok) throw new Error('demo connector fetch failed')
+    const listing = fetched.value.records.find((l) => l.channelProductRef === 'CMO-1001')!
+    const subject: MarketplaceListingSubject = { connectorKey: 'shopify_demo', ours: { channelProductRef: 'CMO-1001', priceMinor: listing.priceMinor, status: 'live', recordedAt: new Date().toISOString() } }
+
+    // A connector whose own reported price genuinely moves between calls —
+    // simulating the marketplace itself changing twice before reconciliation
+    // ever runs, not our own record drifting.
+    let externalPriceMinor = listing.priceMinor + 100
+    const driftingConnector: typeof shopifyDemoConnector = Object.create(shopifyDemoConnector, {
+      fetchListings: { value: async () => ({ ok: true as const, value: { records: [{ ...listing, priceMinor: externalPriceMinor }] } }) },
+    })
+    const ctxWithDriftingConnector = { ...ctx, connectors: () => driftingConnector }
+
+    const outcome1 = await marketplaceListingMonitor.run(ctxWithDriftingConnector, [subject]) // Mismatch #1.
+    expect(outcome1.eventsCreated).toBeGreaterThan(0)
+
+    externalPriceMinor = listing.priceMinor + 500 // The marketplace moves again before reconciliation acts.
+    const outcome2 = await marketplaceListingMonitor.run(ctxWithDriftingConnector, [subject])
+    expect(outcome2.eventsCreated).toBeGreaterThan(0)
+
+    const priceEvents = events.getState().events.filter((e) => e.eventType === 'LISTING_PRICE_CHANGED_EXTERNALLY' && e.status === 'open')
+    expect(priceEvents.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('a connector fetch failure creates an EXTERNAL_ACTION_FAILED event, never an invented listing state', async () => {
     const { ctx, events } = makeCtx()
     const brokenConnector: typeof shopifyDemoConnector = Object.create(shopifyDemoConnector, {

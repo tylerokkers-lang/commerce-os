@@ -5,10 +5,11 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 24 August 2026 (Milestone 8 complete — continuous
-intelligence, monitoring & event generation. See §21 before trusting any
-claim about monitoring/events, §19 for Milestone 7's execution work, and
-§18 for Milestone 6's engine-level verification).
+Last updated: 24 August 2026 (Milestone 8.5 complete — live monitoring
+inputs & production subject discovery. See §22 before trusting any claim
+about monitor subject discovery, real sales data, or supplier operational
+facts; §21 for the rest of Milestone 8, §19 for Milestone 7's execution
+work, and §18 for Milestone 6's engine-level verification).
 
 ## 1. What this is
 
@@ -796,13 +797,137 @@ subjects for 2 of the 5 monitors; supplier delivery/dispatch/cancellation-rate
 monitoring named in the brief's minimum scope is not built; no external
 scheduler actually calls `POST /api/monitoring/run` yet.
 
-## 22. Next step
+## 22. Milestone 8.5 (complete live monitoring inputs & production subject discovery) — what was built
+
+Not a numbered milestone in `docs/MILESTONES.md`'s roadmap — a completion
+pass finishing the three gaps §21 documented: `liveSubjects.ts` only
+enumerating 2 of 5 monitors, no real sales aggregation, and no supplier
+operational monitoring. All three are now real. No new migrations were
+needed — every new query reads columns Milestone 3/5 already created
+(`supplier_products.dispatch_days_min/max`/`cancellation_rate_pct`/
+`fulfilment_success_rate_pct`, `supplier_connectors`, `orders`/
+`order_items`/`refunds`) that nothing had read yet.
+
+- **`liveSubjects.ts` rewritten**: real, paginated (500 rows/page, 20-page
+  ceiling — a real bound, not "load everything"), org-scoped discovery for
+  all 6 registered monitors (a 6th, `supplier_operations`, is new — see
+  below). Every discovery source catches its own failure and returns it
+  alongside whatever it *did* gather (`SubjectDiscoveryResult`), rather
+  than throwing and losing every other source's results.
+- **`runner.ts`'s `SubjectProvider` contract changed**: it now returns
+  `{ subjects, errors }` instead of a bare array, and `runDueMonitors`
+  folds discovery errors into the run's own error count — so one source
+  failing during discovery (e.g. supplier B's connector times out while A
+  and C enumerate fine) correctly yields `partial_success`, not a false
+  `success` and not silently missing coverage. Every existing caller
+  (`liveSubjects.ts`, `demo/monitoring.ts`, every monitoring test) was
+  updated to the new shape.
+- **Real sales aggregation** (`orders/salesAggregation.ts`): pure,
+  DB-free arithmetic (`aggregateSalesWindow`, `computeWindowBounds`) over
+  `orders`/`order_items`/`refunds` rows the caller supplies — units sold,
+  orders, gross/net revenue, average order value, sales velocity per day,
+  refunds vs returns (a documented heuristic: `pricing_error`/`goodwill`
+  refunds are not counted as returns, everything else is). `liveSubjects.ts`
+  queries the real tables and feeds this function; `performanceMonitor`
+  gained two new events fed by it — `REVENUE_DECLINED` (revenue can fall
+  independently of unit volume) and `PRODUCT_UNDERPERFORMING` /
+  `PRODUCT_SALES_RECOVERED` (an absolute floor, not just a relative
+  comparison, with a real resolve-on-recovery state machine). No live ad
+  spend data source exists in this codebase, so `adSpendMinor` stays 0 in
+  real discovery — never guessed.
+- **New monitor: `supplierOperationsMonitor.ts`** (`supplier_operations`,
+  6th registered monitor). Reads real `supplier_products`
+  dispatch/cancellation/fulfilment-success columns and `supplier_connectors`
+  feed status via a new `FactsLoader.loadSupplierOperationalFacts` method
+  (satisfied twice, `facts.ts` and `inMemoryFactsLoader.ts`, same pattern
+  as every other fact source). Also computes real observed delivery days
+  from `shipments.shipped_at`/`delivered_at` — genuinely different from the
+  supplier's own quoted dispatch estimate. New events:
+  `SUPPLIER_DISPATCH_DELAYED`, `SUPPLIER_DELIVERY_DELAYED`,
+  `SUPPLIER_CANCELLATION_RATE_INCREASED`,
+  `SUPPLIER_FULFILMENT_RELIABILITY_DETERIORATED`/`_RECOVERED`,
+  `SUPPLIER_FEED_STALE` (distinct from the existing `SUPPLIER_FEED_FAILED`
+  — aged data vs no data at all). Deliberately does not feed these into
+  `scoreSupplier`'s weighted total (`suppliers/scoring.ts`) — that would
+  mean redesigning its fixed weight allocation, a bigger decision than this
+  pass's scope; instead these facts surface as their own drill-down section
+  on `/automation` (below) and in the supplier-operations demo scenario, so
+  a person (or the existing scoring architecture, later) can act on them.
+- **Business intelligence extended** (`monitoring/repository.ts`,
+  `/automation`): system health gained `monitorsDegraded` (partial_success
+  runs in 24h) and `monitorsOverdue` (due but not run, via the same
+  `isMonitorDue` the scheduler itself uses). New supplier/product/
+  marketplace intelligence sections, each a list of real open-event subject
+  ids to drill into — never a bare count. All computed from one bounded
+  `domain_events` query (500 open events), grouped in memory, rather than a
+  dozen separate count queries.
+- **A 6th demo scenario** (`demo/monitoring.ts`): supplier operational
+  deterioration, run through the real monitor against in-memory facts —
+  dispatch/cancellation/reliability all worsen at once, three distinct
+  events, none of them automated (documented why: no safe mapping exists
+  yet).
+- **A real, systemic bug found by actively probing "supplier price
+  oscillation"** (this pass's own explicit instruction to attack the
+  system, not just make tests pass): several monitors' dedupe keys only
+  encoded the *direction* of a change (`Math.sign(change)`), not the
+  actual resulting value. Since nothing automatically resolves a
+  price/cost/sales-surge event once raised, **a second genuine change in
+  the same direction silently deduplicated against the first still-open
+  event forever** — a supplier that raised its price twice (£10 → £11 →
+  £13) would only ever generate one event, for the first rise; the second,
+  larger rise vanished. Found in `supplierMonitor` (price),
+  `profitabilityMonitor` (cost), `performanceMonitor` (surging/declining/
+  revenue-declined/return-rate), and `marketplaceMonitor` (external
+  mismatch). Fixed by including the actual observed value in every
+  affected dedupe key — repeated ticks at the *same* value still correctly
+  coalesce to one event; a *different* value (even in the same direction)
+  now correctly opens a fresh one. Four regression tests added (one per
+  monitor), each proving: first change → event #1 (left open); second
+  genuine change → event #2, not silently absorbed; re-observing the same
+  final value again → still dedupes normally.
+
+**Verified:** 626 tests (up from 596); typecheck, lint and `npm run build`
+all clean; no new migrations (68 tables, 23 migrations, unchanged);
+`db:verify` re-run clean; `/automation` (all new sections),
+`/api/monitoring/run`, `/suppliers`, `/marketplaces`, `/orders`,
+`/approvals` confirmed live in the browser with no console errors;
+`informax-site` confirmed untouched throughout (git status checked before
+and after).
+
+**IMPLEMENTED BUT NOT LIVE-VERIFIED / NOT UNIT TESTED:** `liveSubjects.ts`'s
+own SQL composition (the pagination loops, the joins) — consistent with
+`facts.ts`'s own established boundary since Milestone 7, this is
+server-only Supabase query code with no live project in this environment
+to run it against, and no PGlite-based mocking layer exists for arbitrary
+`PostgrestFilterBuilder` chains. What is fully tested is every piece of
+*decision logic* it feeds: `aggregateSalesWindow`, `computeWindowBounds`,
+`supplierOperationsMonitor`, and the extended `performanceMonitor`, all
+against real (non-mocked) in-memory stores.
+
+**NOT IMPLEMENTED (documented, not hidden):**
+- `liveSubjects.ts`'s compliance/profitability/sales-performance discovery
+  queries return every eligible row per page rather than a genuine SQL "is
+  this one actually due" predicate — a real optimisation for scale, not
+  built here (§12 in the brief explicitly said not to over-engineer this
+  pass).
+- `scoreSupplier`'s weighted total still does not incorporate the new
+  operational facts — a deliberate scope boundary, see above.
+- `SALES_VELOCITY_CHANGED` (one of the brief's example event names) was
+  not built as a separate signal — `PRODUCT_UNDERPERFORMING` (an absolute
+  floor) and the existing surge/decline events (relative comparisons)
+  already cover the same underlying fact from two angles; a third,
+  overlapping signal would add event noise without a new fact behind it.
+- No AI chat interface (out of scope, per the brief) — the event/fact
+  model was not changed in a way that affects its future readiness either
+  way.
+
+## 23. Next step
 
 Milestone 9 (analytics and business intelligence), per `docs/MILESTONES.md`.
-Its live sales/order aggregation query is also what Milestone 8's
-`performanceMonitor` is waiting on — build that once, and wire both up to
-it, rather than a second aggregation. Read `docs/PRINCIPLES.md` first. Do
-not start Milestone 10 (CEO dashboard) until Milestone 9 is tested and
-working — when it is built, it should read from `automation/repository.ts`'s
-`getAutomationStatus` and `monitoring/repository.ts`'s `getMonitoringStatus`
-directly, not re-summarise either.
+Its live sales/order aggregation is now substantially built
+(`orders/salesAggregation.ts`) — extend it rather than building a second
+one. Read `docs/PRINCIPLES.md` first. Do not start Milestone 10 (CEO
+dashboard) until Milestone 9 is tested and working — when it is built, it
+should read from `automation/repository.ts`'s `getAutomationStatus` and
+`monitoring/repository.ts`'s `getMonitoringStatus` directly, not
+re-summarise either.

@@ -1112,30 +1112,81 @@ notification.
   live queries and the marketplace monitor's live connector calls behave as
   expected against a real store/account.
 
-**EXPLICITLY NOT IMPLEMENTED (a real, documented gap, not a hidden stub):**
+**EXPLICITLY NOT IMPLEMENTED at the time this section was first written** (a
+real, documented gap, not a hidden stub) — **resolved by the Milestone 8.5
+completion pass below except where noted**:
 
-- `liveSubjects.ts` returns `[]` for `marketplace_listing_sync` beyond the
+- ~~`liveSubjects.ts` returns `[]` for `marketplace_listing_sync` beyond the
   single hardcoded `shopify` connector, and for
   `profitability_safety_net`/`compliance_freshness`/`sales_performance`
-  entirely — there is no live "enumerate every active product/supplier for
-  this org" sweep yet. The monitors themselves are fully real and tested;
-  only the "which subjects to check today" enumeration is a following-pass
-  gap, the same honest boundary Milestone 7 drew for `FactsLoader`.
-- No live sales/order aggregation query feeds `performanceMonitor` — its
-  comparison windows must be supplied by the caller until Milestone 9
-  (analytics and business intelligence) builds that aggregation for real.
-- Supplier delivery/dispatch/cancellation-rate/connector-health monitoring
-  (named in the brief's minimum supplier-monitor scope) is not built — only
-  stock and price are. A documented gap, not a guess dressed up as
-  coverage.
-- No dedicated CEO Dashboard route — the business-intelligence section
-  extends `/automation` per this milestone's brief; Milestone 10 remains
-  the dedicated dashboard.
+  entirely~~ — **resolved**: all 6 registered monitors now have real,
+  paginated, org-scoped discovery, and marketplace discovery reads each
+  listing's actual channel key rather than assuming Shopify.
+- ~~No live sales/order aggregation query feeds `performanceMonitor`~~ —
+  **resolved**: `orders/salesAggregation.ts` aggregates real
+  `orders`/`order_items`/`refunds` rows; Milestone 9 should extend this
+  module rather than build a second one.
+- ~~Supplier delivery/dispatch/cancellation-rate/connector-health
+  monitoring... is not built~~ — **resolved** for dispatch, delivery,
+  cancellation rate, fulfilment reliability and feed staleness (a new
+  `supplierOperationsMonitor`); still not built: supplier feed health
+  differentiated per-connector-type beyond `supplier_connectors`' own
+  status field (a finer distinction than this pass needed).
+- No dedicated CEO Dashboard route — **still not built**; the
+  business-intelligence section (now including supplier/product/marketplace
+  intelligence drill-downs) extends `/automation` per this milestone's
+  brief; Milestone 10 remains the dedicated dashboard.
 
 **Verified:** 596 tests (up from 539, +57); 23 migrations (68 tables);
 typecheck, lint and `npm run build` all clean;
 `/automation` and `/api/monitoring/run` confirmed live in the browser with
 no console errors; `informax-site` confirmed untouched throughout.
+
+### Milestone 8.5 — Complete live monitoring inputs & production subject discovery
+
+A completion pass, not a new numbered milestone, finishing the three gaps
+just above. Full detail in `HANDOVER.md` §22 — summary here:
+
+- `liveSubjects.ts` rewritten with real, bounded-paginated (500 rows/page,
+  20-page ceiling), org-scoped discovery for all 6 monitors.
+  `runner.ts`'s `SubjectProvider` now returns `{ subjects, errors }` so a
+  discovery source failing (one supplier's connector times out) yields
+  `partial_success`, never a false `success` or silently lost coverage.
+- `orders/salesAggregation.ts`: real sales-window aggregation (units,
+  orders, gross/net revenue, average order value, sales velocity,
+  refunds vs returns) from real order data. `performanceMonitor` gained
+  `REVENUE_DECLINED` and `PRODUCT_UNDERPERFORMING`/`PRODUCT_SALES_RECOVERED`.
+- New `supplierOperationsMonitor` (6th registered monitor,
+  `supplier_operations`): dispatch time, observed delivery days,
+  cancellation rate, fulfilment reliability and feed staleness, from real
+  `supplier_products`/`supplier_connectors`/`shipments` data, via a new
+  `FactsLoader.loadSupplierOperationalFacts` method.
+- `/automation`'s business-intelligence section extended with
+  `monitorsDegraded`/`monitorsOverdue` and supplier/product/marketplace
+  intelligence drill-downs (real open-event subject ids, never bare
+  counts). A 6th demo scenario added.
+- **A real, systemic bug found by deliberately probing "supplier price
+  oscillation"**: several monitors' dedupe keys encoded only the
+  *direction* of a change, not its resulting value — since nothing
+  auto-resolves a price/cost/sales-surge event, a **second genuine change
+  in the same direction silently vanished**, deduplicating against the
+  first still-open event forever. Fixed across `supplierMonitor`,
+  `profitabilityMonitor`, `performanceMonitor`, and `marketplaceMonitor` by
+  keying on the actual observed value; 4 regression tests added.
+
+**Verified:** 626 tests (up from 596, +30); no new migrations (68 tables,
+23 migrations, unchanged); typecheck, lint and `npm run build` all clean;
+`/automation`, `/api/monitoring/run`, `/suppliers`, `/marketplaces`,
+`/orders`, `/approvals` confirmed live with no console errors;
+`informax-site` confirmed untouched.
+
+**Still not implemented**: a genuine SQL "is this row actually due"
+predicate for compliance/profitability/sales-performance discovery (every
+eligible row is enumerated per page instead); `scoreSupplier`'s weighted
+total does not yet incorporate the new operational facts (deliberate — see
+`HANDOVER.md` §22); `SALES_VELOCITY_CHANGED` was not built as a separate
+event (judged redundant with `PRODUCT_UNDERPERFORMING` plus the existing
+surge/decline events).
 
 ## Milestone 9 — Analytics and business intelligence
 

@@ -10,9 +10,10 @@ import {
   type FactsLoader,
   type ProductFacts,
   type SupplierFacts,
+  type SupplierOperationalFacts,
 } from './factsTypes'
 
-export type { Fact, Freshness, ProductFacts, SupplierFacts, ChannelProductFacts, FactsLoader } from './factsTypes'
+export type { Fact, Freshness, ProductFacts, SupplierFacts, ChannelProductFacts, SupplierOperationalFacts, FactsLoader } from './factsTypes'
 export { allFactsFresh, describeFactState, FRESHNESS_WINDOW_HOURS } from './factsTypes'
 
 /**
@@ -97,6 +98,74 @@ export function getSupabaseFactsLoader(): FactsLoader {
         priceMinor: factFrom(data?.price_minor ?? null, asOf, FRESHNESS_WINDOW_HOURS.channelListing, now),
         fulfilmentSupplierId: factFrom(data?.fulfilment_supplier_id ?? null, asOf ?? data?.updated_at ?? null, FRESHNESS_WINDOW_HOURS.channelListing, now),
         externalId: factFrom(data?.external_id ?? null, asOf, FRESHNESS_WINDOW_HOURS.channelListing, now),
+      }
+    },
+
+    /**
+     * Dispatch/cancellation figures come from `supplier_products` (whichever
+     * row the connector last synced — a supplier can offer several
+     * products, so this picks the most recently checked one as
+     * representative of the supplier's current operational state).
+     * Delivery days are computed live from the supplier's most recent
+     * delivered shipments — real outcomes, not a quote. Feed status comes
+     * from `supplier_connectors`, one row per (supplier, connector).
+     */
+    async loadSupplierOperationalFacts(orgId: string, supplierId: string, now: Date = new Date()): Promise<SupplierOperationalFacts> {
+      const supabase = createServiceSupabase()
+
+      const [{ data: offers }, { data: connectors }, { data: fulfilments }] = await Promise.all([
+        supabase
+          .from('supplier_products')
+          .select('dispatch_days_min, dispatch_days_max, cancellation_rate_pct, fulfilment_success_rate_pct, stock_checked_at')
+          .eq('org_id', orgId).eq('supplier_id', supplierId)
+          .not('stock_checked_at', 'is', null)
+          .order('stock_checked_at', { ascending: false })
+          .limit(1),
+        supabase
+          .from('supplier_connectors')
+          .select('status, last_success_at, last_failure_at, consecutive_failures')
+          .eq('org_id', orgId).eq('supplier_id', supplierId)
+          .order('last_success_at', { ascending: false, nullsFirst: false })
+          .limit(1),
+        supabase.from('fulfilments').select('id').eq('org_id', orgId).eq('supplier_id', supplierId).limit(1), // Existence check only — see below.
+      ])
+
+      const offer = offers?.[0] ?? null
+      const connector = connectors?.[0] ?? null
+
+      // Real observed delivery time: the average shipped_at -> delivered_at
+      // gap across this supplier's most recent completed shipments. Two
+      // queries because `shipments` has no direct supplier_id — it is
+      // reached through fulfilments, the same join every other fulfilment
+      // query in this codebase uses.
+      let observedDeliveryDaysValue: number | null = null
+      let observedDeliveryDaysAsOf: string | null = null
+      if ((fulfilments?.length ?? 0) > 0) {
+        const { data: recentFulfilments } = await supabase
+          .from('fulfilments').select('id').eq('org_id', orgId).eq('supplier_id', supplierId)
+          .order('created_at', { ascending: false }).limit(50)
+        const fulfilmentIds = (recentFulfilments ?? []).map((f) => f.id)
+        if (fulfilmentIds.length > 0) {
+          const { data: shipments } = await supabase
+            .from('shipments').select('fulfilment_id, shipped_at, delivered_at')
+            .in('fulfilment_id', fulfilmentIds).not('shipped_at', 'is', null).not('delivered_at', 'is', null)
+            .order('delivered_at', { ascending: false }).limit(20)
+          const durations = (shipments ?? []).map((s) => (new Date(s.delivered_at!).getTime() - new Date(s.shipped_at!).getTime()) / (1000 * 60 * 60 * 24))
+          if (durations.length > 0) {
+            observedDeliveryDaysValue = Math.round((durations.reduce((a, b) => a + b, 0) / durations.length) * 10) / 10
+            observedDeliveryDaysAsOf = (shipments ?? [])[0]?.delivered_at ?? null
+          }
+        }
+      }
+
+      return {
+        supplierId,
+        dispatchDaysMin: factFrom(offer?.dispatch_days_min ?? null, offer?.stock_checked_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        dispatchDaysMax: factFrom(offer?.dispatch_days_max ?? null, offer?.stock_checked_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        cancellationRatePct: factFrom(offer?.cancellation_rate_pct ?? null, offer?.stock_checked_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        fulfilmentSuccessRatePct: factFrom(offer?.fulfilment_success_rate_pct ?? null, offer?.stock_checked_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        observedDeliveryDays: factFrom(observedDeliveryDaysValue, observedDeliveryDaysAsOf, FRESHNESS_WINDOW_HOURS.supplierOperations * 7, now), // Delivery outcomes change slowly; a wider window than a connector sync.
+        connectorStatus: factFrom(connector?.status ?? null, connector?.last_success_at ?? connector?.last_failure_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
       }
     },
   }

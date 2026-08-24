@@ -1,4 +1,4 @@
-import { factFrom, FRESHNESS_WINDOW_HOURS, type ChannelProductFacts, type FactsLoader, type ProductFacts, type SupplierFacts } from './factsTypes'
+import { factFrom, FRESHNESS_WINDOW_HOURS, type ChannelProductFacts, type FactsLoader, type ProductFacts, type SupplierFacts, type SupplierOperationalFacts } from './factsTypes'
 import type { Money } from '@/lib/core/money'
 
 /**
@@ -38,16 +38,29 @@ export interface SeedChannelProduct {
   updatedAt: string | null
 }
 
+export interface SeedSupplierOperations {
+  dispatchDaysMin: number | null
+  dispatchDaysMax: number | null
+  cancellationRatePct: number | null
+  fulfilmentSuccessRatePct: number | null
+  observedDeliveryDays: number | null
+  connectorStatus: string | null
+  /** Shared as-of for every field above — mirrors `stock_checked_at`/`last_success_at` in the real store. */
+  asOf: string | null
+}
+
 export function createInMemoryFactsLoader(seed?: {
   products?: Record<string, SeedProduct>
   suppliers?: Record<string, SeedSupplier>
   offers?: Record<string, SeedSupplierOffer> // key: `${supplierId}:${productId}`
   channelProducts?: Record<string, SeedChannelProduct>
+  supplierOperations?: Record<string, SeedSupplierOperations> // key: supplierId
 }): FactsLoader {
   const products = seed?.products ?? {}
   const suppliers = seed?.suppliers ?? {}
   const offers = seed?.offers ?? {}
   const channelProducts = seed?.channelProducts ?? {}
+  const supplierOperations = seed?.supplierOperations ?? {}
 
   return {
     async loadProductFacts(_orgId: string, productId: string, now: Date = new Date()): Promise<ProductFacts> {
@@ -83,6 +96,19 @@ export function createInMemoryFactsLoader(seed?: {
         priceMinor: factFrom(cp?.priceMinor, asOf, FRESHNESS_WINDOW_HOURS.channelListing, now),
         fulfilmentSupplierId: factFrom(cp?.fulfilmentSupplierId, asOf ?? cp?.updatedAt ?? null, FRESHNESS_WINDOW_HOURS.channelListing, now),
         externalId: factFrom(cp?.externalId, asOf, FRESHNESS_WINDOW_HOURS.channelListing, now),
+      }
+    },
+
+    async loadSupplierOperationalFacts(_orgId: string, supplierId: string, now: Date = new Date()): Promise<SupplierOperationalFacts> {
+      const ops = supplierOperations[supplierId]
+      return {
+        supplierId,
+        dispatchDaysMin: factFrom(ops?.dispatchDaysMin ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        dispatchDaysMax: factFrom(ops?.dispatchDaysMax ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        cancellationRatePct: factFrom(ops?.cancellationRatePct ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        fulfilmentSuccessRatePct: factFrom(ops?.fulfilmentSuccessRatePct ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+        observedDeliveryDays: factFrom(ops?.observedDeliveryDays ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations * 7, now),
+        connectorStatus: factFrom(ops?.connectorStatus ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
       }
     },
   }

@@ -120,6 +120,26 @@ function MonitoringDemoScenarioCard({ scenario }: { scenario: MonitoringDemoScen
   )
 }
 
+/** Every figure a drill-down list of real open-event subject ids — never a number with nothing behind it. */
+function IntelligenceCard({ title, groups }: { title: string; groups: readonly { label: string; ids: readonly string[]; tone?: Tone }[] }) {
+  return (
+    <Card>
+      <CardHeader title={title} description="Backed by open domain events only." />
+      <div className="divide-y divide-border border-t border-border">
+        {groups.map((group) => (
+          <div key={group.label} className="px-5 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium">{group.label}</p>
+              <Badge tone={group.ids.length === 0 ? 'neutral' : (group.tone ?? 'caution')}>{group.ids.length}</Badge>
+            </div>
+            {group.ids.length > 0 ? <p className="mt-1 truncate text-xs text-ink-subtle">{group.ids.join(', ')}</p> : null}
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 export default async function AutomationPage() {
   const [status, monitoring, session] = await Promise.all([getAutomationStatus(), getMonitoringStatus(), getSession()])
   const isOwner = session?.role === 'owner'
@@ -242,6 +262,18 @@ export default async function AutomationPage() {
             <p className="mt-1 text-sm font-medium">{monitoring.systemHealth.monitorsNeverRun.length}</p>
           </div>
         </div>
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-5">
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Degraded (24h)</p>
+            <p className={`mt-1 text-sm font-medium ${monitoring.systemHealth.monitorsDegraded > 0 ? 'text-caution' : ''}`}>{monitoring.systemHealth.monitorsDegraded}</p>
+          </div>
+          <div className="bg-surface px-4 py-3 sm:col-span-4">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Overdue</p>
+            <p className="mt-1 text-sm font-medium">
+              {monitoring.systemHealth.monitorsOverdue.length === 0 ? 'None' : monitoring.systemHealth.monitorsOverdue.join(', ')}
+            </p>
+          </div>
+        </div>
         {monitoring.systemHealth.monitorsNeverRun.length > 0 ? (
           <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
             Never run yet: {monitoring.systemHealth.monitorsNeverRun.join(', ')}. Nothing calls <code>POST /api/monitoring/run</code> for these until an external scheduler is configured — see HANDOVER.md.
@@ -285,6 +317,37 @@ export default async function AutomationPage() {
           <div className="border-t border-border px-5 py-8 text-center text-sm text-ink-muted">No monitoring events recorded yet.</div>
         ) : null}
       </Card>
+
+      {!monitoring.isDemo ? (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <IntelligenceCard
+            title="Supplier intelligence"
+            groups={[
+              { label: 'Dispatch delays', ids: monitoring.supplierIntelligence.suppliersWithDispatchDelays },
+              { label: 'Cancellation rate rising', ids: monitoring.supplierIntelligence.suppliersWithCancellationIncrease },
+              { label: 'Price increases', ids: monitoring.supplierIntelligence.suppliersWithPriceIncreases },
+              { label: 'Feed problems', ids: monitoring.supplierIntelligence.suppliersWithFeedProblems },
+            ]}
+          />
+          <IntelligenceCard
+            title="Product intelligence"
+            groups={[
+              { label: 'Newly profitable', ids: monitoring.productIntelligence.newlyProfitable, tone: 'positive' },
+              { label: 'Losing profitability', ids: monitoring.productIntelligence.losingProfitability },
+              { label: 'Rising sales', ids: monitoring.productIntelligence.risingSales, tone: 'positive' },
+              { label: 'Declining sales', ids: monitoring.productIntelligence.decliningSales },
+              { label: 'Requiring review', ids: monitoring.productIntelligence.requiringReview },
+            ]}
+          />
+          <IntelligenceCard
+            title="Marketplace intelligence"
+            groups={[
+              { label: 'Listings out of sync', ids: monitoring.marketplaceIntelligence.listingsOutOfSync },
+              { label: 'Failed external actions', ids: monitoring.marketplaceIntelligence.failedExternalActions },
+            ]}
+          />
+        </div>
+      ) : null}
 
       {monitoring.isDemo ? (
         <div className="grid gap-4">

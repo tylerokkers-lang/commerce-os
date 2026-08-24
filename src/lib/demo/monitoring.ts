@@ -6,6 +6,8 @@ import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import { runDueMonitors, type SubjectProvider } from '@/lib/monitoring/runner'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import { supplierMonitor, type SupplierMonitorSubject } from '@/lib/monitoring/monitors/supplierMonitor'
+import { supplierOperationsMonitor, type SupplierOperationsSubject } from '@/lib/monitoring/monitors/supplierOperationsMonitor'
+import type { SeedSupplierOperations } from '@/lib/automation/inMemoryFactsLoader'
 import { marketplaceListingMonitor, type MarketplaceListingSubject } from '@/lib/monitoring/monitors/marketplaceMonitor'
 import { shopifyDemoConnector } from '@/lib/marketplaces/connectors/shopifyDemo'
 import type { DomainEvent, MonitorContext } from '@/lib/monitoring/eventTypes'
@@ -41,6 +43,7 @@ export async function demoMonitoringScenarios(): Promise<readonly MonitoringDemo
     await scenarioMarketplaceMismatch(),
     await scenarioUnknownData(),
     await scenarioDeduplication(),
+    await scenarioSupplierOperations(),
   ]
 }
 
@@ -48,7 +51,7 @@ async function scenarioPriceIncrease(): Promise<MonitoringDemoScenario> {
   const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG]: DEMO_AUTOMATION_SETTINGS } })
   const events = createInMemoryEventStore({ scheduleMinutesByKey: { supplier_stock_and_price: 0 } })
   const subject: SupplierMonitorSubject = { supplierId: 'sup-northwind', productId: 'prod-knife-rail', channelProductId: 'cp-knife-rail', entityId: 'prod-knife-rail' }
-  const subjectsFor: SubjectProvider = async () => [subject]
+  const subjectsFor: SubjectProvider = async () => ({ subjects: [subject], errors: [] })
 
   const baselineFacts = createInMemoryFactsLoader({ offers: { 'sup-northwind:prod-knife-rail': { unitCost: fromMajor(9.1), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
   await runDueMonitors({ orgId: ORG, store, events, facts: baselineFacts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, subjectsFor, monitorKeys: ['supplier_stock_and_price'] })
@@ -80,7 +83,7 @@ async function scenarioOutOfStock(): Promise<MonitoringDemoScenario> {
   const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG]: DEMO_AUTOMATION_SETTINGS } })
   const events = createInMemoryEventStore({ scheduleMinutesByKey: { supplier_stock_and_price: 0 } })
   const subject: SupplierMonitorSubject = { supplierId: 'sup-northwind', productId: 'prod-drawer-dividers', channelProductId: 'cp-drawer-dividers', entityId: 'prod-drawer-dividers' }
-  const subjectsFor: SubjectProvider = async () => [subject]
+  const subjectsFor: SubjectProvider = async () => ({ subjects: [subject], errors: [] })
 
   const inStockFacts = createInMemoryFactsLoader({ offers: { 'sup-northwind:prod-drawer-dividers': { unitCost: fromMajor(6.5), shippingCost: fromMajor(1.5), stockQty: 30, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
   await runDueMonitors({ orgId: ORG, store, events, facts: inStockFacts, connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, subjectsFor, monitorKeys: ['supplier_stock_and_price'] })
@@ -148,6 +151,38 @@ async function scenarioUnknownData(): Promise<MonitoringDemoScenario> {
       'The facts loader cannot produce a fresh stock/cost reading for this supplier/product pair.',
       'The monitor records SUPPLIER_FEED_FAILED — explicitly not SUPPLIER_OUT_OF_STOCK — and stops for this subject.',
       `No automation job was enqueued (${batch.claimed} jobs claimed by the worker) — an unknown fact never triggers a guessed action.`,
+    ],
+  }
+}
+
+async function scenarioSupplierOperations(): Promise<MonitoringDemoScenario> {
+  const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG]: DEMO_AUTOMATION_SETTINGS } })
+  const events = createInMemoryEventStore()
+  const healthy: SeedSupplierOperations = {
+    dispatchDaysMin: 1, dispatchDaysMax: 2, cancellationRatePct: 1, fulfilmentSuccessRatePct: 98,
+    observedDeliveryDays: 3, connectorStatus: 'healthy', asOf: new Date().toISOString(),
+  }
+  const facts = createInMemoryFactsLoader({ supplierOperations: { 'sup-northwind': healthy } })
+  const subject: SupplierOperationsSubject = { supplierId: 'sup-northwind' }
+  await supplierOperationsMonitor.run(ctxFor(store, events, facts), [subject]) // Establish the healthy baseline.
+
+  const deteriorated = createInMemoryFactsLoader({
+    supplierOperations: { 'sup-northwind': { ...healthy, dispatchDaysMax: 9, cancellationRatePct: 12, fulfilmentSuccessRatePct: 78 } },
+  })
+  await supplierOperationsMonitor.run(ctxFor(store, events, deteriorated), [subject])
+
+  return {
+    key: 'supplier_operations',
+    label: 'Supplier operational deterioration',
+    description: 'Northwind Trading\'s real dispatch time, cancellation rate and fulfilment reliability — from the same supplier_products/supplier_connectors columns Milestone 3 already populates — worsen at once. Genuine facts, not a re-run of the price/stock check.',
+    events: events.getState().events,
+    jobsEnqueued: store.getState().jobs.map((j) => ({ jobType: j.jobType, payload: j.payload })),
+    runsCompleted: 2,
+    narrative: [
+      'Baseline: 1-2 day dispatch, 1% cancellations, 98% fulfilment success — no events.',
+      'Real change observed: dispatch now up to 9 days, cancellations at 12%, fulfilment success down to 78%.',
+      'SUPPLIER_DISPATCH_DELAYED, SUPPLIER_CANCELLATION_RATE_INCREASED and SUPPLIER_FULFILMENT_RELIABILITY_DETERIORATED are all raised — genuinely different facts, not one event standing in for three.',
+      'No automated action is taken (no safe mapping exists for these yet — see EVENT_TO_JOB_MAPPING) — a human reviewing supplier intelligence on this page sees exactly why, and the existing supplier-scoring page can be fed these same real figures rather than a manually-entered guess.',
     ],
   }
 }

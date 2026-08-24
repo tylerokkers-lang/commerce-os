@@ -64,7 +64,12 @@ export const marketplaceListingMonitor: Monitor<MarketplaceListingSubject> = {
       observationsCreated += group.length
 
       for (const discrepancy of discrepancies) {
-        const dedupeKey = `marketplace_sync:${connectorKey}:${discrepancy.channelProductRef}:${discrepancy.field}`
+        // Keyed on the marketplace's actual current value, not just which
+        // field diverged: if the marketplace price drifts again to a
+        // different figure before reconciliation runs, that is a fresh
+        // fact, not the same still-open discrepancy (Milestone 8.5 —
+        // see supplierMonitor.ts's price dedupeKey for the general fix).
+        const dedupeKey = `marketplace_sync:${connectorKey}:${discrepancy.channelProductRef}:${discrepancy.field}:${JSON.stringify(discrepancy.marketplaceValue)}`
         const eventType = discrepancy.field === 'price' ? 'LISTING_PRICE_CHANGED_EXTERNALLY' : discrepancy.field === 'listing_status' ? 'LISTING_STATUS_CHANGED_EXTERNALLY' : 'LISTING_OUT_OF_SYNC'
 
         const result = await ctx.events.createEvent({

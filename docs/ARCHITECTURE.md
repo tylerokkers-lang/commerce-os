@@ -103,7 +103,9 @@ approvalWorkflow.ts, killSwitch.ts                     the approval and kill-swi
 Two interfaces are satisfied twice each, on purpose: `AutomationStore`
 (`store.ts`) by `supabaseStore.ts` (production) and `inMemoryStore.ts`
 (tests), and `FactsLoader` (`factsTypes.ts`) by `facts.ts` (production) and
-`inMemoryFactsLoader.ts` (tests). This is what lets
+`inMemoryFactsLoader.ts` (tests) — `FactsLoader` gained a fourth method in
+Milestone 8.5, `loadSupplierOperationalFacts` (dispatch/delivery/
+cancellation/feed-health facts), satisfied identically in both places. This is what lets
 `tests/automation-engine-e2e.test.ts`, `tests/automation-job-handlers.test.ts`
 and `tests/automation-execution-e2e.test.ts` drive the *real* orchestration
 code (`runWorkerBatch`, `executePriceChange`, `executeSupplierSwitch`) end
@@ -111,7 +113,7 @@ to end without a live Supabase project — the standard way to test code that
 would otherwise require a live external service, and the reason two real
 bugs were found by tests rather than by inspection (see `HANDOVER.md` §18–19).
 
-### `src/lib/monitoring/` (Milestone 8)
+### `src/lib/monitoring/` (Milestone 8, subject discovery completed in 8.5)
 
 Sits strictly upstream of `automation/`: monitors observe and raise domain
 events; they never decide or act. Enforced structurally, not just by
@@ -121,14 +123,28 @@ convention — no monitor imports a marketplace connector's write methods or
 ```
 eventTypes.ts             pure interfaces/types (EventStore, Monitor, MonitorContext)
 eventStore.ts, inMemoryEventStore.ts   Supabase-backed and in-memory EventStore
-monitors/*.ts              the 5 monitors (supplier, marketplace, compliance,
+monitors/*.ts              the 6 monitors (supplier stock/price, supplier
+                           operations, marketplace, compliance,
                            profitability, sales performance), each composing
                            an existing engine, never duplicating one
 registry.ts                closed MONITORS map + explicit EVENT_TO_JOB_MAPPING
-runner.ts                  runDueMonitors: schedule check -> monitor run -> events -> jobs
-liveSubjects.ts             real "which subjects to check" queries (partial — see HANDOVER.md)
-repository.ts               the /automation page's business-intelligence data
+runner.ts                  runDueMonitors: schedule check -> subject discovery
+                           -> monitor run -> events -> jobs; SubjectProvider
+                           returns { subjects, errors } so one discovery
+                           source failing yields partial_success, not a
+                           false success or lost coverage (Milestone 8.5)
+liveSubjects.ts             real, paginated, org-scoped "which subjects to
+                           check" queries for all 6 monitors (Milestone 8.5)
+repository.ts               the /automation page's business-intelligence data,
+                           including supplier/product/marketplace
+                           intelligence drill-downs (Milestone 8.5)
 ```
+
+`src/lib/orders/salesAggregation.ts` is `monitoring/`'s sibling for real
+sales data: pure aggregation (`aggregateSalesWindow`, `computeWindowBounds`)
+over `orders`/`order_items`/`refunds` rows, kept DB-free and fully unit
+tested — `liveSubjects.ts` is the one server-only caller that queries the
+real tables and feeds it.
 
 The same "define the interface, satisfy it twice" pattern as `automation/`:
 `EventStore` (`eventTypes.ts`) is satisfied by `eventStore.ts` (production)

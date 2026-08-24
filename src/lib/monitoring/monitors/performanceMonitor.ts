@@ -25,6 +25,15 @@ export interface PerformanceWindow {
   /** ISO start/end so the comparison basis is stored, not just the conclusion. */
   windowStart: string
   windowEnd: string
+  /**
+   * Added Milestone 8.5, optional so hand-built windows (existing tests,
+   * demo scenarios) remain valid — real discovery (`liveSubjects.ts`, via
+   * `orders/salesAggregation.ts`) always supplies them. Events that need
+   * these skip themselves rather than guess when they are absent, per the
+   * same fact-first rule as everything else in this monitor.
+   */
+  netRevenueMinor?: number
+  salesVelocityPerDay?: number
 }
 
 export interface PerformanceMonitorSubject {
@@ -51,6 +60,7 @@ export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
     const errors: string[] = []
     let eventsCreated = 0
     let eventsDeduplicated = 0
+    let observationsCreated = 0
 
     const surgeThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:surge_threshold_pct`, 50)
     const declineThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:decline_threshold_pct`, -30)
@@ -70,14 +80,19 @@ export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
         if (unitsChangePct !== null && unitsChangePct >= surgeThresholdPct) {
           const result = await ctx.events.createEvent({
             orgId: ctx.orgId, eventType: 'PRODUCT_SALES_SURGING', subjectType: 'product', subjectId: subject.productId,
-            source: 'internal', severity: 'info', facts: { ...basis, changePct: unitsChangePct }, dedupeKey: `performance:${subject.productId}:surging`,
+            // Keyed on the current window's actual unit count, not just
+            // "surging": a product surging again from a new baseline
+            // (e.g. 100 units, then later 100 -> 250) is a fresh fact each
+            // time — see supplierMonitor.ts's price dedupeKey for the same
+            // fix and why (Milestone 8.5).
+            source: 'internal', severity: 'info', facts: { ...basis, changePct: unitsChangePct }, dedupeKey: `performance:${subject.productId}:surging:${subject.currentWindow.unitsSold}`,
           })
           if (!result.deduplicated) eventsCreated++
           else eventsDeduplicated++
         } else if (unitsChangePct !== null && unitsChangePct <= declineThresholdPct) {
           const result = await ctx.events.createEvent({
             orgId: ctx.orgId, eventType: 'PRODUCT_SALES_DECLINING', subjectType: 'product', subjectId: subject.productId,
-            source: 'internal', severity: 'warning', facts: { ...basis, changePct: unitsChangePct }, dedupeKey: `performance:${subject.productId}:declining`,
+            source: 'internal', severity: 'warning', facts: { ...basis, changePct: unitsChangePct }, dedupeKey: `performance:${subject.productId}:declining:${subject.currentWindow.unitsSold}`,
           })
           if (!result.deduplicated) {
             eventsCreated++
@@ -101,10 +116,64 @@ export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
         if (returnRateChangePct !== null && returnRateChangePct >= returnRateThresholdPct && currentReturnRate > previousReturnRate) {
           const result = await ctx.events.createEvent({
             orgId: ctx.orgId, eventType: 'PRODUCT_RETURN_RATE_INCREASED', subjectType: 'product', subjectId: subject.productId,
-            source: 'internal', severity: 'warning', facts: { previousReturnRatePct: previousReturnRate, currentReturnRatePct: currentReturnRate }, dedupeKey: `performance:${subject.productId}:return_rate`,
+            source: 'internal', severity: 'warning', facts: { previousReturnRatePct: previousReturnRate, currentReturnRatePct: currentReturnRate }, dedupeKey: `performance:${subject.productId}:return_rate:${Math.round(currentReturnRate * 10)}`,
           })
           if (!result.deduplicated) eventsCreated++
           else eventsDeduplicated++
+        }
+
+        // Revenue can decline independently of units (discounting, mix
+        // shift, refunds) — a genuinely different fact from a unit-volume
+        // change, so it gets its own threshold and its own event rather
+        // than being inferred from the units comparison above.
+        if (subject.previousWindow.netRevenueMinor !== undefined && subject.currentWindow.netRevenueMinor !== undefined) {
+          const revenueChangePct = pctChange(subject.previousWindow.netRevenueMinor, subject.currentWindow.netRevenueMinor)
+          const revenueDeclineThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:revenue_decline_threshold_pct`, -30)
+          if (revenueChangePct !== null && revenueChangePct <= revenueDeclineThresholdPct) {
+            const result = await ctx.events.createEvent({
+              orgId: ctx.orgId, eventType: 'REVENUE_DECLINED', subjectType: 'product', subjectId: subject.productId,
+              source: 'internal', severity: 'warning',
+              facts: { previousNetRevenueMinor: subject.previousWindow.netRevenueMinor, currentNetRevenueMinor: subject.currentWindow.netRevenueMinor, changePct: revenueChangePct },
+              dedupeKey: `performance:${subject.productId}:revenue_declined:${subject.currentWindow.netRevenueMinor}`,
+            })
+            if (!result.deduplicated) eventsCreated++
+            else eventsDeduplicated++
+          }
+        }
+
+        // Absolute-floor check, distinct from the relative surge/decline
+        // comparisons above: a product selling consistently below a
+        // configured minimum velocity is "underperforming" regardless of
+        // whether it changed recently — and recovering above that floor
+        // resolves the open event rather than leaving a stale alert.
+        if (subject.currentWindow.salesVelocityPerDay !== undefined) {
+          const underperformingThreshold = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:underperforming_velocity_per_day`, 0.5)
+          const previousObservation = await ctx.events.getObservation(ctx.orgId, MONITOR_KEY, 'product', subject.productId)
+          const wasUnderperforming = previousObservation?.value.underperforming === true
+
+          if (subject.currentWindow.salesVelocityPerDay < underperformingThreshold) {
+            const result = await ctx.events.createEvent({
+              orgId: ctx.orgId, eventType: 'PRODUCT_UNDERPERFORMING', subjectType: 'product', subjectId: subject.productId,
+              source: 'internal', severity: 'warning',
+              facts: { salesVelocityPerDay: subject.currentWindow.salesVelocityPerDay, thresholdPerDay: underperformingThreshold },
+              dedupeKey: `performance:${subject.productId}:underperforming`,
+            })
+            if (!result.deduplicated) eventsCreated++
+            else eventsDeduplicated++
+          } else if (wasUnderperforming) {
+            const result = await ctx.events.createEvent({
+              orgId: ctx.orgId, eventType: 'PRODUCT_SALES_RECOVERED', subjectType: 'product', subjectId: subject.productId,
+              source: 'internal', severity: 'info',
+              facts: { salesVelocityPerDay: subject.currentWindow.salesVelocityPerDay, thresholdPerDay: underperformingThreshold },
+              dedupeKey: null,
+            })
+            if (!result.deduplicated) eventsCreated++
+          }
+
+          await ctx.events.upsertObservation(ctx.orgId, MONITOR_KEY, 'product', subject.productId, {
+            status: 'ok', value: { underperforming: subject.currentWindow.salesVelocityPerDay < underperformingThreshold }, lastCheckedAt: ctx.now.toISOString(),
+          })
+          observationsCreated++
         }
 
         if (subject.adSpendLimitMinor !== null && subject.currentWindow.adSpendMinor > subject.adSpendLimitMinor) {
@@ -120,6 +189,6 @@ export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
       }
     }
 
-    return { subjectsChecked: subjects.length, observationsCreated: 0, eventsCreated, eventsDeduplicated, errors }
+    return { subjectsChecked: subjects.length, observationsCreated, eventsCreated, eventsDeduplicated, errors }
   },
 }

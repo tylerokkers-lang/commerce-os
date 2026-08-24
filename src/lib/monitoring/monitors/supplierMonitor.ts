@@ -121,7 +121,15 @@ export const supplierMonitor: Monitor<SupplierMonitorSubject> = {
               orgId: ctx.orgId, eventType, subjectType: 'channel_product', subjectId: subject.channelProductId,
               source: 'external', sourceConnectorKey: subject.supplierId, severity: change > 0 ? 'warning' : 'info',
               previousValue: { unitCostMinor: previousCostMinor }, currentValue: { unitCostMinor: currentCostMinor },
-              facts: { changePct: change }, dedupeKey: `${dedupeBase}:price:${Math.sign(change)}`,
+              // Keyed on the actual resulting price, not just direction:
+              // a supplier that raises its price again — £10 -> £11 -> £13
+              // — is two genuinely different facts, not one. Keying by
+              // sign alone (the original Milestone 8 design) meant the
+              // second increase silently deduplicated against the first
+              // still-open event forever, because nothing ever resolves a
+              // price-change event automatically. Found by actively
+              // probing "supplier price oscillation" (Milestone 8.5).
+              facts: { changePct: change }, dedupeKey: `${dedupeBase}:price:${Math.sign(change)}:${currentCostMinor}`,
             })
             if (!result.deduplicated) {
               eventsCreated++
