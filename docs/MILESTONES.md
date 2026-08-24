@@ -1793,6 +1793,21 @@ existing reads); typecheck, lint and `npm run build` all clean;
 errors; `informax-site` confirmed untouched throughout (git status
 checked before and after).
 
+**Audit & hardening pass (same day, follow-up session, see
+`HANDOVER.md` §27 for full detail):** a genuine multi-currency sales
+aggregation gap (in this milestone's own `getCEOCommandCentre`
+dependency chain via Milestone 10's analytics, and separately in
+Milestone 8.5's `discoverSalesPerformance` live monitor-subject
+discovery) and a genuine compliance-visibility gap (blocked/
+review-required products reached `/compliance` directly but not the
+priority queue or health scorecard) were found and fixed. `getComplianceIssues()`
+(the pre-existing Milestone 1/2 compliance repository, not a new engine)
+is now composed into `buildPriorities`/`buildBusinessHealthScorecard`
+alongside the four sources already listed above, still via
+`Promise.allSettled`, still failing safe to `[]`. 796 tests (up from
+792); typecheck, lint, `npm run build` and `db:verify` re-confirmed
+clean; no schema change.
+
 ## Milestone 12 — Commerce Intelligence chat
 
 An AI chat interface answering real questions about the actual business

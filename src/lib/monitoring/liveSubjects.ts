@@ -209,8 +209,8 @@ async function discoverSalesPerformance(orgId: string, windowHours: number = SAL
   if (orderItems.rows.length === 0) return { subjects: [], errors } // No sales data at all for any of these products — nothing to compare, not a guess.
 
   const orderIds = [...new Set(orderItems.rows.map((i) => i.order_id))]
-  const orders = await paginate<{ id: string; status: string; subtotal_minor: number; placed_at: string }>((from, to) =>
-    supabase.from('orders').select('id, status, subtotal_minor, placed_at').eq('org_id', orgId).in('id', orderIds).gte('placed_at', previous.start.toISOString()).range(from, to),
+  const orders = await paginate<{ id: string; status: string; subtotal_minor: number; placed_at: string; currency: string }>((from, to) =>
+    supabase.from('orders').select('id, status, subtotal_minor, placed_at, currency').eq('org_id', orgId).in('id', orderIds).gte('placed_at', previous.start.toISOString()).range(from, to),
   )
   if (orders.error) errors.push(`orders: ${orders.error}`)
   const orderById = new Map(orders.rows.map((o) => [o.id, o]))
@@ -221,6 +221,12 @@ async function discoverSalesPerformance(orgId: string, windowHours: number = SAL
   if (refunds.error) errors.push(`refunds: ${refunds.error}`)
 
   const linesByProduct = new Map<string, OrderLineFact[]>()
+  // A real, checkable fact from `orders.currency` — never assumed. Like
+  // `analytics/liveAnalyticsFacts.ts`'s `mixedCurrencies`, `aggregateSalesWindow`
+  // itself has no currency awareness, so a product whose orders span more
+  // than one currency must have its subject skipped below rather than
+  // produce a revenue comparison that silently mixes currencies.
+  const currenciesByProduct = new Map<string, Set<string>>()
   for (const item of orderItems.rows) {
     if (!item.product_id) continue // A line whose product was since deleted — nothing to attribute it to.
     const order = orderById.get(item.order_id)
@@ -228,6 +234,9 @@ async function discoverSalesPerformance(orgId: string, windowHours: number = SAL
     const list = linesByProduct.get(item.product_id) ?? []
     list.push({ orderId: item.order_id, orderStatus: order.status, orderSubtotalMinor: order.subtotal_minor, placedAt: order.placed_at, quantity: item.quantity, lineTotalMinor: item.line_total_minor })
     linesByProduct.set(item.product_id, list)
+    const currencies = currenciesByProduct.get(item.product_id) ?? new Set<string>()
+    currencies.add(order.currency)
+    currenciesByProduct.set(item.product_id, currencies)
   }
 
   const refundsByOrder = new Map<string, RefundFact[]>()
@@ -257,6 +266,7 @@ async function discoverSalesPerformance(orgId: string, windowHours: number = SAL
     .map((listing): PerformanceMonitorSubject | null => {
       const supplierId = listing.fulfilment_supplier_id ?? preferredSupplierByProduct.get(listing.product_id)
       if (!supplierId) return null // No known supplier to attribute a chained profitability recheck to.
+      if ((currenciesByProduct.get(listing.product_id)?.size ?? 0) > 1) return null // Mixed-currency orders — a revenue comparison here would silently combine them, so this product is skipped rather than compared.
       const lines = linesByProduct.get(listing.product_id) ?? []
       const productRefunds = refundsByProduct.get(listing.product_id) ?? []
       return {

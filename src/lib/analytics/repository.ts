@@ -92,7 +92,7 @@ export async function getCashflow(): Promise<CashflowProjection> {
 import { getMonitoringStatus } from '@/lib/monitoring/repository'
 import { getAutomationSettings } from '@/lib/automation/settings'
 import { resolvePeriod, previousEquivalentPeriod, type Period, type PeriodKey } from '@/lib/orders/salesAggregation'
-import { buildSalesAnalytics, emptySalesAnalytics, type SalesAnalytics } from './salesAnalytics'
+import { emptySalesAnalytics, resolveSalesAnalyticsSafely, type SalesAnalytics } from './salesAnalytics'
 import { buildProductChannelProfitAnalytics, type ProductChannelProfitAnalytics } from './profitAnalytics'
 import { buildChannelAnalytics, type ChannelAnalytics } from './channelAnalytics'
 import { classifyProduct, isLossMakingOnAllKnownChannels, DEFAULT_PRODUCT_CLASSIFICATION_THRESHOLDS, type ProductClassificationTag } from './productAnalytics'
@@ -199,11 +199,14 @@ export async function getAnalyticsDashboard(periodKey: PeriodKey = 'last_30_days
     loadFulfilmentFacts(session.orgId, period),
   ])
 
-  const sales = buildSalesAnalytics(salesFacts.current, salesFacts.previous, period, salesFacts.currency)
+  // A mixed-currency window is never silently summed (Milestone 11 §5/§8's
+  // explicit currency-safety requirement) — resolved through the one pure,
+  // tested gate every sales-analytics call site shares.
+  const sales = resolveSalesAnalyticsSafely(salesFacts.current, salesFacts.previous, period, salesFacts.currency, salesFacts.mixedCurrencies)
 
   const channels: ChannelAnalytics[] = (Object.keys(salesFacts.byChannel) as ChannelKey[]).map((channel) => {
     const channelSales = salesFacts.byChannel[channel]!
-    const channelSalesAnalytics = buildSalesAnalytics(channelSales.current, channelSales.previous, period, salesFacts.currency)
+    const channelSalesAnalytics = resolveSalesAnalyticsSafely(channelSales.current, channelSales.previous, period, salesFacts.currency, salesFacts.mixedCurrencies)
     const productsForChannel = profitFacts.rows.filter((r) => r.channel === channel).map((r) => buildProductChannelProfitAnalytics(r.productId, r.channel, toPriceCostInput(r, settings.minNetMarginPct)))
     return buildChannelAnalytics(channel, CHANNEL_LABELS[channel], channelSalesAnalytics, productsForChannel)
   })

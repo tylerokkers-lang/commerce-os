@@ -31,6 +31,18 @@ export interface OrgSalesFacts {
   byChannel: Partial<Record<ChannelKey, { current: SalesWindowMetrics; previous: SalesWindowMetrics | null }>>
   /** True only when the org genuinely has zero orders ever, not just zero in this window — lets a caller distinguish "empty period" from "empty business." */
   hasAnyOrdersEver: boolean
+  /**
+   * Non-empty only when at least one order in the queried window is priced
+   * in a currency other than the org's own `base_currency` (Milestone 11
+   * §5/§8's explicit currency-safety requirement — every `orders` row
+   * carries its own `currency` column, so this is a real, checkable fact,
+   * not a theoretical concern). `aggregateSalesWindow` sums raw minor-unit
+   * numbers with no currency awareness of its own, so silently feeding it
+   * a mix would silently combine, say, GBP and USD as if they were the
+   * same money. The caller (`getAnalyticsDashboard`) must report the
+   * affected figures as `unavailable` rather than aggregate them.
+   */
+  mixedCurrencies: readonly CurrencyCode[]
 }
 
 async function loadOrgCurrency(orgId: string): Promise<CurrencyCode> {
@@ -52,14 +64,20 @@ export async function loadOrgSalesFacts(orgId: string, period: Period, previousP
 
   const earliestBound = previousPeriod ? previousPeriod.start : period.start
 
-  const orders = await paginate<{ id: string; channel: ChannelKey; status: string; subtotal_minor: number; placed_at: string }>((from, to) =>
-    supabase.from('orders').select('id, channel, status, subtotal_minor, placed_at').eq('org_id', orgId).gte('placed_at', earliestBound).lte('placed_at', period.end).range(from, to),
+  const orders = await paginate<{ id: string; channel: ChannelKey; status: string; subtotal_minor: number; placed_at: string; currency: string }>((from, to) =>
+    supabase.from('orders').select('id, channel, status, subtotal_minor, placed_at, currency').eq('org_id', orgId).gte('placed_at', earliestBound).lte('placed_at', period.end).range(from, to),
   )
   const { count: anyOrderCount } = await supabase.from('orders').select('id', { count: 'exact', head: true }).eq('org_id', orgId)
 
+  // A real, checkable fact from `orders.currency` — never assumed. Any
+  // order priced outside the org's own base currency makes a blind sum
+  // across the window unsafe; the caller must report `unavailable` for
+  // the affected figures rather than silently combine them.
+  const mixedCurrencies = [...new Set(orders.rows.map((o) => o.currency))].filter((c) => c !== currency) as CurrencyCode[]
+
   if (orders.rows.length === 0) {
     const empty: SalesWindowMetrics = { unitsSold: 0, ordersCount: 0, grossRevenueMinor: 0, refundsMinor: 0, refundsCount: 0, returnsCount: 0, netRevenueMinor: 0, averageOrderValueMinor: null, salesVelocityPerDay: 0, adSpendMinor: 0, windowStart: period.start, windowEnd: period.end }
-    return { currency, current: empty, previous: previousPeriod ? { ...empty, windowStart: previousPeriod.start, windowEnd: previousPeriod.end } : null, byChannel: {}, hasAnyOrdersEver: (anyOrderCount ?? 0) > 0 }
+    return { currency, current: empty, previous: previousPeriod ? { ...empty, windowStart: previousPeriod.start, windowEnd: previousPeriod.end } : null, byChannel: {}, hasAnyOrdersEver: (anyOrderCount ?? 0) > 0, mixedCurrencies: [] }
   }
 
   const orderIds = orders.rows.map((o) => o.id)
@@ -96,7 +114,7 @@ export async function loadOrgSalesFacts(orgId: string, period: Period, previousP
     }
   }
 
-  return { currency, current, previous, byChannel, hasAnyOrdersEver: (anyOrderCount ?? 0) > 0 }
+  return { currency, current, previous, byChannel, hasAnyOrdersEver: (anyOrderCount ?? 0) > 0, mixedCurrencies }
 }
 
 export interface ProductProfitFactRow {

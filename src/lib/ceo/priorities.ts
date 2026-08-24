@@ -1,7 +1,7 @@
 import type { AnalyticsDashboard } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
-import type { ApprovalItem } from '@/lib/core/domain'
+import type { ApprovalItem, ComplianceIssue } from '@/lib/core/domain'
 import type { Priority, PrioritySeverity } from './types'
 
 /**
@@ -36,6 +36,8 @@ export interface BuildPrioritiesInput {
   monitoring: MonitoringStatus
   automation: AutomationStatus
   approvals: readonly ApprovalItem[]
+  /** Optional so every pre-existing call site (tests, demo scenarios not focused on compliance) keeps working unchanged — defaults to no known issues, never a guess. */
+  complianceIssues?: readonly ComplianceIssue[]
   now: string
 }
 
@@ -43,6 +45,7 @@ const CHANNEL_LABELS: Record<string, string> = { shopify: 'Shopify', amazon_uk: 
 
 export function buildPriorities(input: BuildPrioritiesInput): readonly Priority[] {
   const priorities: Priority[] = []
+  const complianceIssues = input.complianceIssues ?? []
 
   // 1. Everything Milestone 10 already turned into a business alert.
   for (const alert of input.analytics.alerts) {
@@ -154,7 +157,58 @@ export function buildPriorities(input: BuildPrioritiesInput): readonly Priority[
     })
   }
 
-  // 5. Compliance rechecks required.
+  // 5a. Products actively BLOCKED by compliance (verdict = 'fail') — a fatal
+  // decision already made, distinct from and more severe than "needs a
+  // recheck." Consolidated per channel, per `docs/PRINCIPLES.md` §3 — a
+  // product blocked on Amazon and live on Shopify is never one blanket
+  // claim. Never implies automation bypassed the block: the recommended
+  // next step is always to review, never "automation will handle it."
+  const blockedByChannel = new Map<string, ComplianceIssue[]>()
+  for (const issue of complianceIssues) {
+    if (issue.verdict !== 'fail') continue
+    const list = blockedByChannel.get(issue.channel) ?? []
+    list.push(issue)
+    blockedByChannel.set(issue.channel, list)
+  }
+  for (const [channel, issues] of blockedByChannel) {
+    priorities.push({
+      id: `compliance:blocked:${channel}`,
+      severity: 'critical', category: 'compliance_risk',
+      title: `${issues.length} product${issues.length === 1 ? ' is' : 's are'} blocked by compliance on ${CHANNEL_LABELS[channel] ?? channel}.`,
+      detail: `Blocked, not merely under review — a decision already made against the current ruleset. ${issues[0].blockingReasons[0] ?? 'See /compliance for the specific requirement.'}`,
+      affectedEntityType: 'channel', affectedEntityId: channel,
+      occurredAt: issues.reduce((latest, i) => (i.assessedAt > latest ? i.assessedAt : latest), issues[0].assessedAt),
+      source: 'compliance/repository.ts: getComplianceIssues',
+      evidence: { channel, count: issues.length, productIds: issues.map((i) => i.productId), reasons: issues.map((i) => i.blockingReasons).flat() },
+      recommendedNextStep: 'Review the blocking requirement on /compliance — a block is never bypassed automatically.',
+      actionRequired: true, actionHref: '/compliance',
+    })
+  }
+
+  // 5b. review_required listings — genuinely different from a fatal block: not yet decided, not automatically approved either.
+  const reviewByChannel = new Map<string, ComplianceIssue[]>()
+  for (const issue of complianceIssues) {
+    if (issue.verdict !== 'review_required') continue
+    const list = reviewByChannel.get(issue.channel) ?? []
+    list.push(issue)
+    reviewByChannel.set(issue.channel, list)
+  }
+  for (const [channel, issues] of reviewByChannel) {
+    priorities.push({
+      id: `compliance:review_required:${channel}`,
+      severity: 'high', category: 'compliance_risk',
+      title: `${issues.length} product${issues.length === 1 ? ' needs' : 's need'} compliance review on ${CHANNEL_LABELS[channel] ?? channel}.`,
+      detail: 'Not yet decided — never treated as approved while unresolved.',
+      affectedEntityType: 'channel', affectedEntityId: channel,
+      occurredAt: issues.reduce((latest, i) => (i.assessedAt > latest ? i.assessedAt : latest), issues[0].assessedAt),
+      source: 'compliance/repository.ts: getComplianceIssues',
+      evidence: { channel, count: issues.length, productIds: issues.map((i) => i.productId) },
+      recommendedNextStep: 'Review the outstanding requirement on /compliance.',
+      actionRequired: true, actionHref: '/compliance',
+    })
+  }
+
+  // 5c. Compliance rechecks required (staleness-triggered — a listing whose supplier/product details changed since its last assessment, distinct from an active fail/review verdict above).
   if (input.monitoring.businessAlerts.complianceRechecksRequired > 0) {
     priorities.push({
       id: 'compliance:rechecks_required',

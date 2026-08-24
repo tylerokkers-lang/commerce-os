@@ -5,6 +5,7 @@ import { getAnalyticsDashboard, type AnalyticsDashboard } from '@/lib/analytics/
 import { getMonitoringStatus, type MonitoringStatus } from '@/lib/monitoring/repository'
 import { getAutomationStatus, type AutomationStatus } from '@/lib/automation/repository'
 import { getPendingApprovals } from '@/lib/automation/approvals'
+import { getComplianceIssues } from '@/lib/compliance/repository'
 import { buildPriorities } from './priorities'
 import { buildBusinessHealthScorecard } from './healthScorecard'
 import { demoCEOScenarios } from '@/lib/demo/ceo'
@@ -84,11 +85,12 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
   const session = await requireSession()
   const now = new Date().toISOString()
 
-  const [analyticsResult, monitoringResult, automationResult, approvalsResult] = await Promise.allSettled([
+  const [analyticsResult, monitoringResult, automationResult, approvalsResult, complianceResult] = await Promise.allSettled([
     getAnalyticsDashboard(),
     getMonitoringStatus(),
     getAutomationStatus(),
     getPendingApprovals(),
+    getComplianceIssues(),
   ])
 
   const dataSourceFailures: string[] = []
@@ -96,14 +98,16 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
   if (monitoringResult.status === 'rejected') dataSourceFailures.push('monitoring')
   if (automationResult.status === 'rejected') dataSourceFailures.push('automation')
   if (approvalsResult.status === 'rejected') dataSourceFailures.push('approvals')
+  if (complianceResult.status === 'rejected') dataSourceFailures.push('compliance')
 
   const analytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : fallbackAnalyticsDashboard()
   const monitoring = monitoringResult.status === 'fulfilled' ? monitoringResult.value : fallbackMonitoringStatus()
   const automation = automationResult.status === 'fulfilled' ? automationResult.value : fallbackAutomationStatus()
   const approvals = approvalsResult.status === 'fulfilled' ? approvalsResult.value : []
+  const complianceIssues = complianceResult.status === 'fulfilled' ? complianceResult.value : []
 
-  const priorities = buildPriorities({ analytics, monitoring, automation, approvals, now })
-  const businessHealth = buildBusinessHealthScorecard({ analytics, monitoring, automation })
+  const priorities = buildPriorities({ analytics, monitoring, automation, approvals, complianceIssues, now })
+  const businessHealth = buildBusinessHealthScorecard({ analytics, monitoring, automation, complianceIssues })
   const executiveSummary = buildExecutiveSummary(analytics)
   const recentActivity = buildRecentActivity(monitoring.recentEvents, automation.recentActions)
 
@@ -119,6 +123,7 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
     marketReadiness: monitoring.marketReadiness,
     automationHealth: automation,
     approvals,
+    complianceIssues,
     dataQuality: analytics.dataQuality,
     recentActivity,
     demoScenarios: session.isDemo ? demoCEOScenarios() : [],

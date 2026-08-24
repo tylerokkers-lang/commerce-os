@@ -5,11 +5,13 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 24 August 2026 (Milestone 8.5 complete — live monitoring
-inputs & production subject discovery. See §22 before trusting any claim
-about monitor subject discovery, real sales data, or supplier operational
-facts; §21 for the rest of Milestone 8, §19 for Milestone 7's execution
-work, and §18 for Milestone 6's engine-level verification).
+Last updated: 24 August 2026 (Milestone 11 audit & hardening pass — see §27
+before trusting any claim about CEO Command Centre compliance visibility
+or multi-currency sales safety; §26 for the rest of Milestone 11, §22
+before trusting any claim about monitor subject discovery, real sales
+data, or supplier operational facts; §21 for the rest of Milestone 8, §19
+for Milestone 7's execution work, and §18 for Milestone 6's engine-level
+verification).
 
 ## 1. What this is
 
@@ -1156,13 +1158,114 @@ cover; an interactive period selector; a working cashflow-warning card
 (the pre-existing Milestone 1 `getCashflow()` stub was deliberately left
 unsurfaced rather than shown non-functioning).
 
-## 27. Next step
+## 27. Milestone 11 audit & hardening pass (24 August 2026, same day)
 
-Milestone 12 (Commerce Intelligence chat), per `docs/MILESTONES.md` —
-read its "Note" paragraph first: `getCEOCommandCentre()` and
-`buildPriorities` (Milestone 11) are the exact facts the chat's tool/query
-layer should call, never recreate. Read `docs/PRINCIPLES.md` first. When
-international expansion is eventually revisited as Milestone 15, read
-Milestone 9's section first — the market model, FX intelligence,
-country-aware compliance delegation and expansion engine it built are
-designed to extend without a schema redesign, not be rebuilt.
+A follow-up session picked up genuine, in-progress, uncommitted work left
+mid-refactor at HEAD `c0a714f` and finished it — no rebuild, no new scope.
+Two real gaps, both already correctly diagnosed and partly fixed by the
+interrupted session:
+
+- **Mixed-currency sales aggregation.** `aggregateSalesWindow`
+  (`orders/salesAggregation.ts`) sums raw minor-unit numbers with zero
+  currency awareness of its own. `analytics/liveAnalyticsFacts.ts` now
+  reads `orders.currency` as a real fact and reports `mixedCurrencies`;
+  `analytics/salesAnalytics.ts`'s new `resolveSalesAnalyticsSafely` (pure,
+  directly tested) is the one gate every call site
+  (`analytics/repository.ts`'s org-level and per-channel sales) goes
+  through — a mismatch reports every figure `status: 'unavailable'`,
+  `value: null`, never a silent sum and never a fake £0. Regression tests
+  in `tests/analytics-sales.test.ts` cover single-currency, compatible
+  aggregation, mixed-currency rejection (2 and 3+ currencies, all named in
+  the reason), and that every metric — not just revenue — goes unavailable
+  together.
+  - **A second, previously-unfixed instance of the same bug found by
+    searching for other aggregation paths**: `monitoring/liveSubjects.ts`'s
+    `discoverSalesPerformance()` — the live subject-discovery function
+    behind the `sales_performance` monitor — queried `orders` without
+    `currency` at all and fed the result straight into
+    `aggregateSalesWindow` for real production alerting. Fixed the same
+    way in spirit but adapted to this function's shape: `orders.currency`
+    is now selected and tracked per product, and a product whose orders
+    span more than one currency has its `PerformanceMonitorSubject`
+    **skipped** (not compared) — this module's subjects are plain numeric
+    windows with no `unavailable` status concept to report through, so
+    fact-first here means "absent" rather than "wrong." Not
+    unit-testable without a live Supabase mock, consistent with every
+    other `discover*` function in this file (none are), so this fix is
+    implemented but not covered by a new automated test — verify against
+    a real multi-currency org before relying on it.
+- **Compliance failures missing from the CEO view.** The CEO Command
+  Centre surfaced compliance *rechecks* (staleness-triggered) but not
+  active `fail`/`review_required` verdicts. `ceo/repository.ts` now also
+  calls the existing `compliance/repository.ts`'s `getComplianceIssues()`
+  (via the same `Promise.allSettled`, failing safe to `[]`) and threads
+  `complianceIssues` through to `buildPriorities` and
+  `buildBusinessHealthScorecard`, both of which took it as an **optional**
+  input specifically so no pre-existing call site (tests, demo scenarios)
+  needed to change. `priorities.ts` now emits a per-channel CRITICAL
+  priority for blocked (`fail`) products and a separate per-channel HIGH
+  priority for `review_required` ones, distinct from and in addition to
+  the pre-existing recheck priority — a product blocked on Amazon UK never
+  implies Shopify is affected. `healthScorecard.ts`'s compliance area now
+  goes CRITICAL on any real block, AT_RISK on review-required or rechecks,
+  and stays the pre-existing `UNKNOWN` in demo mode (unchanged — compliance
+  fixture data still flows through the priority queue in a demo/seed
+  session exactly as approvals already did, since neither of those two
+  sources is demo-gated the way analytics/monitoring are; the scorecard's
+  own compliance tile is the one place that says so explicitly).
+  Confirmed live in the browser (seeded demo-mode session): the priority
+  queue rendered both a CRITICAL "1 product is blocked by compliance on
+  Amazon UK" and a HIGH "1 product needs compliance review on Amazon UK",
+  each with the real evidence and reasoning from `compliance_records`, no
+  console errors, no duplicate-key warnings.
+- **What was actually broken when this session started**: not a design
+  flaw, just an interrupted refactor — `priorities.ts` read
+  `input.complianceIssues` without the null-check its own `?:` optional
+  type demanded, and `healthScorecard.ts`'s `BuildScorecardInput.complianceIssues`
+  had been left non-optional while its pre-existing call sites
+  (`demo/ceo.ts`, `tests/ceo-priorities-health.test.ts`) hadn't been
+  updated to pass it — exactly the "typechecking was being used to
+  identify every affected call site" state the handover prompt described.
+  Both fixed by making the field optional (defaulting to `[]`), matching
+  the pattern `priorities.ts` had already chosen for the same reason.
+
+**Verified:** 796 tests (up from 792 — the 4 new currency-safety tests
+above); `npx tsc --noEmit`, `npm run lint`, `npm run build` and
+`npm run db:verify` all clean (25 migrations, 72 tables, unchanged — no
+schema touched); `/`, `/compliance`, `/automation`, `/approvals`,
+`/marketplaces`, `/orders` and `/suppliers` confirmed live in the browser
+(against another session's already-running dev server on the same working
+tree, port 3102 — this session's own attempt on a different port correctly
+refused to double-start against the same directory) with no console errors
+or React key warnings; `informax-site` confirmed untouched before and
+after (git status compared, both at commit `2bf3d8a`).
+
+**Not independently re-verified this pass**: `/opportunities/[id]` — a
+route this session did not touch — could not be reached via a stable
+deep-link click in the browser tool this session (an unrelated
+client-side navigation quirk, not a server error); it was confirmed live
+during Milestone 11's own original pass (§26 above) and nothing in this
+session's diff touches it or its dependencies.
+
+## 28. Next step
+
+Per `docs/MILESTONES.md` after this audit, the next real milestone is
+still **Milestone 12 (Commerce Intelligence chat)** — read its "Note"
+paragraph first: `getCEOCommandCentre()` and `buildPriorities` (Milestone
+11) are the exact facts the chat's tool/query layer should call, never
+recreate. Read `docs/PRINCIPLES.md` first.
+
+Two smaller, genuine loose ends surfaced by this audit that are worth
+picking up opportunistically rather than as their own milestone: (1) a
+live-Supabase-backed test harness does not exist anywhere in this codebase
+— every `discover*`/`server-only` repository function, including the
+newly-fixed `discoverSalesPerformance`, is verified only by code
+inspection, its pure sub-functions, and manual browser checks against a
+real deployed project, never automated; (2) `analytics/repository.ts`'s
+`getCashflow()` still returns a hardcoded-empty result in live mode
+(pre-existing, documented, deliberately unsurfaced in the UI — see
+Milestone 11's "Still not built" list). When international expansion is
+eventually revisited as Milestone 15, read Milestone 9's section first —
+the market model, FX intelligence, country-aware compliance delegation
+and expansion engine it built are designed to extend without a schema
+redesign, not be rebuilt.

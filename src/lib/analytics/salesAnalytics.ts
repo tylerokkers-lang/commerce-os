@@ -92,3 +92,25 @@ export function unavailableSalesAnalytics(period: Period, currency: CurrencyCode
     returnRatePct: asUnavailable(base.returnRatePct), refundRatePct: asUnavailable(base.refundRatePct), salesVelocityPerDay: unavailableMetric(reason),
   }
 }
+
+/**
+ * The one currency-safety gate every sales-analytics call site goes
+ * through (Milestone 11 §5/§8's explicit "never silently mix currencies"
+ * requirement) — `aggregateSalesWindow` itself has no currency awareness
+ * at all, so a caller that observed more than one currency in the same
+ * window (a real fact from `orders.currency`, never assumed) must report
+ * `unavailable` rather than sum. Pure and exported specifically so this
+ * decision is unit-testable without a live database, unlike the
+ * `server-only` repository code that calls it.
+ */
+export function resolveSalesAnalyticsSafely(
+  current: SalesWindowMetrics,
+  previous: SalesWindowMetrics | null,
+  period: Period,
+  currency: CurrencyCode,
+  otherCurrenciesObserved: readonly CurrencyCode[],
+): SalesAnalytics {
+  if (otherCurrenciesObserved.length === 0) return buildSalesAnalytics(current, previous, period, currency)
+  const reason = `Unavailable — mixed currencies cannot be safely aggregated (found ${[currency, ...otherCurrenciesObserved].join(', ')}).`
+  return unavailableSalesAnalytics(period, currency, reason)
+}

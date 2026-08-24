@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { aggregateSalesWindow, resolvePeriod, type OrderLineFact } from '@/lib/orders/salesAggregation'
-import { buildSalesAnalytics, emptySalesAnalytics, unavailableSalesAnalytics } from '@/lib/analytics/salesAnalytics'
+import { buildSalesAnalytics, emptySalesAnalytics, unavailableSalesAnalytics, resolveSalesAnalyticsSafely } from '@/lib/analytics/salesAnalytics'
 
 const NOW = new Date('2026-08-24T09:00:00.000Z')
 
@@ -55,5 +55,40 @@ describe('buildSalesAnalytics', () => {
     const analytics = emptySalesAnalytics(period, 'GBP')
     expect(analytics.returnRatePct.status).toBe('derived')
     expect(analytics.refundRatePct.status).toBe('derived')
+  })
+})
+
+describe('resolveSalesAnalyticsSafely (Milestone 11 currency-mixing gate)', () => {
+  const period = resolvePeriod('last_30_days', NOW)
+  const window = aggregateSalesWindow([line('o1', '2026-08-10T00:00:00Z', 5, 10000)], [], new Date(period.start), new Date(period.end))
+
+  it('aggregates normally when no other currency was observed', () => {
+    const result = resolveSalesAnalyticsSafely(window, null, period, 'GBP', [])
+    expect(result.revenue.status).toBe('fact')
+    expect(result.revenue.value).toEqual({ minor: 10000, currency: 'GBP' })
+  })
+
+  it('BUG-HUNT: never silently sums GBP and USD — every figure becomes unavailable, with both currencies named in the reason', () => {
+    const result = resolveSalesAnalyticsSafely(window, null, period, 'GBP', ['USD'])
+    expect(result.revenue.status).toBe('unavailable')
+    expect(result.revenue.value).toBeNull()
+    expect(result.revenue.source).toContain('GBP')
+    expect(result.revenue.source).toContain('USD')
+    expect(result.revenue.source).toContain('mixed currencies cannot be safely aggregated')
+  })
+
+  it('three or more currencies observed at once are all named, never silently dropped to one pair', () => {
+    const result = resolveSalesAnalyticsSafely(window, null, period, 'GBP', ['USD', 'EUR'])
+    expect(result.revenue.source).toContain('GBP')
+    expect(result.revenue.source).toContain('USD')
+    expect(result.revenue.source).toContain('EUR')
+  })
+
+  it('every figure — not just revenue — becomes unavailable on a currency mismatch, so nothing downstream can treat one metric as trustworthy while another silently is not', () => {
+    const result = resolveSalesAnalyticsSafely(window, null, period, 'GBP', ['USD'])
+    for (const metric of [result.revenue, result.netRevenue, result.orders, result.units, result.averageOrderValue, result.refundsValue, result.refundsCount, result.returnsCount, result.returnRatePct, result.refundRatePct, result.salesVelocityPerDay]) {
+      expect(metric.status).toBe('unavailable')
+      expect(metric.value).toBeNull()
+    }
   })
 })

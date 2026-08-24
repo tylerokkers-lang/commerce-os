@@ -1,6 +1,7 @@
 import type { AnalyticsDashboard } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
+import type { ComplianceIssue } from '@/lib/core/domain'
 import type { BusinessHealthScorecard, HealthArea, HealthStatus } from './types'
 
 /**
@@ -20,6 +21,8 @@ export interface BuildScorecardInput {
   analytics: AnalyticsDashboard
   monitoring: MonitoringStatus
   automation: AutomationStatus
+  /** Optional so every pre-existing call site (tests, demo scenarios not focused on compliance) keeps working unchanged — defaults to no known issues, never a guess. */
+  complianceIssues?: readonly ComplianceIssue[]
 }
 
 function financialArea(analytics: AnalyticsDashboard): HealthArea {
@@ -115,10 +118,29 @@ function fulfilmentArea(analytics: AnalyticsDashboard): HealthArea {
   return { key: 'fulfilment', label: 'Fulfilment', status: 'healthy', reasons: [], detailHref: '/orders' }
 }
 
-function complianceArea(monitoring: MonitoringStatus): HealthArea {
+function complianceArea(monitoring: MonitoringStatus, complianceIssues: readonly ComplianceIssue[]): HealthArea {
   if (monitoring.isDemo) return { key: 'compliance', label: 'Compliance', status: 'unknown', reasons: ['Demo mode has no live compliance data.'], detailHref: null }
+
+  // A `fail` verdict is a fatal decision already made — never a mere
+  // "needs review" — so it is the one condition that makes this area
+  // CRITICAL, distinct from `review_required`/rechecks, which are AT_RISK.
+  const blocked = complianceIssues.filter((i) => i.verdict === 'fail')
+  if (blocked.length > 0) {
+    return {
+      key: 'compliance', label: 'Compliance', status: 'critical',
+      reasons: [`${blocked.length} product(s) are blocked by compliance (never bypassed automatically).`],
+      detailHref: '/compliance',
+    }
+  }
+
+  const reviewRequired = complianceIssues.filter((i) => i.verdict === 'review_required')
   const required = monitoring.businessAlerts.complianceRechecksRequired
-  if (required > 0) return { key: 'compliance', label: 'Compliance', status: 'at_risk', reasons: [`${required} listing(s) require a compliance recheck.`], detailHref: '/compliance' }
+  if (reviewRequired.length > 0 || required > 0) {
+    const reasons: string[] = []
+    if (reviewRequired.length > 0) reasons.push(`${reviewRequired.length} product(s) need compliance review.`)
+    if (required > 0) reasons.push(`${required} listing(s) require a compliance recheck.`)
+    return { key: 'compliance', label: 'Compliance', status: 'at_risk', reasons, detailHref: '/compliance' }
+  }
   return { key: 'compliance', label: 'Compliance', status: 'healthy', reasons: [], detailHref: '/compliance' }
 }
 
@@ -165,7 +187,7 @@ export function buildBusinessHealthScorecard(input: BuildScorecardInput): Busine
     supplierArea(input.analytics),
     marketplaceArea(input.monitoring),
     fulfilmentArea(input.analytics),
-    complianceArea(input.monitoring),
+    complianceArea(input.monitoring, input.complianceIssues ?? []),
     automationArea(input.automation),
     dataQualityArea(input.analytics),
   ]

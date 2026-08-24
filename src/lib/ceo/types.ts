@@ -1,7 +1,7 @@
 import type { AnalyticsDashboard } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
-import type { ApprovalItem } from '@/lib/core/domain'
+import type { ApprovalItem, ComplianceIssue } from '@/lib/core/domain'
 
 /**
  * The CEO Command Centre (Milestone 11) — a composition/presentation layer
@@ -87,6 +87,8 @@ export interface CEOCommandCentre {
   marketReadiness: MonitoringStatus['marketReadiness']
   automationHealth: AutomationStatus
   approvals: readonly ApprovalItem[]
+  /** Every product-channel listing currently `fail` (blocked) or `review_required` — the same real, org-scoped `compliance_records` read `/compliance` already uses (Milestone 1/2), never a second compliance engine. */
+  complianceIssues: readonly ComplianceIssue[]
   dataQuality: AnalyticsDashboard['dataQuality']
   recentActivity: readonly RecentActivityItem[]
   demoScenarios: readonly CEODemoScenario[]
