@@ -195,3 +195,64 @@ external scheduler calls this yet" caveat still applies, and discovery
 itself enumerates every eligible row per page rather than a genuine SQL "is
 this one actually due" predicate — a real optimisation for future scale,
 not built yet.
+
+## `POST /api/chat` (Milestone 12 — Commerce Intelligence chat, Phase 1: read-only)
+
+Session-gated (`requireSession()`), unlike the two scheduler routes above —
+this one is reachable only by a logged-in org member (any role; matching
+the existing "readable by any org member" model, not restricted to
+`owner`), and resolves `orgId` from the session, never from the request.
+
+**Request**
+
+```json
+{ "messages": [{ "role": "user", "content": "What needs my attention today?" }] }
+```
+
+`messages` is the full running conversation the client already has (this
+route is stateless — nothing is persisted server-side; see
+`src/lib/ai/repository.ts`'s module comment for why). Validated by
+`src/lib/ai/guardrails.ts`: 1–20 messages, the final one must be from
+`user`, a `user` turn is capped at 2,000 characters, an `assistant` turn
+(a prior real answer, round-tripped back as history) at 8,000.
+
+**Response**
+
+```json
+{
+  "answer": {
+    "content": "…",
+    "groundedIn": "live_model" | "fact_only",
+    "factStatus": "grounded" | "partial" | "insufficient_data",
+    "references": [{ "type": "compliance", "id": "p1", "label": "…", "href": "/compliance" }],
+    "warnings": []
+  }
+}
+```
+
+`400` for a malformed/invalid body, `401` for no session, `500` for an
+unexpected failure. A failure to reach the language model itself is never
+a `5xx` — `askCommerceIntelligence` (`src/lib/ai/repository.ts`) falls
+back to the same deterministic, fact-only answer used when
+`ANTHROPIC_API_KEY` is not configured at all, with a `warnings` entry
+explaining why, so a live-model outage degrades the answer, not the route.
+
+### What this route does not do
+
+Nothing in `src/lib/ai/` can write anything — no module here imports a
+`store.ts`/`AutomationStore` write method, a marketplace connector's write
+method, an execution pipeline, or `approvalWorkflow.ts`. The model itself
+is never given tool/function-calling access (`anthropicRequest.ts`'s
+`AnthropicCreateParams` has no `tools` field anywhere in this codebase) —
+it can only turn already-supplied text into more text, so it structurally
+cannot query, mutate, or execute anything beyond the one `FactBundle` it
+was handed for that turn. See `docs/SECURITY.md`'s Milestone 12 section
+for the full threat-model writeup.
+
+### Production infrastructure this route needs
+
+A real `ANTHROPIC_API_KEY` for `groundedIn: "live_model"` answers — absent
+one, every answer is `fact_only` (`src/lib/ai/offlineAnswer.ts`), which is
+fully implemented and tested, not a stub. Not live-verified against a real
+Anthropic account in this environment; see `HANDOVER.md`'s Milestone 12
+section for exactly what was and was not exercised.

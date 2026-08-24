@@ -5,12 +5,14 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 24 August 2026 (Milestone 11 audit & hardening pass — see §27
-before trusting any claim about CEO Command Centre compliance visibility
-or multi-currency sales safety; §26 for the rest of Milestone 11, §22
-before trusting any claim about monitor subject discovery, real sales
-data, or supplier operational facts; §21 for the rest of Milestone 8, §19
-for Milestone 7's execution work, and §18 for Milestone 6's engine-level
+Last updated: 24 August 2026 (Milestone 12, Commerce Intelligence chat —
+see §28 before trusting any claim about the chat's grounding or security
+model, and note it has not been live-verified against a real
+`ANTHROPIC_API_KEY`; §27 for Milestone 11's audit & hardening pass, §26
+for the rest of Milestone 11, §22 before trusting any claim about monitor
+subject discovery, real sales data, or supplier operational facts; §21 for
+the rest of Milestone 8, §19 for Milestone 7's execution work, and §18 for
+Milestone 6's engine-level
 verification).
 
 ## 1. What this is
@@ -1247,24 +1249,136 @@ client-side navigation quirk, not a server error); it was confirmed live
 during Milestone 11's own original pass (§26 above) and nothing in this
 session's diff touches it or its dependencies.
 
-## 28. Next step
+## 28. Milestone 12 (Commerce Intelligence chat, Phase 1: read-only) — what was built
+
+A natural-language interface over the existing intelligence layer, never a
+second one:
+`Operational systems -> Authoritative engines -> Analytics & BI (M10) ->
+CEO Command Centre (M11) -> Commerce Intelligence chat (M12) -> CEO`.
+Full detail in `docs/ARCHITECTURE.md`'s `src/lib/ai/` section and
+`docs/SECURITY.md`'s Milestone 12 section — this is the short version.
+
+- **`src/lib/ai/`** (new module, filling the placeholder directory named
+  since Milestone 1): `factBundle.ts`'s `buildFactBundle` is the one place
+  a turn's facts are assembled — pure, directly tested, entirely from
+  `getCEOCommandCentre()` (Milestone 11) plus `getOpportunities`/
+  `getIntelligenceSummary`/`getSuppliers` (the same repositories `/` and
+  `/opportunities`/`/suppliers` already call). A metric already marked
+  `unknown`/`stale`/`unavailable` (Milestone 10's `isKnown`) becomes an
+  explicit caution string, never a coerced number — this is what makes
+  last session's mixed-currency fix (§27) visible all the way through to
+  the chat: ask about revenue during a currency-mixing window and the
+  answer states the limitation instead of guessing.
+  `guardrails.ts`/`promptBuilder.ts` are the textual half of prompt-
+  injection defence (validation, forged-role-prefix neutralisation, a
+  fixed system prompt); the structural half — **the model is never given
+  tool/function-calling access** — lives in `anthropicRequest.ts`, whose
+  pure request-building is unit tested to confirm no `tools` field is ever
+  constructed. `ChatProvider` (`types.ts`) is satisfied twice, the same
+  pattern as `AutomationStore`/`FxRateStore`/`EventStore`:
+  `offlineProvider.ts` (deterministic, no network call, what actually runs
+  in this environment and in every test) and `anthropicProvider.ts`
+  (`server-only`, real `@anthropic-ai/sdk` call). `repository.ts`'s
+  `askCommerceIntelligence()` is the one orchestration function —
+  `Promise.allSettled` across the four fact sources (Milestone 11's
+  fail-safe pattern, reused), falls back to the offline answer if the live
+  model itself errors, and is itself untestable in Vitest for the same
+  `server-only` reason `ceo/repository.ts` already was.
+- **`src/app/api/chat/route.ts`**: the one HTTP entry point,
+  session-gated with `requireSession()` exactly like every Server Action
+  in this codebase re-checks itself (a Route Handler is reachable by
+  direct POST). Stateless — the client sends the full running
+  conversation each turn; nothing is persisted server-side, so no new
+  table or migration was needed.
+- **`src/components/chat/ChatPanel.tsx`**: this codebase's **first Client
+  Component** — the one interaction here that cannot be a plain form
+  submit. Holds no session detail or credential, only the current turn's
+  already-public response. Renders a fact-status badge
+  (grounded/partial/insufficient data), a fact-only-mode badge when
+  `ANTHROPIC_API_KEY` is not configured, and reference chips — derived
+  entirely in code from the same `FactBundle` (`deriveReferences`), never
+  parsed from the model's own reply, so a hallucinated entity simply gets
+  no chip.
+- **`/chat`** (`src/app/(dashboard)/chat/page.tsx`), added to
+  `NAV_SECTIONS` right under Dashboard.
+- **A real bug found via browser verification, not by inspection**: the
+  guardrails' 2,000-character message cap originally applied to every
+  message in a conversation, including a *prior assistant reply* sent back
+  as history on the next turn. `offlineAnswer.ts`'s fact-only summary of
+  a business with several open priorities/compliance issues/opportunities
+  routinely exceeds 2,000 characters, so a second real question after a
+  substantive first answer was rejected with `400` before this was caught
+  — confirmed live (`POST /api/chat` → 400 in the browser's own network
+  log), then fixed by splitting the cap: 2,000 characters for a `user`
+  turn (unchanged — this is the actual abuse/cost bound), 8,000 for an
+  `assistant` turn (`guardrails.ts`'s `chatMessageSchema` is now a
+  `z.discriminatedUnion` on `role`). Regression tests added
+  (`tests/chat-guardrails.test.ts`) reproduce the exact failing
+  conversation shape and assert it now validates, plus that an assistant
+  turn beyond even the higher ceiling still correctly fails as a sanity
+  bound.
+
+**Verified:** 845 tests (up from 796 — Milestone 11's audit-pass count;
++49 across `tests/chat-fact-bundle.test.ts`, `tests/chat-guardrails.test.ts`,
+`tests/chat-offline-answer.test.ts`, `tests/chat-anthropic-request.test.ts`);
+`npx tsc --noEmit`, `npm run lint`, `npm run build` and `npm run db:verify`
+all clean (25 migrations, 72 tables, unchanged — no schema change; the
+conversation is client-round-tripped, not persisted); `/chat` confirmed
+live in the browser end-to-end — typed and suggested-question submission,
+a real multi-turn conversation (after the 400 fix above), the fact-only
+banner, both fact-status badges, and every reference chip clicked through
+to a real page (`/compliance`, `/opportunities/[id]`) with matching
+content; no console errors and no duplicate-key warnings across the whole
+flow; `/`, `/compliance`, `/opportunities/[id]` re-confirmed unaffected;
+`informax-site` confirmed untouched throughout (git status compared,
+still at commit `2bf3d8a`).
+
+**Implemented but not live-verified:** `anthropicProvider.ts` itself —
+`server-only`, cannot be imported into Vitest (the same boundary
+`ceo/repository.ts` already established), and no `ANTHROPIC_API_KEY`
+exists in this environment, so every browser check above ran the
+`fact_only` (offline) path. Its request/response *shaping* is unit tested
+through the pure `anthropicRequest.ts` functions it calls; what remains
+unverified is Anthropic's actual API behaviour, and — more importantly —
+whether a real model reliably follows the system prompt's fact-first/
+no-fabrication/currency-safety/channel-isolation rules in practice. The
+structural guarantees (no tool access, no write path, no credential
+exposure) hold regardless of that; the *quality* of a live answer does
+not, and should be checked against a real key before this is presented to
+an actual CEO as production-ready.
+
+**Not implemented (deliberately, Phase 1 scope):** Milestone 13's four
+interaction modes (ask/analyse/recommend/execute) — this milestone is
+"ask" only, by design; "execute" explicitly requires the same
+automation-level/approval machinery Milestones 5–6 built, not a chat
+shortcut around it. No conversation persistence (see above — a deliberate
+scope choice to avoid an unnecessary migration, not an oversight).
+
+## 29. Next step
 
 Per `docs/MILESTONES.md` after this audit, the next real milestone is
-still **Milestone 12 (Commerce Intelligence chat)** — read its "Note"
-paragraph first: `getCEOCommandCentre()` and `buildPriorities` (Milestone
-11) are the exact facts the chat's tool/query layer should call, never
-recreate. Read `docs/PRINCIPLES.md` first.
+**Milestone 13 (AI actions)** — read `docs/MILESTONES.md`'s own note on it
+first: "execute" must still pass through the same automation-level and
+approval machinery Milestones 5–6 built; the AI is never the source of
+authority. `askCommerceIntelligence`/`FactBundle` (Milestone 12) are the
+facts an "analyse"/"recommend" mode should read through, never recreate.
 
-Two smaller, genuine loose ends surfaced by this audit that are worth
-picking up opportunistically rather than as their own milestone: (1) a
-live-Supabase-backed test harness does not exist anywhere in this codebase
-— every `discover*`/`server-only` repository function, including the
-newly-fixed `discoverSalesPerformance`, is verified only by code
-inspection, its pure sub-functions, and manual browser checks against a
-real deployed project, never automated; (2) `analytics/repository.ts`'s
-`getCashflow()` still returns a hardcoded-empty result in live mode
-(pre-existing, documented, deliberately unsurfaced in the UI — see
-Milestone 11's "Still not built" list). When international expansion is
+Three smaller, genuine loose ends worth picking up opportunistically
+rather than as their own milestone: (1) a live-Supabase-backed test
+harness does not exist anywhere in this codebase — every `discover*`/
+`server-only` repository function, including the newly-fixed
+`discoverSalesPerformance` and now `ai/repository.ts`/
+`ai/anthropicProvider.ts`, is verified only by code inspection, its pure
+sub-functions, and manual browser checks, never automated; (2)
+`analytics/repository.ts`'s `getCashflow()` still returns a hardcoded-empty
+result in live mode (pre-existing, documented, deliberately unsurfaced in
+the UI — see Milestone 11's "Still not built" list); (3) a real
+`ANTHROPIC_API_KEY` should be exercised against the live chat before it is
+presented to an actual CEO — the structural safety guarantees (§28) hold
+either way, but whether the model's live answers are actually good,
+correctly cite sources, and never drift from the fact-first system prompt
+in practice is unverified in this environment. When international
+expansion is
 eventually revisited as Milestone 15, read Milestone 9's section first —
 the market model, FX intelligence, country-aware compliance delegation
 and expansion engine it built are designed to extend without a schema

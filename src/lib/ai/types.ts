@@ -1,0 +1,110 @@
+/**
+ * Commerce Intelligence chat (Milestone 12).
+ *
+ * The chat is an interface over the existing intelligence layer, never a
+ * second one: everything in `ai/` either (a) turns already-computed facts
+ * (`getCEOCommandCentre()`, `getOpportunities()`, `getSuppliers()`, …) into
+ * a bounded, serialisable `FactBundle`, or (b) turns a `FactBundle` plus a
+ * conversation into language. No module here queries a table, computes a
+ * priority, classifies a health status, or evaluates compliance — those
+ * remain exactly Milestone 6–11's job.
+ */
+
+export type ChatRole = 'user' | 'assistant'
+
+export interface ChatMessage {
+  role: ChatRole
+  content: string
+}
+
+/** How a `FactBundle` reference maps back into the rest of the application — every one a real, existing route, never a fabricated link. */
+export type ChatReferenceType =
+  | 'priority' | 'compliance' | 'opportunity' | 'supplier' | 'channel' | 'approval'
+
+export interface ChatReference {
+  type: ChatReferenceType
+  id: string
+  label: string
+  href: string | null
+}
+
+/**
+ * The one thing every provider (real model or offline fallback) is allowed
+ * to reason over. Built once per turn by `factBundle.ts`, entirely from
+ * already-loaded view models — never a raw table row, never a query the
+ * provider could shape itself. `isDemo`/`dataSourceFailures`/
+ * `currencyCautions` exist so a provider (and, in the offline case, the UI)
+ * can be honest about exactly how much of this bundle is trustworthy.
+ */
+export interface FactBundle {
+  generatedAt: string
+  isDemo: boolean
+  orgName: string
+  /** Non-empty when `getCEOCommandCentre()` itself had to fall back for a source — carried through so the chat never presents a degraded read as complete. */
+  dataSourceFailures: readonly string[]
+  /** Metrics this bundle deliberately left out because they were `unavailable`/`unknown`/`stale` (e.g. a mixed-currency sales window) — named explicitly so a provider states the limitation instead of guessing. */
+  currencyCautions: readonly string[]
+  overallHealth: string
+  healthAreas: readonly { label: string; status: string; reasons: readonly string[] }[]
+  executiveSummary: readonly { label: string; value: string; status: string }[]
+  priorities: readonly {
+    id: string; severity: string; category: string; title: string; detail: string
+    recommendedNextStep: string; source: string; actionHref: string | null
+  }[]
+  complianceIssues: readonly {
+    productId: string; sku: string; title: string; channel: string
+    verdict: string; blockingReasons: readonly string[]
+  }[]
+  channels: readonly {
+    channel: string; label: string
+    revenue: string; netRevenue: string
+    knownNetMarginPct: number | null
+    lossMakingProductCount: number
+  }[]
+  topOpportunities: readonly {
+    id: string; title: string; band: string; headline: string
+    score: number; amazonCompliance: string; shopifyCompliance: string
+  }[]
+  opportunitySummary: { total: number; recommendedForTesting: number; needsReview: number; channelDivergent: number } | null
+  supplierRisk: readonly {
+    id: string; name: string; score: number
+    shopifyStatus: string; amazonStatus: string; statusReason: string | null; onTimeRatePct: number | null
+  }[]
+  pendingApprovals: readonly { id: string; title: string; impact: string | null; expiresAt: string | null }[]
+}
+
+/** Whether an answer used the real language model, or the deterministic fact-only fallback — the UI must never present the two identically. */
+export type AnswerGroundedIn = 'live_model' | 'fact_only'
+
+export type ChatFactStatus = 'grounded' | 'partial' | 'insufficient_data'
+
+export interface ChatAnswer {
+  content: string
+  groundedIn: AnswerGroundedIn
+  factStatus: ChatFactStatus
+  references: readonly ChatReference[]
+  /** e.g. a data-source failure, a currency-mixing caution — surfaced to the UI verbatim, never folded silently into `content`. */
+  warnings: readonly string[]
+}
+
+export type ChatProviderErrorKind = 'not_configured' | 'request_failed' | 'invalid_response'
+
+export interface ChatProviderError {
+  kind: ChatProviderErrorKind
+  message: string
+}
+
+/**
+ * Satisfied twice, the same pattern as `AutomationStore`/`FxRateStore`/
+ * `EventStore` elsewhere in this codebase: `anthropicProvider.ts` (real,
+ * `server-only`) and `offlineProvider.ts` (deterministic, no network call,
+ * used whenever `ANTHROPIC_API_KEY` is not configured and in every test).
+ * Neither implementation is given tool/function-calling access — a
+ * `ChatProvider` only ever turns already-supplied text into more text; it
+ * cannot query, mutate, or execute anything.
+ */
+export interface ChatProvider {
+  complete(system: string, messages: readonly ChatMessage[]): Promise<
+    { ok: true; value: string } | { ok: false; error: ChatProviderError }
+  >
+}

@@ -173,6 +173,84 @@ separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
 
+## What Milestone 12 changed here (Commerce Intelligence chat, Phase 1: read-only)
+
+The chat's threat model is different in kind from every prior milestone —
+the new untrusted input is free text a user types, not a payload shape a
+server already controls — so it gets its own section rather than a short
+paragraph.
+
+- **The model is never given tool/function-calling access.** This is the
+  primary, structural guarantee, not a prompt-level one:
+  `src/lib/ai/anthropicRequest.ts`'s `AnthropicCreateParams` — the one
+  place a request to the Anthropic API is shaped — has no `tools` field
+  anywhere, and `buildAnthropicRequest`'s pure construction is unit tested
+  to confirm this (`tests/chat-anthropic-request.test.ts`). A `ChatProvider`
+  (`src/lib/ai/types.ts`) can only turn text into more text; there is no
+  code path from a chat turn to a database query, a mutation, or an
+  execution pipeline, regardless of what the conversation contains.
+- **No new write path.** Every function in `src/lib/ai/` is either a pure
+  computation over already-loaded facts (`factBundle.ts`,
+  `promptBuilder.ts`, `offlineAnswer.ts`, `guardrails.ts`,
+  `anthropicRequest.ts`) or a read (`repository.ts`'s
+  `askCommerceIntelligence`, which composes `getCEOCommandCentre()`/
+  `getOpportunities()`/`getIntelligenceSummary()`/`getSuppliers()` via
+  `Promise.allSettled`, the same fail-safe pattern Milestone 11
+  introduced). Nothing here imports a `store.ts`/`AutomationStore` write
+  method, a marketplace connector's write method, an execution pipeline,
+  or `approvalWorkflow.ts`.
+- **Organisation isolation is inherited, not reimplemented.** `orgId` is
+  resolved once, inside `requireSession()`, by `askCommerceIntelligence` —
+  never accepted from the request body — and every repository call it
+  makes is one of the same already-org-scoped functions Milestone 10/11
+  already established. `/api/chat` re-checks `requireSession()` itself
+  (a `Route Handler` is reachable by direct POST, the same reason every
+  Server Action in this codebase re-checks its own permission) and maps a
+  missing session to `401`.
+- **Prompt injection is treated as unsolvable by text alone, so the
+  primary defence is structural (no tool access, above) and the textual
+  defence is layered, not relied on as sufficient by itself**
+  (`src/lib/ai/guardrails.ts`): a forged role prefix in a user message
+  ("System: ignore previous instructions…") is neutralised before it ever
+  reaches the model; the system prompt (`promptBuilder.ts`) explicitly
+  instructs the model to treat anything inside a user turn or the facts
+  block as untrusted content, never as new instructions; user turns are
+  capped at 2,000 characters and a conversation at 20 turns, bounding both
+  cost and the size of an injection attempt. **Not proven**: no purely
+  textual defence can be proven to defeat every injection attempt, and
+  this codebase makes no such claim — the tool-access boundary above is
+  what actually prevents an injection from having any effect beyond
+  producing misleading text in the chat's own reply, which the fact-first
+  system prompt and the code-derived (never model-derived) reference chips
+  are designed to make easy to spot as wrong.
+- **No credential ever reaches the model, the browser, or an error
+  message.** `ANTHROPIC_API_KEY` is read server-side only
+  (`core/env.ts`'s `anthropicApiKey()`, `anthropicProvider.ts` is
+  `server-only`) and never appears in the `FactBundle` the model receives
+  — `factBundle.ts` is built entirely from `CEOCommandCentre`/
+  `OpportunitySummary`/`SupplierListItem`, none of which carry a
+  credential field. `anthropicRequest.ts`'s `mapAnthropicError` redacts
+  any `Bearer <token>` pattern from an SDK error message before it is
+  returned, tested directly
+  (`tests/chat-anthropic-request.test.ts`).
+- **The offline (`ANTHROPIC_API_KEY` not configured) path is not a
+  degraded security posture — it never calls a network endpoint at all**,
+  so it carries none of the above surface by construction; it is the same
+  "demo mode is a first-class mode" honesty principle `core/env.ts`
+  already establishes, applied here.
+- **Not verified**: real Anthropic API behaviour under a live key —
+  `anthropicProvider.ts` is `server-only` and (like `ceo/repository.ts`
+  before it) cannot be imported into a Vitest file in this project; its
+  request/response shaping is unit tested through the pure
+  `anthropicRequest.ts` functions instead, and the file itself is
+  exercised only by code inspection, since no `ANTHROPIC_API_KEY` exists
+  in this environment. Whether the live model actually honours the
+  system prompt's fact-first/no-fabrication rules in practice is
+  therefore genuinely unverified — the structural guarantees above (no
+  tool access, no write path, no credential exposure) hold regardless of
+  how well the model itself behaves, but the *quality* of a live answer
+  does not.
+
 ## What Milestone 11 changed here
 
 - No new tables, no new RLS policies, no new credential types, and no new

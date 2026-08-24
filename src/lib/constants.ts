@@ -8,6 +8,7 @@ export const NAV_SECTIONS = [
     label: 'Overview',
     items: [
       { href: '/', label: 'Dashboard' },
+      { href: '/chat', label: 'Commerce Intelligence' },
       { href: '/report', label: 'Daily report' },
       { href: '/approvals', label: 'Approvals' },
       { href: '/automation', label: 'Automation' },

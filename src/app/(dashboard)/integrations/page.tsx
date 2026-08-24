@@ -24,7 +24,7 @@ const DESCRIPTIONS: Record<string, string> = {
   amazon: 'Listings, inventory, pricing, orders and reports through the Selling Partner API.',
   resend: 'Delivers invoices, alerts and the daily report by email.',
   xero: 'Pushes invoices, credit notes and expenses into your accounting system.',
-  anthropic: 'Powers research summaries, listing content and decision reasoning.',
+  anthropic: 'Powers the Commerce Intelligence chat, research summaries, listing content and decision reasoning.',
 }
 
 export default async function IntegrationsPage() {

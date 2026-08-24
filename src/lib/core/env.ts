@@ -46,6 +46,9 @@ export const isSupabaseConfigured = (): boolean =>
  */
 export const automationCronSecret = () => read('AUTOMATION_CRON_SECRET')
 
+/** Server-only callers (`ai/anthropicProvider.ts`) read the key through this accessor rather than `process.env` directly, matching every other credential in this file — `undefined` (never a thrown error) when absent, since demo mode must still boot with zero credentials. */
+export const anthropicApiKey = () => read('ANTHROPIC_API_KEY')
+
 export interface IntegrationCredentials {
   readonly key: string
   readonly label: string

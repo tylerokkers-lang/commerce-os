@@ -1808,21 +1808,46 @@ alongside the four sources already listed above, still via
 792); typecheck, lint, `npm run build` and `db:verify` re-confirmed
 clean; no schema change.
 
-## Milestone 12 — Commerce Intelligence chat
+## Milestone 12 — Commerce Intelligence chat ✅ complete (Phase 1: read-only)
 
-An AI chat interface answering real questions about the actual business
-through a controlled tool/query layer with explicit per-tool permissions —
-never raw, unrestricted database access. Responses follow the fact-first
-categories (facts, calculations, rules, analysis, predictions, uncertainty)
-and the system can say "I don't have enough current data to answer that
-reliably." Credentials never enter conversational memory.
+An AI chat interface answering real questions about the actual business,
+grounded entirely in facts read from the existing intelligence layer —
+never raw, unrestricted database access, and never a second intelligence
+engine. Responses distinguish verified facts, calculated conclusions,
+recommendations, and genuine uncertainty, and the system says so plainly
+when the required data is not available. Credentials never enter the
+conversation. Full detail in `docs/ARCHITECTURE.md`'s `src/lib/ai/`
+section, `docs/SECURITY.md`'s Milestone 12 section (the full threat
+model), `docs/API.md`'s `POST /api/chat` section, and `HANDOVER.md` §28.
 
-**Note:** Milestone 11's `getCEOCommandCentre()` and `ceo/priorities.ts`'s
-`buildPriorities` are the exact facts this chat layer should query for
-"what needs my attention"/"how is the business doing" — the tool/query
-layer should call these functions directly, never recreate the priority
-ranking or business-health classification logic. See Milestone 11's
-section for the full function list.
+As built: `ai/factBundle.ts`'s `buildFactBundle` composes
+`getCEOCommandCentre()` (Milestone 11) plus `getOpportunities`/
+`getIntelligenceSummary`/`getSuppliers` — the same facts `/`, `/opportunities`,
+and `/suppliers` already render, never recalculated. The model is
+structurally never given tool/function-calling access (no request this
+codebase constructs ever includes a `tools` field), which is what actually
+prevents it from querying, mutating, or executing anything — a textual
+defence (guardrails, a fixed system prompt) is layered on top but not
+relied on alone. A deterministic, no-network fallback (`offlineAnswer.ts`)
+serves every answer whenever `ANTHROPIC_API_KEY` is not configured, so the
+chat is fully functional and fully tested with zero credentials, the same
+"demo mode is first-class" posture the rest of this codebase already
+takes.
+
+**Verified:** 845 tests (up from 796); typecheck/lint/build/`db:verify`
+all clean; no schema change (conversation history is client-round-tripped,
+never persisted); `/chat` confirmed live end-to-end in the browser,
+including a real multi-turn conversation and every reference chip
+resolving to a real page. **Not live-verified:** actual Anthropic API
+behaviour under a real key — no `ANTHROPIC_API_KEY` exists in this
+environment, so every browser check exercised the offline fallback path;
+the live provider's request/response *shaping* is unit tested, but whether
+a real model's answers stay fact-first in practice is unverified.
+
+**Deliberately out of Phase 1's scope:** any interaction mode beyond "ask"
+(Milestone 13's analyse/recommend/execute), and conversation persistence
+(no new table — a scope choice, not an oversight, per §13's
+"don't introduce unnecessary migrations").
 
 ## Milestone 13 — AI actions
 

@@ -83,12 +83,14 @@ src/lib/
                  reads `/report` still uses — see below
   ceo/           the CEO Command Centre composition layer — priority
                  queue, business health scorecard — see below
-  amazon/ shopify/ pricing/ invoices/ accounting/ research/ ai/
+  ai/            the Commerce Intelligence chat — fact bundling, prompt
+                 construction, guardrails, the model provider — see below
+  amazon/ shopify/ pricing/ invoices/ accounting/ research/
 ```
 
-The empty directories are deliberate: they are the seams later milestones
-fill, and having them named now stops integration code from being written into
-whatever file happens to be open.
+The remaining empty directories are deliberate: they are the seams later
+milestones fill, and having them named now stops integration code from
+being written into whatever file happens to be open.
 
 ### `src/lib/automation/` (Milestones 6–7)
 
@@ -358,6 +360,75 @@ page) is the one place a `Metric<T>`/`PeriodMetric<T>` renders — a value
 plus a comparison badge when known, an honest UNKNOWN/STALE/UNAVAILABLE
 badge plus its source when not — shared by `/automation` and `/` so
 neither can drift from the other's rendering rules.
+
+### `src/lib/ai/` (Milestone 12)
+
+The Commerce Intelligence chat — an interface over the existing
+intelligence layer, never a second one:
+`Operational systems -> Authoritative engines -> Analytics & BI (M10) ->
+CEO Command Centre (M11) -> Commerce Intelligence chat (M12) -> CEO`.
+Every fact the chat can see is read straight off `getCEOCommandCentre()`
+(Milestone 11) plus the two adjacent repositories the CEO dashboard page
+already calls directly (`getOpportunities`/`getIntelligenceSummary`,
+`getSuppliers`) — nothing here recomputes a priority, a health status, a
+compliance verdict, or a profit figure. Phase 1 is strictly read-only: no
+module in this directory imports a write path of any kind.
+
+```
+types.ts              ChatMessage, FactBundle, ChatAnswer, ChatReference,
+                       and the ChatProvider interface every model
+                       implementation satisfies — the same "define the
+                       interface, satisfy it twice" shape as
+                       AutomationStore/FxRateStore/EventStore elsewhere
+factBundle.ts          buildFactBundle: the one place a turn's facts are
+                       assembled, pure and directly tested. A metric this
+                       codebase already marked unknown/stale/unavailable
+                       (Milestone 10's isKnown) is never coerced into a
+                       number here — it becomes an explicit caution
+                       string instead. serializeFactBundle/
+                       deriveReferences turn a bundle into the model's
+                       text context and the UI's reference chips —
+                       chips are derived from the bundle in code, never
+                       parsed out of the model's own reply, so a
+                       hallucinated entity simply has no chip
+guardrails.ts           Request validation (zod) and the textual half of
+                       prompt-injection defence — see docs/SECURITY.md's
+                       Milestone 12 section for the full threat model;
+                       the structural half (no tool access) lives in
+                       anthropicRequest.ts
+promptBuilder.ts        The fixed system prompt (fact-first rules, never
+                       re-derived per turn) plus per-turn message capping
+offlineAnswer.ts        The deterministic, no-network fallback used
+                       whenever ANTHROPIC_API_KEY is not configured
+                       (core/env.ts's isConfigured('anthropic')) and in
+                       every test — not a miniature language model, only
+                       orders and labels the same real facts a live
+                       model would have received
+offlineProvider.ts,
+anthropicRequest.ts,
+anthropicProvider.ts   ChatProvider satisfied twice. anthropicRequest.ts
+                       is deliberately pure (unlike anthropicProvider.ts,
+                       which is server-only and holds the real SDK
+                       client) so the request it builds — which never
+                       includes a tools field anywhere in this codebase —
+                       is directly unit tested
+repository.ts          server-only; askCommerceIntelligence() composes
+                       getCEOCommandCentre/getOpportunities/
+                       getIntelligenceSummary/getSuppliers via
+                       Promise.allSettled, the same fail-safe pattern
+                       Milestone 11 introduced, and falls back to the
+                       offline answer if the live model itself fails —
+                       a model outage degrades the answer, never the
+                       whole route
+```
+
+`src/app/api/chat/route.ts` is the one HTTP entry point, session-gated
+identically to every Server Action in this codebase. `src/components/chat/
+ChatPanel.tsx` is this codebase's **first Client Component** — a
+deliberate, minimal exception to "Server Components by default," because a
+chat transcript that updates as you type is the one interaction here that
+cannot be a plain form submit; it holds no session detail or credential,
+only the current turn's already-public response.
 
 ## Rules the code follows
 
