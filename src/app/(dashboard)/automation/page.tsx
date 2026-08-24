@@ -1,12 +1,15 @@
 import Link from 'next/link'
-import { Badge, Card, CardHeader, PageHeader, StatTile, type Tone } from '@/components/ui'
-import { formatMoney, money } from '@/lib/core/money'
+import { Badge, Card, CardHeader, PageHeader, StatTile, TableWrap, type Tone } from '@/components/ui'
+import { formatMoney, money, type Money } from '@/lib/core/money'
 import { getAutomationStatus } from '@/lib/automation/repository'
 import { getMonitoringStatus } from '@/lib/monitoring/repository'
+import { getAnalyticsDashboard } from '@/lib/analytics/repository'
 import { AUTOMATION_CATEGORIES, type PolicyResult } from '@/lib/automation/types'
 import { getSession } from '@/lib/security/session'
 import type { AnyDemoScenario } from '@/lib/demo/automation'
 import type { MonitoringDemoScenario } from '@/lib/demo/monitoring'
+import type { AnalyticsDemoScenario } from '@/lib/demo/analytics'
+import type { Metric, PeriodMetric } from '@/lib/analytics/types'
 import { pauseAll, resumeAll, toggleCategory } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -120,6 +123,51 @@ function MonitoringDemoScenarioCard({ scenario }: { scenario: MonitoringDemoScen
   )
 }
 
+function AnalyticsDemoScenarioCard({ scenario }: { scenario: AnalyticsDemoScenario }) {
+  return (
+    <Card>
+      <CardHeader title={scenario.label} description={scenario.description} />
+      <ul className="space-y-1 border-t border-border px-5 py-4 text-xs text-ink-muted">
+        {scenario.narrative.map((line, i) => (
+          <li key={i}>{line}</li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
+const FACT_STATUS_TONE: Record<string, Tone> = {
+  fact: 'positive', calculated: 'positive', derived: 'accent', estimate: 'caution',
+  unknown: 'neutral', stale: 'caution', unavailable: 'negative',
+}
+
+/** A fact-first figure: the value when known, and an honest status badge — UNKNOWN/STALE/UNAVAILABLE — instead of a number, when it is not. Never renders `null` as if it were zero. */
+function MetricStat({ label, metric, format = String, sublabel }: { label: string; metric: Metric<unknown> | PeriodMetric<unknown>; format?: (v: never) => string; sublabel?: string }) {
+  const isKnownStatus = metric.status === 'fact' || metric.status === 'calculated' || metric.status === 'derived' || metric.status === 'estimate'
+  const comparison = 'comparison' in metric ? metric.comparison : null
+  return (
+    <div className="bg-surface px-4 py-3">
+      <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">{label}</p>
+      {isKnownStatus ? (
+        <>
+          <p className="mt-1 text-sm font-medium">{format(metric.value as never)}</p>
+          {comparison && comparison.percentChange !== null ? (
+            <p className={`tabular mt-0.5 text-xs font-medium ${comparison.direction === 'up' ? 'text-positive' : comparison.direction === 'down' ? 'text-negative' : 'text-ink-subtle'}`}>
+              {comparison.percentChange > 0 ? '+' : ''}{comparison.percentChange}%
+            </p>
+          ) : null}
+          {sublabel ? <p className="mt-0.5 text-xs text-ink-subtle">{sublabel}</p> : null}
+        </>
+      ) : (
+        <>
+          <Badge tone={FACT_STATUS_TONE[metric.status] ?? 'neutral'} className="mt-1.5">{metric.status.toUpperCase()}</Badge>
+          <p className="mt-1 truncate text-xs text-ink-subtle" title={metric.source}>{metric.source}</p>
+        </>
+      )}
+    </div>
+  )
+}
+
 /** Every figure a drill-down list of real open-event subject ids — never a number with nothing behind it. */
 function IntelligenceCard({ title, groups }: { title: string; groups: readonly { label: string; ids: readonly string[]; tone?: Tone }[] }) {
   return (
@@ -141,8 +189,11 @@ function IntelligenceCard({ title, groups }: { title: string; groups: readonly {
 }
 
 export default async function AutomationPage() {
-  const [status, monitoring, session] = await Promise.all([getAutomationStatus(), getMonitoringStatus(), getSession()])
+  const [status, monitoring, analytics, session] = await Promise.all([getAutomationStatus(), getMonitoringStatus(), getAnalyticsDashboard(), getSession()])
   const isOwner = session?.role === 'owner'
+  const asMoney = (m: Money) => formatMoney(m)
+  const asPct = (v: number) => `${v}%`
+  const asDays = (v: number) => `${v} day(s)`
 
   return (
     <>
@@ -382,6 +433,205 @@ export default async function AutomationPage() {
         <div className="grid gap-4">
           {monitoring.demoScenarios.map((scenario) => (
             <MonitoringDemoScenarioCard key={scenario.key} scenario={scenario} />
+          ))}
+        </div>
+      ) : null}
+
+      <PageHeader
+        title="Business analytics"
+        description={`How the business is actually performing, ${analytics.period.label.toLowerCase()} (${new Date(analytics.period.start).toLocaleDateString('en-GB')} – ${new Date(analytics.period.end).toLocaleDateString('en-GB')}), compared against the equivalent previous period. Every figure below is FACT or CALCULATED unless labelled otherwise — UNKNOWN/STALE/UNAVAILABLE are shown honestly, never as zero.`}
+      />
+
+      <Card>
+        <CardHeader title="Revenue & profit" description="Realised sales facts from orders/order_items/refunds — the same aggregateSalesWindow every monitor uses — compared against the previous equivalent period." />
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-4">
+          <MetricStat label="Revenue" metric={analytics.sales.revenue} format={asMoney as never} />
+          <MetricStat label="Net revenue" metric={analytics.sales.netRevenue} format={asMoney as never} />
+          <MetricStat label="Orders" metric={analytics.sales.orders} format={String as never} />
+          <MetricStat label="Units sold" metric={analytics.sales.units} format={String as never} />
+          <MetricStat label="Average order value" metric={analytics.sales.averageOrderValue} format={asMoney as never} />
+          <MetricStat label="Refunds" metric={analytics.sales.refundsValue} format={asMoney as never} />
+          <MetricStat label="Return rate" metric={analytics.sales.returnRatePct} format={asPct as never} />
+          <MetricStat label="Refund rate" metric={analytics.sales.refundRatePct} format={asPct as never} />
+        </div>
+      </Card>
+
+      {analytics.channels.length > 0 ? (
+        <Card>
+          <CardHeader title="Channel performance" description="Never one blended figure — each channel's own realised sales and known projected profit, from real orders.channel and channel_products data." />
+          <div className="grid gap-px border-t border-border bg-border sm:grid-cols-2">
+            {analytics.channels.map((c) => (
+              <div key={c.channel} className="bg-surface px-5 py-4">
+                <p className="text-sm font-semibold">{c.label}</p>
+                <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs text-ink-subtle">Revenue</p>
+                    <p className="font-medium">{formatMoney(c.sales.revenue.value ?? money(0, c.sales.currency))}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-ink-subtle">Orders</p>
+                    <p className="font-medium">{c.sales.orders.value ?? '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-ink-subtle">Known net profit</p>
+                    {c.profit.knownNetProfit.status === 'calculated' ? (
+                      <p className="font-medium">{formatMoney(c.profit.knownNetProfit.value as Money)}</p>
+                    ) : (
+                      <Badge tone="neutral">{c.profit.knownNetProfit.status.toUpperCase()}</Badge>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs text-ink-subtle">Avg. net margin</p>
+                    <p className="font-medium">{c.profit.averageNetMarginPct.status === 'calculated' ? `${c.profit.averageNetMarginPct.value}%` : '—'}</p>
+                  </div>
+                </div>
+                <p className="mt-2 text-xs text-ink-subtle">{c.profit.productsWithKnownProfit} product(s) with known profit, {c.profit.productsWithUnknownProfit} unknown.</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {analytics.topRevenueProducts.length > 0 || analytics.lossMakingProducts.length > 0 ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardHeader title="Top products" description="Ranked by realised revenue, only among products with a known price and cost." />
+            <TableWrap>
+              <table className="w-full text-sm">
+                <thead className="border-t border-border text-left text-xs text-ink-subtle uppercase">
+                  <tr><th className="px-5 py-2">Product</th><th className="px-5 py-2">Channel</th><th className="px-5 py-2">Net margin</th><th className="px-5 py-2">Tags</th></tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {analytics.topRevenueProducts.map((p) => (
+                    <tr key={`${p.productId}:${p.channel}`}>
+                      <td className="px-5 py-2 font-medium">{p.productId}</td>
+                      <td className="px-5 py-2 text-ink-muted">{p.channel}</td>
+                      <td className="px-5 py-2">{p.netMarginPct !== null ? `${p.netMarginPct}%` : '—'}</td>
+                      <td className="px-5 py-2"><div className="flex flex-wrap gap-1">{p.tags.map((t) => <Badge key={t} tone="accent">{t.replace(/_/g, ' ')}</Badge>)}</div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableWrap>
+          </Card>
+          <Card>
+            <CardHeader title="Worst-performing products" description="Every product whose known projection is loss-making right now — never a guess where cost is unavailable." />
+            {analytics.lossMakingProducts.length === 0 ? (
+              <div className="px-5 py-8 text-center text-sm text-ink-muted">No product with a known projection is currently loss-making.</div>
+            ) : (
+              <TableWrap>
+                <table className="w-full text-sm">
+                  <thead className="border-t border-border text-left text-xs text-ink-subtle uppercase">
+                    <tr><th className="px-5 py-2">Product</th><th className="px-5 py-2">Channel</th><th className="px-5 py-2">Net profit</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {analytics.lossMakingProducts.map((p) => (
+                      <tr key={`${p.productId}:${p.channel}`}>
+                        <td className="px-5 py-2 font-medium">{p.productId}</td>
+                        <td className="px-5 py-2 text-ink-muted">{p.channel}</td>
+                        <td className="px-5 py-2 text-negative">{p.netProfitMinor !== null ? formatMoney(money(p.netProfitMinor, 'GBP')) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableWrap>
+            )}
+          </Card>
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card>
+          <CardHeader title="Supplier health" description="A deterministic classification — HEALTHY/WATCH/AT RISK/UNAVAILABLE/UNKNOWN — from real dispatch, cancellation and fulfilment-success facts, always with a stated reason." />
+          {analytics.supplierHealth.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-ink-muted">No supplier data yet.</div>
+          ) : (
+            <ul className="divide-y divide-border border-t border-border">
+              {analytics.supplierHealth.map((s) => (
+                <li key={s.supplierId} className="px-5 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium">{s.supplierId}</p>
+                    <Badge tone={s.status === 'healthy' ? 'positive' : s.status === 'watch' ? 'accent' : s.status === 'at_risk' ? 'caution' : s.status === 'unavailable' ? 'negative' : 'neutral'}>
+                      {s.status.replace('_', ' ')}
+                    </Badge>
+                  </div>
+                  {s.reasons.length > 0 ? <p className="mt-1 text-xs text-ink-subtle">{s.reasons.join(' ')}</p> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader title="Fulfilment health" description="From real fulfilments/shipments rows — a shipment with no delivery confirmation and no tracking is UNKNOWN, never assumed delivered." />
+          <div className="grid grid-cols-2 gap-px border-t border-border bg-border">
+            <MetricStat label="Awaiting fulfilment" metric={analytics.fulfilment.awaitingFulfilment} format={String as never} />
+            <MetricStat label="Delivered" metric={analytics.fulfilment.delivered} format={String as never} />
+            <MetricStat label="Cancellation rate" metric={analytics.fulfilment.cancellationRatePct} format={asPct as never} />
+            <MetricStat label="Missing tracking" metric={analytics.fulfilment.missingTracking} format={String as never} />
+            <MetricStat label="Avg. dispatch time" metric={analytics.fulfilment.averageDispatchDays} format={asDays as never} />
+            <MetricStat label="On-time delivery" metric={analytics.fulfilment.onTimeDeliveryRatePct} format={asPct as never} />
+            <MetricStat label="Late deliveries" metric={analytics.fulfilment.lateDeliveries} format={String as never} />
+            <MetricStat label="Unknown outcome" metric={analytics.fulfilment.unknownDeliveryOutcome} format={String as never} />
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card>
+          <CardHeader title="Open business alerts" description="Deterministic facts, not narration — each alert traces back to the real comparison or classification that produced it." />
+          {analytics.alerts.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-ink-muted">No open alerts.</div>
+          ) : (
+            <ul className="divide-y divide-border border-t border-border">
+              {analytics.alerts.map((a) => (
+                <li key={`${a.key}:${a.affectedEntityId ?? ''}`} className="px-5 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm">{a.message}</p>
+                    <Badge tone={a.severity === 'critical' ? 'negative' : a.severity === 'warning' ? 'caution' : 'neutral'}>{a.severity}</Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-ink-subtle">Source: {a.source}{a.actionable ? '' : ' · informational only'}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader title="Data-quality warnings" description="Every place a figure elsewhere on this page is genuinely incomplete — so no metric can be mistaken for whole when it isn't." />
+          {analytics.dataQuality.overallStatus === 'unknown' ? (
+            <div className="px-5 py-8 text-center text-sm text-ink-muted">Demo mode has no live data to check — data quality is genuinely unknown here, not &quot;complete&quot;.</div>
+          ) : analytics.dataQuality.issues.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-positive">Every check passed — no known data-quality gaps right now.</div>
+          ) : (
+            <ul className="divide-y divide-border border-t border-border">
+              {analytics.dataQuality.issues.map((issue) => (
+                <li key={issue.key} className="px-5 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm">{issue.message}</p>
+                    <Badge tone={issue.severity === 'critical' ? 'negative' : issue.severity === 'warning' ? 'caution' : 'neutral'}>{issue.affectedCount}</Badge>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader title="Advertising" description="No advertising connector exists in this codebase yet (Amazon Ads, Meta, Google, TikTok) — every figure below is honestly unavailable, never a fabricated £0." />
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-4">
+          <MetricStat label="Spend" metric={analytics.advertising.spend} format={String as never} />
+          <MetricStat label="ROAS" metric={analytics.advertising.roas} format={String as never} />
+          <MetricStat label="ACOS" metric={analytics.advertising.acosPct} format={asPct as never} />
+          <MetricStat label="Profit impact" metric={analytics.advertising.profitImpact} format={String as never} />
+        </div>
+      </Card>
+
+      {analytics.isDemo ? (
+        <div className="grid gap-4">
+          {analytics.demoScenarios.map((scenario) => (
+            <AnalyticsDemoScenarioCard key={scenario.key} scenario={scenario} />
           ))}
         </div>
       ) : null}

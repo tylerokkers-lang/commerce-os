@@ -1,10 +1,23 @@
 # Database
 
-72 tables across 25 migrations (as of Milestone 9), applied in filename
-order. Every migration is executed against a real Postgres engine by
-`npm run db:verify`, so nothing in here is untested SQL. This file
-describes the conventions that have held since Milestone 1; see
-`docs/MILESTONES.md` for what each later migration specifically added.
+72 tables across 25 migrations (as of Milestone 10 — unchanged since
+Milestone 9), applied in filename order. Every migration is executed
+against a real Postgres engine by `npm run db:verify`, so nothing in here
+is untested SQL. This file describes the conventions that have held since
+Milestone 1; see `docs/MILESTONES.md` for what each later migration
+specifically added.
+
+Milestone 10 added **zero migrations**. Every analytics figure
+(`src/lib/analytics/`) is computed at read time from tables that already
+existed — `orders`/`order_items`/`refunds` (revenue, units, refund/return
+rates), `channel_products`/`supplier_products` (per-channel profitability
+projections), `suppliers`/`supplier_connectors` (supplier health),
+`fulfilments`/`shipments` (fulfilment health), and `domain_events`
+(business alerts, via the existing Milestone 8 monitoring status). No
+alert, classification, or data-quality finding is persisted anywhere —
+each is derived fresh on every read, the same "a real open-event list, not
+a stored count" discipline `monitoring/repository.ts` already established
+in Milestone 8.5.
 
 Milestone 8.5's monitoring reads `supplier_products.dispatch_days_min/max`,
 `.cancellation_rate_pct`, `.fulfilment_success_rate_pct` and

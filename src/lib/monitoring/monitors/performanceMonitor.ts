@@ -1,3 +1,4 @@
+import { comparePeriods } from '@/lib/core/compare'
 import type { Monitor, MonitorContext, MonitorRunOutcome } from '../eventTypes'
 
 /**
@@ -48,10 +49,8 @@ export interface PerformanceMonitorSubject {
 
 const MONITOR_KEY = 'sales_performance'
 
-function pctChange(previous: number, current: number): number | null {
-  if (previous === 0) return current === 0 ? 0 : null // Cannot express "from zero" as a percentage — reported as a fact, not guessed.
-  return ((current - previous) / previous) * 100
-}
+/** `current`/`previous` order matches `comparePeriods(current, previous)` — kept as a local alias so call sites below read the same as before the Milestone 10 refactor into `core/compare.ts`. */
+const pctChange = (previous: number, current: number): number | null => comparePeriods(current, previous).percentChange
 
 export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
   descriptor: { key: MONITOR_KEY, label: 'Sales & performance', category: 'performance', defaultIntervalMinutes: 24 * 60 },
@@ -65,6 +64,7 @@ export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
     const surgeThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:surge_threshold_pct`, 50)
     const declineThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:decline_threshold_pct`, -30)
     const returnRateThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:return_rate_increase_pct`, 50)
+    const refundRateThresholdPct = await ctx.events.getMonitorConfigNumber(ctx.orgId, `${MONITOR_KEY}:refund_rate_increase_pct`, 50)
 
     for (const subject of subjects) {
       try {
@@ -117,6 +117,23 @@ export const performanceMonitor: Monitor<PerformanceMonitorSubject> = {
           const result = await ctx.events.createEvent({
             orgId: ctx.orgId, eventType: 'PRODUCT_RETURN_RATE_INCREASED', subjectType: 'product', subjectId: subject.productId,
             source: 'internal', severity: 'warning', facts: { previousReturnRatePct: previousReturnRate, currentReturnRatePct: currentReturnRate }, dedupeKey: `performance:${subject.productId}:return_rate:${Math.round(currentReturnRate * 10)}`,
+          })
+          if (!result.deduplicated) eventsCreated++
+          else eventsDeduplicated++
+        }
+
+        // A refund does not always mean a physical return (see
+        // `REFUND_REASONS_COUNTED_AS_RETURNS` in `salesAggregation.ts`) —
+        // pricing errors and goodwill credits are refunds without a
+        // returned item, so this is tracked as its own fact, incidents per
+        // unit sold, the same shape as the return-rate check above.
+        const previousRefundRate = subject.previousWindow.unitsSold > 0 ? (subject.previousWindow.refundsCount / subject.previousWindow.unitsSold) * 100 : 0
+        const currentRefundRate = subject.currentWindow.unitsSold > 0 ? (subject.currentWindow.refundsCount / subject.currentWindow.unitsSold) * 100 : 0
+        const refundRateChangePct = pctChange(previousRefundRate, currentRefundRate)
+        if (refundRateChangePct !== null && refundRateChangePct >= refundRateThresholdPct && currentRefundRate > previousRefundRate) {
+          const result = await ctx.events.createEvent({
+            orgId: ctx.orgId, eventType: 'PRODUCT_REFUND_RATE_INCREASED', subjectType: 'product', subjectId: subject.productId,
+            source: 'internal', severity: 'warning', facts: { previousRefundRatePct: previousRefundRate, currentRefundRatePct: currentRefundRate }, dedupeKey: `performance:${subject.productId}:refund_rate:${Math.round(currentRefundRate * 10)}`,
           })
           if (!result.deduplicated) eventsCreated++
           else eventsDeduplicated++

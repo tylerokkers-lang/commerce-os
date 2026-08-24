@@ -59,7 +59,13 @@ test proving one org's automation actions never appear in another org's
 rule — every one of its paginated queries carries `.eq('org_id', orgId)`,
 including the joins across `supplier_products`/`products`/`channel_products`
 and the `orders`/`order_items`/`refunds` queries behind real sales
-aggregation.
+aggregation. `analytics/liveAnalyticsFacts.ts` (Milestone 10) follows the
+same rule using the same shared `supabase/paginate.ts` helper — every
+query it issues (orders, order_items, refunds, channel_products, suppliers,
+supplier_connectors, supplier_products, fulfilments, shipments,
+compliance_records) is scoped by `org_id`, and `getAnalyticsDashboard`
+resolves `orgId` from the caller's own session, never from a parameter a
+client could supply.
 
 The job queue itself (`automation_jobs`) is *not* org-partitioned at the
 claim level — `claimNextJob` picks the next due job across all
@@ -166,6 +172,34 @@ asserts every monitor's real `enqueueJob` calls agree with this table, and
 separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
+
+## What Milestone 10 changed here
+
+- No new tables, no new RLS policies, no new credential types —
+  `analytics/liveAnalyticsFacts.ts` reads columns and tables every prior
+  milestone's RLS policies already govern (see `docs/DATABASE.md`).
+- No new write path was introduced anywhere in `analytics/` — every
+  function in the module is a read (either a pure computation over
+  already-loaded facts, or a `select`-only Supabase query). Analytics
+  cannot change a price, a supplier, a listing, an order, a refund, or
+  compliance state, by construction: nothing in this module imports a
+  `store.ts`/`AutomationStore` write method, a marketplace connector's
+  write method, or an execution pipeline.
+- `profitabilityMonitor.ts`'s extended margin-crossing logic follows the
+  identical "monitors observe, only automation acts" boundary every prior
+  monitor has kept — it calls the pure `calculateProfitability` engine
+  (via `channels.ts`) and enqueues an existing job type
+  (`product_profitability_recheck`/`product_price_review`), the same as
+  every other monitor since Milestone 8; it never executes a price change
+  itself. `product_price_review`'s own handler (`productHandlers.ts`,
+  Milestone 6–7) is unchanged — it still only *proposes* a price via
+  `executePriceChange`'s existing automation-level/approval gate, which
+  this milestone did not touch.
+- The two real bugs fixed this milestone (`channels.ts`'s currency-default
+  bug; `channelAnalytics.ts`'s currency-mixing guard) were both crash/
+  correctness fixes, not security-relevant in the credential/access-control
+  sense — no data was ever exposed across a currency mismatch, the failure
+  mode was an uncaught exception (a 500), not an information leak.
 
 ## What Milestone 9 changed here
 

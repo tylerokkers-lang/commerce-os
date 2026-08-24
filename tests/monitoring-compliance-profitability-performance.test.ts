@@ -107,11 +107,119 @@ describe('profitability safety-net monitor', () => {
     expect(outcome.eventsCreated).toBe(1)
     expect(events.getState().events.filter((e) => e.eventType === 'PRODUCT_PRICE_REVIEW_REQUIRED')).toHaveLength(2)
   })
+
+  // Milestone 10: real margin crossing, only reachable when the subject
+  // carries `channel`/`connectorKey` (the price fact needed to price a
+  // real channel projection). £30 selling price, Shopify channel (0%
+  // channel fee, 1.75%+£0.25 payment fee, £4.50 default ad spend, £0.35
+  // packaging, 1% refund allowance by `projectChannel`'s own default) —
+  // at £9 cost this clears ~32.5% net margin; at £20 cost it is a genuine
+  // loss; at £12 cost it stays profitable but margin drops materially.
+  const marginSubject: ProfitabilityMonitorSubject = { productId: 'prod-margin', supplierId: 'sup-1', channelProductId: 'cp-margin', channel: 'shopify', connectorKey: 'shopify' }
+  const seedFor = (unitCostMajor: number) => ({
+    channelProducts: { 'cp-margin': { status: 'live', priceMinor: 3000, fulfilmentSupplierId: 'sup-1', externalId: 'shopify-ext-1', lastSyncedAt: new Date().toISOString(), updatedAt: new Date().toISOString() } },
+    products: { 'prod-margin': { title: 'Margin Test Product', category: null, stage: 'live', updatedAt: new Date().toISOString() } },
+    offers: { 'sup-1:prod-margin': { unitCost: fromMajor(unitCostMajor), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } },
+  })
+
+  it('a subject with no channel/connectorKey never attempts a margin check (pre-Milestone-10 subjects keep working unchanged)', async () => {
+    const { ctx, events } = makeCtx({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(9), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } })
+    await profitabilityMonitor.run(ctx, [subject])
+    await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader({ offers: { 'sup-1:prod-1': { unitCost: fromMajor(20), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } }) }, [subject])
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_NO_LONGER_PROFITABLE')).toBe(false)
+  })
+
+  it('a cost rise that flips net profit negative creates PRODUCT_NO_LONGER_PROFITABLE and enqueues product_price_review with a full payload', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: createInMemoryFactsLoader(seedFor(9)), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [marginSubject]) // Baseline: profitable.
+
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(20)) }, [marginSubject])
+
+    expect(outcome.eventsCreated).toBeGreaterThan(0)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_NO_LONGER_PROFITABLE')).toBe(true)
+    const job = store.getState().jobs.find((j) => j.jobType === 'product_price_review')
+    expect(job).toBeTruthy()
+    expect(job?.payload).toMatchObject({ channelProductId: 'cp-margin', currentSellingPriceMinor: 3000, productCostMinor: 2000, connectorKey: 'shopify' })
+  })
+
+  it('a cost rise that stays profitable but drops margin by more than the threshold creates PRODUCT_MARGIN_DROPPED without PRODUCT_NO_LONGER_PROFITABLE', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: createInMemoryFactsLoader(seedFor(9)), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [marginSubject]) // Baseline.
+
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(12)) }, [marginSubject])
+
+    // Also triggers the separate unit-cost tripwire (a genuinely different
+    // fact: the cost changed at all) — both are real and expected together.
+    expect(outcome.eventsCreated).toBe(2)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_MARGIN_DROPPED')).toBe(true)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_NO_LONGER_PROFITABLE')).toBe(false)
+  })
+
+  it('a dropped margin that only stops falling (without recovering) does not falsely report PRODUCT_MARGIN_RECOVERED', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: createInMemoryFactsLoader(seedFor(9)), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [marginSubject]) // Baseline, ~32.5%.
+    await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(12)) }, [marginSubject]) // Dropped.
+
+    // Cost stays exactly the same on the next tick — margin is unchanged
+    // from the dropped level, genuinely still dropped relative to the
+    // frozen pre-drop reference, not "recovered" just because it stopped
+    // moving.
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(12)) }, [marginSubject])
+
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_MARGIN_RECOVERED')).toBe(false)
+    void outcome
+  })
+
+  it('margin genuinely climbing back above the reference threshold creates PRODUCT_MARGIN_RECOVERED', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: createInMemoryFactsLoader(seedFor(9)), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [marginSubject]) // Baseline, ~32.5%.
+    await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(12)) }, [marginSubject]) // Dropped.
+
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(9)) }, [marginSubject]) // Cost falls back.
+
+    // Also triggers the unit-cost tripwire again (the cost genuinely moved
+    // back down) — a real, separate fact from the margin recovery.
+    expect(outcome.eventsCreated).toBe(2)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_MARGIN_RECOVERED')).toBe(true)
+  })
+
+  it('a product that starts unprofitable and becomes profitable creates PRODUCT_BECAME_PROFITABLE, never on the very first (baseline) observation', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: createInMemoryFactsLoader(seedFor(20)), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [marginSubject]) // Baseline: unprofitable, but a baseline never itself fires an event.
+    expect(events.getState().events).toHaveLength(0)
+
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader(seedFor(9)) }, [marginSubject])
+    expect(outcome.eventsCreated).toBeGreaterThan(0)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_BECAME_PROFITABLE')).toBe(true)
+  })
+
+  it('a missing selling-price fact skips the margin check but the unit-cost tripwire still runs', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const noPriceFacts = () => createInMemoryFactsLoader({ offers: { 'sup-1:prod-margin': { unitCost: fromMajor(9), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } }) // No channelProducts entry at all.
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: noPriceFacts(), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [marginSubject])
+    const outcome = await profitabilityMonitor.run({ ...ctx, facts: createInMemoryFactsLoader({ offers: { 'sup-1:prod-margin': { unitCost: fromMajor(20), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } } }) }, [marginSubject])
+
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_PRICE_REVIEW_REQUIRED')).toBe(true)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_NO_LONGER_PROFITABLE')).toBe(false)
+    void outcome
+  })
 })
 
 describe('sales & performance monitor', () => {
-  const window = (unitsSold: number, returnsCount = 0, adSpendMinor = 0): PerformanceWindow => ({
-    unitsSold, revenueMinor: unitsSold * 1000, returnsCount, refundsCount: 0, adSpendMinor, windowStart: '2026-08-16', windowEnd: '2026-08-23',
+  const window = (unitsSold: number, returnsCount = 0, adSpendMinor = 0, refundsCount = 0): PerformanceWindow => ({
+    unitsSold, revenueMinor: unitsSold * 1000, returnsCount, refundsCount, adSpendMinor, windowStart: '2026-08-16', windowEnd: '2026-08-23',
   })
 
   it('a subject with no previous window is skipped — no popularity data is invented', async () => {
@@ -169,6 +277,14 @@ describe('sales & performance monitor', () => {
     const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: window(100, 20), previousWindow: window(100, 5), adSpendLimitMinor: null }
     await performanceMonitor.run(ctx, [subject])
     expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_RETURN_RATE_INCREASED')).toBe(true)
+  })
+
+  it('a refund-rate increase beyond the threshold creates PRODUCT_REFUND_RATE_INCREASED, distinct from a return-rate increase', async () => {
+    const { ctx, events } = makeCtx()
+    const subject: PerformanceMonitorSubject = { productId: 'prod-1', supplierId: 'sup-1', channelProductId: 'cp-1', currentWindow: window(100, 0, 0, 20), previousWindow: window(100, 0, 0, 5), adSpendLimitMinor: null }
+    await performanceMonitor.run(ctx, [subject])
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_REFUND_RATE_INCREASED')).toBe(true)
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_RETURN_RATE_INCREASED')).toBe(false) // returnsCount unchanged — a pricing-error refund is not a return.
   })
 
   it('ad spend exceeding the configured limit creates AD_SPEND_EXCEEDED', async () => {

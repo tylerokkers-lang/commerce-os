@@ -1387,15 +1387,221 @@ from 68); typecheck, lint and `npm run build` all clean; `/automation`,
 live with no console errors; `informax-site` confirmed untouched
 throughout.
 
-## Milestone 10 — Analytics and business intelligence
+## Milestone 10 — Analytics and business intelligence ✅ complete
 
-Revenue, orders, units, gross profit, contribution, contribution margin, ad
-spend, CAC, ROAS, MER, refunds, returns, supplier/delivery/marketplace/product
-performance, and cash movement, each clearly and separately defined — revenue,
-cash received, gross profit, contribution and accounting profit are never used
-interchangeably. Standard comparison periods (today, yesterday, this/last
-week, month to date, previous month, custom range), and every comparison
-states its comparison period explicitly.
+Every milestone through 9 answered "what is true about this one product,
+supplier, or market right now?" This milestone rolls those same facts up
+into "how is the business actually performing?" — revenue, profit, sales
+trends, product/channel/supplier/fulfilment/international performance, a
+deterministic business-health alert feed, and a data-quality summary, all
+fact-first: every figure is FACT, CALCULATED, DERIVED, ESTIMATE, UNKNOWN,
+STALE or UNAVAILABLE, and a missing cost or a disconnected advertising
+platform is never rendered as zero. No AI prediction engine was built — a
+future layer can add one, clearly labelled, without touching anything here.
+
+- **`src/lib/core/compare.ts`**: `comparePeriods(current, previous)` — the
+  one place "current vs previous, absolute diff, percentage diff, direction"
+  is computed, with the same divide-by-zero rule (`previous === 0` yields
+  `null`, not `Infinity`, unless `current` is also `0`) every caller now
+  shares. `monitoring/monitors/performanceMonitor.ts`'s previously-private
+  `pctChange` helper was refactored to call this rather than keep its own
+  copy.
+- **`src/lib/orders/salesAggregation.ts` extended, not duplicated**: 9 named
+  periods (`today`/`yesterday`/`last_7_days`/`last_30_days`/`month_to_date`/
+  `previous_month`/`quarter_to_date`/`year_to_date`/`custom`) via
+  `resolvePeriod`, and `previousEquivalentPeriod` — calendar-anchored
+  periods (month/quarter/year-to-date) compare against the *same elapsed
+  fraction* of the prior calendar period (24 August's month-to-date
+  compares against 1–24 July, never the whole of July), not just an
+  equal-length window, so a partial period never looks like a false decline
+  against a complete one. `aggregateSalesWindow` itself is unchanged and
+  reused, not reimplemented.
+- **`src/lib/analytics/`** (new module, one file per concern, mirroring
+  Milestone 9's `markets/`/`fx/` granularity):
+  - `types.ts` — the `FactStatus` vocabulary (`fact`/`calculated`/`derived`/
+    `estimate`/`unknown`/`stale`/`unavailable`) and `Metric<T>`/
+    `PeriodMetric<T>` wrappers every analytics figure is returned in.
+  - `salesAnalytics.ts` — wraps `aggregateSalesWindow` (called twice, once
+    per period, by the live loader) into labelled, comparison-bearing
+    figures; a genuine zero-sales window is `fact`, never `unknown`.
+  - `profitAnalytics.ts` — per product-per-channel profitability, calling
+    `profitability/channels.ts`'s `buildChannelProfiles`/`projectChannel`
+    (the same engine `/opportunities/[id]` and `profitabilityMonitor.ts`
+    already use) — never a second margin calculator. Rejects a supplier
+    cost quoted in a different currency than the channel's listing price
+    as `unavailable` rather than combining them.
+  - `productAnalytics.ts` — deterministic classification
+    (`top_revenue`/`top_profit`/`high_margin`/`low_margin`/`loss_making`/
+    `declining_sales`/`growing_sales`/`high_refund_rate`/`supplier_risk`/
+    `stock_risk`/`compliance_risk`/`channel_opportunity`) from real ranks,
+    margins and open-event flags — no invented score.
+  - `channelAnalytics.ts` — per-channel sales + a known-profit rollup that
+    states how many products were excluded and why (unknown cost, or a
+    genuine currency mismatch — see the bug below).
+  - `supplierAnalytics.ts` — `HEALTHY`/`WATCH`/`AT_RISK`/`UNAVAILABLE`/
+    `UNKNOWN`, from real dispatch/cancellation/fulfilment-success facts and
+    open monitoring events, always with a stated reason.
+  - `fulfilmentAnalytics.ts` — dispatch time, on-time delivery rate,
+    cancellation rate, missing-tracking count; a shipment with no delivery
+    confirmation and no tracking is `unknown`, never assumed delivered.
+  - `advertisingAnalytics.ts` — the interface a future Amazon
+    Ads/Meta/Google/TikTok Ads connector will satisfy; every figure is
+    `unavailable` today because no such connector exists anywhere in this
+    codebase, never a fabricated £0 spend.
+  - `dataQuality.ts` / `businessHealth.ts` — a rollup of every other
+    module's unknown/stale/unavailable counts into a CEO-legible issue
+    list, and a deterministic alert feed (revenue decline, profit decline,
+    profit decline *despite* revenue growth, supplier at-risk/unavailable,
+    data-quality gaps) where every alert carries the real comparison or
+    classification that produced it as `evidence`.
+  - `liveAnalyticsFacts.ts` (`server-only`) — the one caller that turns
+    org-scoped, paginated Supabase queries (via the newly-shared
+    `supabase/paginate.ts`, extracted from `monitoring/liveSubjects.ts` so
+    both share one bounded-pagination implementation) into the fact shapes
+    above; every query is scoped by `org_id`.
+  - `repository.ts` extended (the pre-existing Milestone 1 reporting reads
+    `/report` uses are untouched) — `getAnalyticsDashboard()` is the one
+    round trip `/automation` makes for every section below, and
+    `getBusinessOverview`/`getRevenueAnalytics`/`getProfitAnalytics`/
+    `getProductAnalytics`/`getSupplierAnalytics`/`getMarketplaceAnalytics`/
+    `getMarketAnalytics`/`getDataQuality` are the named entry points a
+    future CEO AI assistant (Milestone 12) queries facts through, per the
+    brief's §21 — each currently reads its slice off the one dashboard call
+    rather than running a second live query.
+- **Monitoring integration, closing genuinely dead configuration**: three
+  event types had been reserved in `monitoring/registry.ts`'s
+  `EVENT_TO_JOB_MAPPING` since Milestone 8 but never actually emitted —
+  `PRODUCT_MARGIN_DROPPED`/`PRODUCT_MARGIN_RECOVERED`,
+  `PRODUCT_NO_LONGER_PROFITABLE`/`PRODUCT_BECAME_PROFITABLE`, and
+  `PRODUCT_REFUND_RATE_INCREASED`. `profitabilityMonitor.ts` now also
+  computes a real channel-aware margin projection (via `channels.ts`, the
+  same engine, when the subject carries `channel`/`connectorKey` —
+  optional fields, so every pre-Milestone-10 subject/test keeps working
+  unchanged) and tracks a *frozen reference margin* while a product is in
+  a dropped state, so a margin that merely stops falling is never
+  misreported as "recovered" — recovery requires climbing back above the
+  threshold. A crossing into unprofitable enqueues `product_price_review`
+  with the full rich payload that handler has required since Milestone 7.
+  `performanceMonitor.ts` gained `PRODUCT_REFUND_RATE_INCREASED`, mirroring
+  the existing `PRODUCT_RETURN_RATE_INCREASED` check exactly (refunds and
+  returns are tracked as genuinely different facts, per
+  `REFUND_REASONS_COUNTED_AS_RETURNS`'s existing documented heuristic). No
+  new monitor, no new job type beyond what already existed unused — revenue
+  decline, sales decline, supplier deterioration, marketplace desync and
+  market profitability deterioration were already fully covered by
+  Milestone 8/8.5/9's monitors and needed no duplication.
+- **`src/lib/demo/analytics.ts`**: the 10 required demo scenarios (strong
+  growth; revenue decline; profit decline despite revenue growth; a
+  product becoming loss-making; supplier deterioration; marketplace
+  underperformance; an international market performing well — reusing
+  Milestone 9's own `demoMarketExpansionScenarios()` rather than
+  re-deriving country/FX/compliance facts a second time; incomplete
+  profit data; advertising unavailable; fulfilment deterioration), each
+  computed by calling the real builder functions against deliberately
+  chosen fixture facts, never a hardcoded narrative string.
+- **UI**: `/automation` gained a "Business analytics" area — revenue &
+  profit (with period-over-period comparison badges), channel performance,
+  top/worst-performing products, supplier health, fulfilment health, open
+  business alerts, data-quality warnings, and an honestly-`UNAVAILABLE`
+  advertising card — plus the 10 demo scenario cards in demo mode. No new
+  route: the existing automation/CEO-intelligence page was extended, per
+  the brief's own instruction not to build a separate dashboard where one
+  already fits.
+- **Two real bugs found by deliberate multi-currency probing, not by
+  inspection** (Milestone 10 §22's explicit instruction): `channels.ts`'s
+  `buildChannelProfiles` and `projectChannel` had *always* built several of
+  their own cost Money values (Amazon FBA fulfilment, both channels'
+  default ad spend, Shopify's payment fee, the default packaging cost) by
+  calling `fromMajor(x)` with no explicit currency — silently defaulting to
+  GBP regardless of the product's actual `sellingPrice.currency`. This had
+  been dormant since Milestone 1 because every prior caller only ever
+  priced products in GBP; Milestone 10's analytics is the first path that
+  could genuinely receive a non-GBP `channel_products.currency` row, and it
+  crashed immediately with an uncaught `CurrencyMismatchError` inside
+  `calculateProfitability`'s own `add()` calls. Fixed by building every
+  Money value in the input's own currency throughout both functions — a
+  real, previously-latent bug in shared production code, not new code, now
+  covered by regression tests. Separately, `analytics/channelAnalytics.ts`'s
+  `buildChannelProfitRollup` was changed to filter out (and honestly count,
+  never silently sum) any product whose *own* currency differs from the
+  channel's reporting currency, so a single mismatched listing can never
+  crash — or corrupt — a whole channel's rollup.
+
+**IMPLEMENTED AND VERIFIED:**
+
+- Period resolution and previous-equivalent-period comparison for all 9
+  periods, including the calendar-anchored same-elapsed-fraction rule
+  (`tests/sales-aggregation-periods.test.ts`).
+- Sales, profit, product, channel, supplier and fulfilment analytics
+  builders, each proven against genuinely adversarial fixtures: empty
+  data, missing cost, missing price, a mismatched-currency supplier cost,
+  zero revenue in the current period, zero revenue in *both* periods
+  (a real `0%`, not `null`, not a crash), partial data that must not
+  skew the rest of a rollup, and channel divergence (the same product
+  profitable on one channel, loss-making on another, never averaged).
+- The two real `channels.ts`/`channelAnalytics.ts` bugs above, found and
+  fixed via deliberate multi-currency bug-hunting
+  (`tests/analytics-bug-hunting.test.ts`).
+- The three previously-dead monitoring event types, now genuinely emitted
+  and enforced against `EVENT_TO_JOB_MAPPING`'s strict per-event job
+  contract, including the rich `product_price_review` payload
+  (`tests/monitoring-compliance-profitability-performance.test.ts`,
+  `tests/monitoring-registry.test.ts`).
+- All 10 demo scenarios, computed through the real builder functions
+  (`tests/demo-analytics.test.ts`).
+- `/automation`'s new "Business analytics" area confirmed live in the
+  browser with no console errors, in demo mode (every KPI an honest zero
+  or `UNKNOWN`, all 10 demo scenario cards rendering with real computed
+  figures) — plus `/opportunities/[id]`, `/orders`, `/marketplaces`,
+  `/approvals` and `/report` re-checked for regressions after the shared
+  `channels.ts` fix, with the opportunity page's existing profitability
+  figures byte-identical to their pre-Milestone-10 values.
+
+**IMPLEMENTED BUT NOT LIVE-VERIFIED:**
+
+- `analytics/liveAnalyticsFacts.ts`'s own Supabase query composition —
+  proven against the same schema and column names every other
+  `server-only` query in this codebase already uses, but never against a
+  real deployed Postgres project, because none exists in this environment.
+  Same standing boundary as every live Supabase path since Milestone 1.
+
+**REQUIRES PRODUCTION INFRASTRUCTURE:**
+
+- A real advertising connector (Amazon Ads, Meta, Google Ads, TikTok Ads)
+  — `advertisingAnalytics.ts` defines the interface; nothing implements it,
+  by design, until real credentials and an API integration exist.
+- Real order/fulfilment/supplier-cost history at scale, to confirm
+  `liveAnalyticsFacts.ts`'s pagination bounds (500 rows/page, 20 pages) are
+  the right ceiling for an actual trading business, not just this
+  environment's demo data.
+
+**NOT IMPLEMENTED (deliberately, not a hidden gap):**
+
+- No interactive period selector on `/automation` — the dashboard defaults
+  to "last 30 days" and states its own period and comparison window
+  explicitly in the section header; a client-side selector is a UI
+  addition, not an analytics-architecture one, and was left for a later
+  pass rather than adding a client component this milestone did not need.
+- Realized (as opposed to projected) historical profit reconstruction —
+  `profitAnalytics.ts` projects *current* price and cost through the
+  engine, the same convention every other profitability view in this
+  codebase already follows, because `order_items.unit_cost_minor` is only
+  populated where a sale's real cost was actually captured; inventing a
+  historical figure where it was not would be exactly the failure mode
+  `docs/PRINCIPLES.md` §1 forbids.
+- Order-level cancellation-rate analytics distinct from fulfilment
+  cancellation — `fulfilmentAnalytics.ts` covers fulfilment-record
+  cancellation (a real, queried fact); a separate order-status-level
+  cancellation metric was judged redundant with it for this pass.
+
+**Verified:** 770 tests (up from 702 after Part 14's monitoring work, up
+from 687 at the start of this milestone); no new migrations (25
+migrations, 72 tables, unchanged — every metric reads existing tables);
+typecheck, lint and `npm run build` all clean; `db:verify` re-run clean;
+`/automation`, `/opportunities/[id]`, `/orders`, `/marketplaces`,
+`/approvals` and `/report` confirmed live in the browser with no console
+errors; `informax-site` confirmed untouched throughout (git status checked
+before and after).
 
 ## Milestone 11 — CEO dashboard
 
@@ -1410,6 +1616,21 @@ command centres, a product testing centre, a system health panel (connectors,
 workers, last sync, failed jobs), and an emergency stop that can pause
 automation categories while preserving critical order processing, itself
 logged like any other consequential action.
+
+**Note:** Milestone 10 already delivered substantial business-intelligence
+content on `/automation` — revenue & profit with period comparison,
+channel/product/supplier/fulfilment performance, a deterministic
+business-health alert feed, and a data-quality summary, all behind
+`analytics/repository.ts`'s `getAnalyticsDashboard()` and the named
+`getX()` entry points. What remains scoped to this milestone is genuinely
+new: the AI CEO briefing itself (needs Milestone 12's chat/tool layer),
+the explainable business-health *score* (Milestone 10 built the alert
+feed and the KPIs a score would be computed from, not a single blended
+number), products-ready-to-scale gating, finance/advertising/product
+command centres, and the emergency-stop UI (the underlying pause
+mechanism has existed since Milestone 6). Read Milestone 10's section
+first — its `getBusinessOverview`/`getProfitAnalytics`/etc. functions are
+designed to be read from directly, not re-summarised.
 
 ## Milestone 12 — Commerce Intelligence chat
 

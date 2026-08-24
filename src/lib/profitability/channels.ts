@@ -94,9 +94,26 @@ export function buildChannelProfiles(input: ChannelProfileInput): readonly Chann
   // Where the percentage fee would fall below Amazon's per-item minimum, the
   // minimum applies instead. Expressing the shortfall as a fixed fee keeps the
   // single engine's inputs honest rather than fudging the percentage.
+  //
+  // `AMAZON_MINIMUM_REFERRAL` is a genuinely GBP-denominated UK marketplace
+  // rule; comparing its raw minor-unit number against a non-GBP price's own
+  // minor units is a real cross-currency assumption (never a claim of an
+  // equivalent $/€ minimum) — kept only because it never crashes (this is
+  // plain number arithmetic, not `Money` addition) and because
+  // `channel_key` in this schema is UK-only today (`shopify` | `amazon_uk`).
+  // A genuinely non-UK fee model belongs in `markets/marketCostProfiles.ts`
+  // (Milestone 9's real per-market assumptions), not here.
   const percentageFee = Math.round((input.sellingPrice.minor * referralPct) / 100)
   const referralShortfall = Math.max(0, AMAZON_MINIMUM_REFERRAL.minor - percentageFee)
 
+  // Every Money value below is built in the *input's own* currency —
+  // `fromMajor`'s default parameter is GBP, and calling it bare here would
+  // silently return GBP-denominated fees for a non-GBP-priced product,
+  // which `calculateProfitability`'s internal `add()` calls then throw a
+  // `CurrencyMismatchError` on (found via Milestone 10's deliberate
+  // multi-currency bug-hunting, not by inspection). This function's
+  // contract is "a cost profile priced in the same currency as its input,"
+  // which it must hold unconditionally.
   const amazon: ChannelCostProfile = {
     channel: 'amazon_uk',
     label: 'Amazon UK',
@@ -105,8 +122,8 @@ export function buildChannelProfiles(input: ChannelProfileInput): readonly Chann
     // Amazon settles net of its own fees, so there is no separate card cost.
     paymentFeePct: 0,
     paymentFeeFixed: zero(currency),
-    fulfilment: input.amazonFba ? fromMajor(2.9) : fromMajor(0),
-    adSpendPerUnit: input.amazonAdSpendPerUnit ?? fromMajor(2.5),
+    fulfilment: input.amazonFba ? fromMajor(2.9, currency) : fromMajor(0, currency),
+    adSpendPerUnit: input.amazonAdSpendPerUnit ?? fromMajor(2.5, currency),
     notes: [
       `${referralPct}% referral fee for ${input.category ?? 'the default category'}.`,
       referralShortfall > 0
@@ -126,11 +143,11 @@ export function buildChannelProfiles(input: ChannelProfileInput): readonly Chann
     channelFeeFixed: zero(currency),
     // Shopify Payments UK standard online rate.
     paymentFeePct: 1.75,
-    paymentFeeFixed: fromMajor(0.25),
-    fulfilment: fromMajor(0),
+    paymentFeeFixed: fromMajor(0.25, currency),
+    fulfilment: fromMajor(0, currency),
     // Shopify sends no traffic of its own, so the advertising assumption is
     // materially higher than Amazon's by default.
-    adSpendPerUnit: input.shopifyAdSpendPerUnit ?? fromMajor(4.5),
+    adSpendPerUnit: input.shopifyAdSpendPerUnit ?? fromMajor(4.5, currency),
     notes: [
       'Shopify Payments: 1.75% plus £0.25 per transaction.',
       'No marketplace referral fee.',
@@ -184,7 +201,11 @@ export function projectChannel(
     productCost: input.productCost,
     supplierShipping: input.supplierShipping,
     fulfilment: profile.fulfilment,
-    packaging: input.packaging ?? fromMajor(0.35),
+    // Same currency-correctness rule as `buildChannelProfiles` above: the
+    // default must be built in the input's own currency, not `fromMajor`'s
+    // bare GBP default, or a non-GBP-priced product throws inside
+    // `calculateProfitability`'s own `add()` calls.
+    packaging: input.packaging ?? fromMajor(0.35, input.sellingPrice.currency),
     channelFeePct: profile.channelFeePct,
     channelFeeFixed: profile.channelFeeFixed,
     paymentFeePct: profile.paymentFeePct,

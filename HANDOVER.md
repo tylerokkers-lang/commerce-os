@@ -998,16 +998,101 @@ facts; live subject discovery for the `market_expansion` monitor in
 flagship integration test exercise the full chain via directly-constructed
 subjects instead).
 
-## 24. Next step
+## 24. Milestone 10 (analytics and business intelligence) — what was built
 
-Milestone 10 (analytics and business intelligence), per `docs/MILESTONES.md`.
-Its live sales/order aggregation is now substantially built
-(`orders/salesAggregation.ts`) — extend it rather than building a second
-one. Read `docs/PRINCIPLES.md` first. Do not start Milestone 11 (CEO
-dashboard) until Milestone 10 is tested and working — when it is built, it
-should read from `automation/repository.ts`'s `getAutomationStatus` and
-`monitoring/repository.ts`'s `getMonitoringStatus` directly, not
-re-summarise either. When international expansion is eventually revisited
-as Milestone 15, read Milestone 9's section first — the market model, FX
-intelligence, country-aware compliance delegation and expansion engine it
-built are designed to extend without a schema redesign, not be rebuilt.
+Every milestone through 9 established facts about one product, supplier or
+market at a time. This milestone rolls those facts up into "how is the
+business actually performing?" — fact-first throughout, with no AI
+prediction engine. Full detail in `docs/MILESTONES.md`'s Milestone 10
+section — this is the short version plus what you need to know before
+touching this code.
+
+- **`src/lib/analytics/`** (new, one file per concern): `types.ts`'s
+  `FactStatus` vocabulary (`fact`/`calculated`/`derived`/`estimate`/
+  `unknown`/`stale`/`unavailable`) wraps every figure; `salesAnalytics.ts`
+  wraps `orders/salesAggregation.ts`'s existing `aggregateSalesWindow`
+  (extended, never duplicated, with `resolvePeriod`/
+  `previousEquivalentPeriod` for 9 named periods); `profitAnalytics.ts`
+  calls `profitability/channels.ts`'s engine, never a second one;
+  `productAnalytics.ts`/`channelAnalytics.ts`/`supplierAnalytics.ts`/
+  `fulfilmentAnalytics.ts` are deterministic classifications from real
+  facts, never invented scores; `advertisingAnalytics.ts` is an interface
+  only — no advertising connector exists, so every figure is honestly
+  `unavailable`; `dataQuality.ts`/`businessHealth.ts` roll the above into a
+  CEO-legible issue list and an evidence-carrying alert feed;
+  `liveAnalyticsFacts.ts` (`server-only`) is the one org-scoped, paginated
+  Supabase caller everything above is fed from; `repository.ts` gained
+  `getAnalyticsDashboard()` (the one round trip `/automation` makes) and
+  the named `getBusinessOverview`/`getRevenueAnalytics`/etc. entry points a
+  future CEO AI assistant will query facts through.
+- **`core/compare.ts`**: the one `comparePeriods` implementation,
+  promoted out of `performanceMonitor.ts`'s previously-private `pctChange`.
+- **`supabase/paginate.ts`**: the bounded-pagination helper extracted out
+  of `monitoring/liveSubjects.ts` so both monitoring and analytics share
+  one implementation.
+- **Monitoring gap closed**: three event types had been reserved in
+  `EVENT_TO_JOB_MAPPING` since Milestone 8 but never actually emitted —
+  `PRODUCT_MARGIN_DROPPED`/`RECOVERED`,
+  `PRODUCT_NO_LONGER_PROFITABLE`/`BECAME_PROFITABLE`, and
+  `PRODUCT_REFUND_RATE_INCREASED`. `profitabilityMonitor.ts` now computes
+  a real channel-aware margin when its subject carries the (optional,
+  backward-compatible) `channel`/`connectorKey` fields, and tracks a
+  frozen reference margin while dropped so a margin that merely stops
+  falling is never misreported as recovered.
+- **Two real, previously-latent bugs found by deliberate multi-currency
+  probing** (Milestone 10's own explicit bug-hunting instruction, not
+  inspection): `profitability/channels.ts`'s `buildChannelProfiles` and
+  `projectChannel` — shared, pre-existing production code since Milestone
+  1 — built several of their own cost `Money` values (Amazon FBA
+  fulfilment, both channels' default ad spend, Shopify's payment fee, the
+  default packaging cost) by calling `fromMajor(x)` with no currency,
+  silently defaulting to GBP regardless of the product's actual selling
+  price currency. Dormant since Milestone 1 because every prior caller
+  only ever priced in GBP; Milestone 10's analytics is the first path that
+  could genuinely receive a non-GBP price, and it crashed with an
+  uncaught `CurrencyMismatchError`. Fixed by building every Money value in
+  the input's own currency throughout both functions. Separately,
+  `channelAnalytics.ts`'s rollup now filters out (and honestly counts,
+  never silently sums) any product priced in a different currency than
+  its channel's reporting currency.
+- **UI**: `/automation` gained a "Business analytics" area — revenue &
+  profit with period comparison, channel performance, top/worst products,
+  supplier health, fulfilment health, open business alerts, data-quality
+  warnings, and an honestly-unavailable advertising card, plus the 10
+  required demo scenarios in demo mode. No new route.
+
+**Verified:** 770 tests (up from 687); no new migrations (25 migrations,
+72 tables, unchanged — every metric reads existing tables); typecheck,
+lint and `npm run build` all clean; `db:verify` re-run clean;
+`/automation`, `/opportunities/[id]`, `/orders`, `/marketplaces`,
+`/approvals` and `/report` confirmed live in the browser with no console
+errors — including a re-check that the `channels.ts` fix left every
+existing GBP profitability figure byte-identical to its pre-Milestone-10
+value; `informax-site` confirmed untouched throughout.
+
+**Still not built, documented not hidden**: an interactive period selector
+on `/automation` (defaults to "last 30 days," stated explicitly); realized
+(vs. projected) historical profit reconstruction — `order_items.
+unit_cost_minor` is only populated where a sale's real cost was actually
+captured, so profit analytics projects *current* price/cost, the same
+convention every other profitability view in this codebase follows; a
+real advertising connector; a real deployed Postgres project to verify
+`liveAnalyticsFacts.ts`'s own query composition against (same standing
+boundary as every live Supabase path since Milestone 1).
+
+## 25. Next step
+
+Milestone 11 (CEO dashboard), per `docs/MILESTONES.md` — read its "Note"
+paragraph first: Milestone 10 already delivered the business-intelligence
+data layer (`analytics/repository.ts`'s `getAnalyticsDashboard` and named
+`getX()` functions) this milestone should read from directly, not
+re-summarise. What genuinely remains: the AI CEO briefing (needs
+Milestone 12's chat/tool layer first), an explainable business-health
+*score* on top of the alert feed Milestone 10 already built, products-
+ready-to-scale gating, finance/advertising/product command centres, and
+the emergency-stop UI (the pause mechanism itself has existed since
+Milestone 6). Read `docs/PRINCIPLES.md` first. When international
+expansion is eventually revisited as Milestone 15, read Milestone 9's
+section first — the market model, FX intelligence, country-aware
+compliance delegation and expansion engine it built are designed to
+extend without a schema redesign, not be rebuilt.

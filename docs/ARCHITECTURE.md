@@ -77,7 +77,10 @@ src/lib/
   notifications/ read + write (write added Milestone 6)
   integrations/  connection health
   tax/           VAT and finance reads
-  analytics/     reporting aggregates
+  analytics/     business intelligence — sales, profit, product, channel,
+                 supplier, fulfilment, advertising-architecture, data
+                 quality, business health, plus the Milestone 1 reporting
+                 reads `/report` still uses — see below
   amazon/ shopify/ pricing/ invoices/ accounting/ research/ ai/
 ```
 
@@ -235,6 +238,79 @@ marketHandlers.ts`) wire both modules into the existing monitoring and
 automation pipelines described above — no parallel automation system was
 built, and only a `ready` expansion recommendation ever creates a
 `request_approval` action.
+
+### `src/lib/analytics/` (Milestone 10)
+
+Every figure is wrapped in a `Metric<T>`/`PeriodMetric<T>` (`types.ts`)
+carrying one of seven fact-status labels
+(`fact`/`calculated`/`derived`/`estimate`/`unknown`/`stale`/`unavailable`),
+never a bare number — a missing cost is `unknown`, not zero.
+
+```
+types.ts               FactStatus vocabulary, Metric<T>/PeriodMetric<T>
+salesAnalytics.ts       wraps orders/salesAggregation.ts's
+                        aggregateSalesWindow (called twice — the
+                        requested period and previousEquivalentPeriod's
+                        bounds — never a second aggregation engine)
+profitAnalytics.ts      wraps profitability/channels.ts's
+                        buildChannelProfiles/projectChannel (the one
+                        profitability engine); rejects a supplier cost
+                        quoted in a different currency than the channel's
+                        listing price rather than combining them
+productAnalytics.ts     classifyProduct: deterministic tags
+                        (top_revenue/high_margin/loss_making/
+                        declining_sales/supplier_risk/...) from real
+                        ranks, margins and open-event flags — never an
+                        invented score
+channelAnalytics.ts     per-channel sales + a known-profit rollup that
+                        states how many products were excluded, and why
+supplierAnalytics.ts    HEALTHY/WATCH/AT_RISK/UNAVAILABLE/UNKNOWN from
+                        real dispatch/cancellation/fulfilment-success
+                        facts, always with a stated reason
+fulfilmentAnalytics.ts  dispatch time, on-time delivery, cancellation
+                        rate, missing tracking — a shipped-but-
+                        unconfirmed delivery is unknown, never assumed
+advertisingAnalytics.ts the interface a future ad-platform connector
+                        will satisfy; every figure is unavailable today
+                        because no connector exists — never a
+                        fabricated £0 spend
+dataQuality.ts,
+businessHealth.ts       roll every other module's unknown/stale/
+                        unavailable counts into a CEO-legible issue
+                        list, and a deterministic, evidence-carrying
+                        alert feed (revenue decline, profit decline,
+                        profit decline despite revenue growth, supplier
+                        at-risk, data-quality gaps)
+liveAnalyticsFacts.ts   server-only; the one org-scoped, paginated
+                        Supabase caller everything above is fed from,
+                        via the shared supabase/paginate.ts helper
+repository.ts           EXTENDS the Milestone 1 reporting reads /report
+                        still uses (untouched) — getAnalyticsDashboard()
+                        is the one round trip /automation makes; the
+                        named getBusinessOverview/getRevenueAnalytics/
+                        getProfitAnalytics/getProductAnalytics/
+                        getSupplierAnalytics/getMarketplaceAnalytics/
+                        getMarketAnalytics/getDataQuality functions are
+                        the entry points a future CEO AI assistant
+                        (Milestone 12) queries facts through
+```
+
+`core/compare.ts`'s `comparePeriods` (promoted out of
+`monitoring/monitors/performanceMonitor.ts`'s previously-private
+`pctChange`) is the one place "current vs previous, absolute diff,
+percentage diff, direction" is computed, shared by every monitor and every
+analytics module — `previous === 0` yields `percentChange: null` (not
+`Infinity`), unless `current` is also `0`, which is a real, flat `0%`.
+
+`profitabilityMonitor.ts` (Milestone 8, extended here) now computes a real
+channel-aware margin via the same engine when its subject carries the
+optional `channel`/`connectorKey` fields, emitting
+`PRODUCT_MARGIN_DROPPED`/`RECOVERED` and
+`PRODUCT_NO_LONGER_PROFITABLE`/`BECAME_PROFITABLE` — three event types
+that had been reserved in `EVENT_TO_JOB_MAPPING` since Milestone 8 but
+never actually emitted. A frozen reference margin is kept while a product
+is in a dropped state, so a margin that merely stops falling is never
+misreported as recovered.
 
 ## Rules the code follows
 

@@ -80,6 +80,23 @@ describe('EVENT_TO_JOB_MAPPING consistency with real monitor behaviour', () => {
     assertMappingHonoured(events.getState().events, store.getState().jobs)
   })
 
+  it('profitability monitor: real margin-crossing events (Milestone 10) agree with the mapping, including the rich product_price_review payload', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const events = createInMemoryEventStore()
+    const subject: ProfitabilityMonitorSubject = { productId: 'prod-margin', supplierId: 'sup-1', channelProductId: 'cp-margin', channel: 'shopify', connectorKey: 'shopify' }
+    const seedFor = (unitCostMajor: number) => createInMemoryFactsLoader({
+      channelProducts: { 'cp-margin': { status: 'live', priceMinor: 3000, fulfilmentSupplierId: 'sup-1', externalId: 'shopify-ext-1', lastSyncedAt: new Date().toISOString(), updatedAt: new Date().toISOString() } },
+      products: { 'prod-margin': { title: 'Margin Test Product', category: null, stage: 'live', updatedAt: new Date().toISOString() } },
+      offers: { 'sup-1:prod-margin': { unitCost: fromMajor(unitCostMajor), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: new Date().toISOString() } },
+    })
+    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts: seedFor(9), connectors: () => undefined, settings: DEMO_AUTOMATION_SETTINGS, now: new Date() }
+    await profitabilityMonitor.run(ctx, [subject]) // Baseline: profitable.
+    await profitabilityMonitor.run({ ...ctx, facts: seedFor(20) }, [subject]) // Crosses to unprofitable.
+
+    expect(events.getState().events.some((e) => e.eventType === 'PRODUCT_NO_LONGER_PROFITABLE')).toBe(true)
+    assertMappingHonoured(events.getState().events, store.getState().jobs)
+  })
+
   it('performance monitor: surge, decline, return-rate and ad-spend events agree with the mapping', async () => {
     const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
     const events = createInMemoryEventStore()

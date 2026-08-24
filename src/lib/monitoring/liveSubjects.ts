@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { createServiceSupabase } from '@/lib/supabase/server'
+import { paginate } from '@/lib/supabase/paginate'
 import { aggregateSalesWindow, computeWindowBounds, REFUND_REASONS_COUNTED_AS_RETURNS, type OrderLineFact, type RefundFact } from '@/lib/orders/salesAggregation'
 import type { SubjectDiscoveryResult, SubjectProvider } from './runner'
 import type { Database } from '@/lib/supabase/database.types'
@@ -12,6 +13,7 @@ import type { ProfitabilityMonitorSubject } from './monitors/profitabilityMonito
 import type { PerformanceMonitorSubject, PerformanceWindow } from './monitors/performanceMonitor'
 import type { FxPairSubject } from './monitors/fxMonitor'
 import { MARKET_CATALOG } from '@/lib/markets/catalog'
+import type { ChannelKey } from '@/lib/core/domain'
 
 /**
  * Live production subject discovery (Milestone 8.5 §1–2), completing the
@@ -34,23 +36,6 @@ import { MARKET_CATALOG } from '@/lib/markets/catalog'
  * exclusion is unconditional, which is the safer default.
  */
 
-const PAGE_SIZE = 500
-const MAX_PAGES = 20 // 10,000 rows per monitor per run — see module comment.
-
-type SupabaseQueryResult<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>
-
-async function paginate<T>(fetchPage: (from: number, to: number) => SupabaseQueryResult<T>): Promise<{ rows: T[]; error: string | null }> {
-  const rows: T[] = []
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const from = page * PAGE_SIZE
-    const to = from + PAGE_SIZE - 1
-    const { data, error } = await fetchPage(from, to)
-    if (error) return { rows, error: error.message }
-    rows.push(...(data ?? []))
-    if (!data || data.length < PAGE_SIZE) break
-  }
-  return { rows, error: null }
-}
 
 type ChannelListingStatus = Database['public']['Enums']['channel_listing_status']
 type ProductStage = Database['public']['Enums']['product_stage']
@@ -59,9 +44,9 @@ const ACTIVE_PRODUCT_STAGE_EXCLUSIONS: readonly ProductStage[] = ['removed']
 const MARKETPLACE_LIVE_STATUSES: readonly ChannelListingStatus[] = ['live']
 const COMPLIANCE_EXCLUDED_STATUSES: readonly ChannelListingStatus[] = ['not_listed', 'removed']
 
-/** Shared join: preferred supplier offers for active products, mapped to their channel listing — the base data both the supplier-stock/price monitor and the profitability monitor discover subjects from. */
+/** Shared join: preferred supplier offers for active products, mapped to their channel listing — the base data both the supplier-stock/price monitor and the profitability monitor discover subjects from. Channel/connector are included (Milestone 10) so a real per-channel margin check can be made without a second query — `discoverSupplierStockAndPrice` simply does not use them. */
 async function discoverSupplierProductChannelJoins(orgId: string): Promise<{
-  rows: { supplierId: string; productId: string; channelProductId: string }[]
+  rows: { supplierId: string; productId: string; channelProductId: string; channel: ChannelKey; connectorKey: string }[]
   errors: string[]
 }> {
   const supabase = createServiceSupabase()
@@ -78,19 +63,26 @@ async function discoverSupplierProductChannelJoins(orgId: string): Promise<{
   if (products.error) errors.push(`products: ${products.error}`)
   const activeProductIds = new Set(products.rows.map((p) => p.id))
 
-  const listings = await paginate<{ id: string; product_id: string }>((from, to) =>
-    supabase.from('channel_products').select('id, product_id').eq('org_id', orgId).range(from, to),
+  const listings = await paginate<{ id: string; product_id: string; channel_id: string }>((from, to) =>
+    supabase.from('channel_products').select('id, product_id, channel_id').eq('org_id', orgId).range(from, to),
   )
   if (listings.error) errors.push(`channel_products: ${listings.error}`)
-  const channelProductByProduct = new Map(listings.rows.map((l) => [l.product_id, l.id]))
+  const channelProductByProduct = new Map(listings.rows.map((l) => [l.product_id, { channelProductId: l.id, channelId: l.channel_id }]))
+
+  const { map: channelKeyById, error: channelsError } = await loadChannelKeyMap(orgId)
+  if (channelsError) errors.push(`channels: ${channelsError}`)
 
   const rows = offers.rows
     .filter((o) => activeProductIds.has(o.product_id))
     .map((o) => {
-      const channelProductId = channelProductByProduct.get(o.product_id)
-      return channelProductId ? { supplierId: o.supplier_id, productId: o.product_id, channelProductId } : null
+      const listing = channelProductByProduct.get(o.product_id)
+      if (!listing) return null
+      const channelKey = channelKeyById.get(listing.channelId)
+      if (channelKey !== 'shopify' && channelKey !== 'amazon_uk') return null // Unknown/unconfigured channel — nothing to check margin against.
+      // channels.key IS the live connector's own descriptor key (see loadChannelKeyMap's comment); live discovery is only ever wired to the live connector registry, matching discoverMarketplaceListingSync above.
+      return { supplierId: o.supplier_id, productId: o.product_id, channelProductId: listing.channelProductId, channel: channelKey, connectorKey: channelKey }
     })
-    .filter((r): r is { supplierId: string; productId: string; channelProductId: string } => r !== null)
+    .filter((r): r is { supplierId: string; productId: string; channelProductId: string; channel: ChannelKey; connectorKey: string } => r !== null)
 
   return { rows, errors }
 }
@@ -103,7 +95,7 @@ async function discoverSupplierStockAndPrice(orgId: string): Promise<SubjectDisc
 
 async function discoverProfitabilitySafetyNet(orgId: string): Promise<SubjectDiscoveryResult<ProfitabilityMonitorSubject>> {
   const { rows, errors } = await discoverSupplierProductChannelJoins(orgId)
-  const subjects = rows.map((r): ProfitabilityMonitorSubject => ({ supplierId: r.supplierId, productId: r.productId, channelProductId: r.channelProductId }))
+  const subjects = rows.map((r): ProfitabilityMonitorSubject => ({ supplierId: r.supplierId, productId: r.productId, channelProductId: r.channelProductId, channel: r.channel, connectorKey: r.connectorKey }))
   return { subjects, errors }
 }
 
