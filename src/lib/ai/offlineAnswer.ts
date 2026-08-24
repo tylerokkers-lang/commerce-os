@@ -1,5 +1,7 @@
 import type { FactBundle } from './types'
 
+const CHANNEL_LABELS: Record<string, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK' }
+
 /**
  * The deterministic fallback used whenever `ANTHROPIC_API_KEY` is not
  * configured (`isConfigured('anthropic')` is false) — the same "demo mode
@@ -58,7 +60,7 @@ export function buildOfflineAnswer(bundle: FactBundle, question: string): string
     compliance: section(
       bundle.complianceIssues.length > 0 ? `Compliance issues — ${bundle.complianceIssues.length}` : 'Compliance',
       bundle.complianceIssues.length > 0
-        ? bundle.complianceIssues.map((c) => `${c.title} on ${c.channel}: ${c.verdict === 'fail' ? 'BLOCKED' : 'REVIEW REQUIRED'} — ${c.blockingReasons[0] ?? 'see /compliance'}`)
+        ? bundle.complianceIssues.map((c) => `${c.title} on ${CHANNEL_LABELS[c.channel] ?? c.channel}: ${c.verdict === 'fail' ? 'BLOCKED' : 'REVIEW REQUIRED'} — ${c.blockingReasons[0] ?? 'see /compliance'}`)
         : ['No product is currently blocked or under review.'],
     ),
     channels: section(

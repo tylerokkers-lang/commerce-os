@@ -1,5 +1,5 @@
 import type { CEOCommandCentre } from '@/lib/ceo/types'
-import type { OpportunitySummary, SupplierListItem } from '@/lib/core/domain'
+import type { OpportunitySummary, ProductSummary, SupplierListItem } from '@/lib/core/domain'
 import type { IntelligenceSummary } from '@/lib/products/opportunities'
 import { isKnown, type Metric } from '@/lib/analytics/types'
 import { formatMoney, type Money } from '@/lib/core/money'
@@ -52,9 +52,22 @@ export function buildFactBundle(input: {
   opportunities: readonly OpportunitySummary[]
   opportunitySummary: IntelligenceSummary | null
   suppliers: readonly SupplierListItem[]
+  /** Optional so every pre-existing call site (tests, demo scenarios not focused on catalogue matching) keeps working unchanged — defaults to no known products, never a guess. */
+  products?: readonly ProductSummary[]
   now: string
 }): FactBundle {
   const { ceo } = input
+
+  // Per-channel margin/profit context, joined onto the real catalogue by
+  // productId — sourced from the same highlight lists `/` already renders
+  // (`topRevenueProducts`/`topProfitProducts`/`lossMakingProducts`), never
+  // a second profitability read. A product not present in any of the
+  // three simply has no known margin here — `null`, never zero.
+  const marginByProductChannel = new Map<string, { knownNetMarginPct: number | null; netProfitMinor: number | null }>()
+  for (const p of [...ceo.financialPerformance.topRevenueProducts, ...ceo.financialPerformance.topProfitProducts, ...ceo.financialPerformance.lossMakingProducts]) {
+    marginByProductChannel.set(`${p.productId}:${p.channel}`, { knownNetMarginPct: p.netMarginPct, netProfitMinor: p.netProfitMinor })
+  }
+  const CHANNEL_KEYS = ['shopify', 'amazon_uk'] as const
 
   return {
     generatedAt: input.now,
@@ -81,7 +94,11 @@ export function buildFactBundle(input: {
       recommendedNextStep: p.recommendedNextStep, source: p.source, actionHref: p.actionHref,
     })),
     complianceIssues: ceo.complianceIssues.map((c) => ({
-      productId: c.productId, sku: c.sku, title: c.title, channel: CHANNEL_LABELS[c.channel] ?? c.channel,
+      // Kept as the raw ChannelKey (never a label) — consistent with `channels[].channel`
+      // below and required for `ai/actions/validate.ts` to match it against
+      // `RawActionIntent.channel` (also a raw key). Labelled only at render
+      // time, by `serializeFactBundle`/`offlineAnswer.ts`/the UI.
+      productId: c.productId, sku: c.sku, title: c.title, channel: c.channel,
       verdict: c.verdict, blockingReasons: c.blockingReasons,
     })),
     channels: ceo.financialPerformance.channels.map((c) => ({
@@ -113,6 +130,12 @@ export function buildFactBundle(input: {
     pendingApprovals: ceo.approvals.map((a) => ({
       id: a.id, title: a.title, impact: a.estimatedImpact ? formatMoney(a.estimatedImpact) : null, expiresAt: a.expiresAt,
     })),
+    products: (input.products ?? []).map((p) => ({
+      id: p.id, sku: p.sku, title: p.title, category: p.category, stage: p.stage,
+      channels: CHANNEL_KEYS
+        .filter((c) => marginByProductChannel.has(`${p.id}:${c}`))
+        .map((c) => ({ channel: c, label: CHANNEL_LABELS[c] ?? c, ...marginByProductChannel.get(`${p.id}:${c}`)! })),
+    })),
   }
 }
 
@@ -137,7 +160,7 @@ export function serializeFactBundle(bundle: FactBundle): string {
   for (const p of bundle.priorities) lines.push(`  - [${p.severity.toUpperCase()}] (${p.category}) ${p.title} — ${p.detail} Next step: ${p.recommendedNextStep} (source: ${p.source}, id: ${p.id})`)
 
   lines.push('', bundle.complianceIssues.length > 0 ? `Compliance issues (${bundle.complianceIssues.length}):` : 'Compliance issues: none currently blocked or under review.')
-  for (const c of bundle.complianceIssues) lines.push(`  - ${c.title} (${c.sku}) on ${c.channel}: ${c.verdict === 'fail' ? 'BLOCKED' : 'REVIEW REQUIRED'} — ${c.blockingReasons.join('; ') || 'no reasons recorded'}`)
+  for (const c of bundle.complianceIssues) lines.push(`  - ${c.title} (${c.sku}) on ${CHANNEL_LABELS[c.channel] ?? c.channel}: ${c.verdict === 'fail' ? 'BLOCKED' : 'REVIEW REQUIRED'} — ${c.blockingReasons.join('; ') || 'no reasons recorded'}`)
 
   lines.push('', 'Channel performance (never blended — each channel is its own figure):')
   for (const c of bundle.channels) lines.push(`  - ${c.label}: revenue ${c.revenue}, net revenue ${c.netRevenue}, known net margin ${c.knownNetMarginPct === null ? 'unknown' : `${c.knownNetMarginPct.toFixed(1)}%`}, ${c.lossMakingProductCount} loss-making product(s)`)
@@ -158,6 +181,16 @@ export function serializeFactBundle(bundle: FactBundle): string {
   lines.push('', bundle.pendingApprovals.length > 0 ? `Pending approvals (${bundle.pendingApprovals.length}):` : 'Pending approvals: none.')
   for (const a of bundle.pendingApprovals) lines.push(`  - ${a.title}${a.impact ? ` (${a.impact})` : ''}${a.expiresAt ? ` — expires ${a.expiresAt}` : ''}`)
 
+  const withKnownMargin = bundle.products.filter((p) => p.channels.length > 0).slice(0, 15)
+  if (withKnownMargin.length > 0) {
+    lines.push('', 'Catalogue products with known per-channel margin (never blended across channels):')
+    for (const p of withKnownMargin) {
+      for (const c of p.channels) {
+        lines.push(`  - ${p.title} (${p.sku}) on ${c.label}: net margin ${c.knownNetMarginPct === null ? 'unknown' : `${c.knownNetMarginPct.toFixed(1)}%`}`)
+      }
+    }
+  }
+
   return lines.join('\n')
 }
 
@@ -174,7 +207,7 @@ export function deriveReferences(bundle: FactBundle): readonly ChatReference[] {
     refs.push({ type: 'priority', id: p.id, label: p.title, href: p.actionHref })
   }
   for (const c of bundle.complianceIssues.slice(0, 5)) {
-    refs.push({ type: 'compliance', id: c.productId, label: `${c.title} (${c.channel})`, href: '/compliance' })
+    refs.push({ type: 'compliance', id: c.productId, label: `${c.title} (${CHANNEL_LABELS[c.channel] ?? c.channel})`, href: '/compliance' })
   }
   for (const o of bundle.topOpportunities.slice(0, 3)) {
     refs.push({ type: 'opportunity', id: o.id, label: o.title, href: `/opportunities/${o.id}` })

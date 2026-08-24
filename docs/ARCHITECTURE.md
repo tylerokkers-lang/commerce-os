@@ -361,18 +361,21 @@ plus a comparison badge when known, an honest UNKNOWN/STALE/UNAVAILABLE
 badge plus its source when not — shared by `/automation` and `/` so
 neither can drift from the other's rendering rules.
 
-### `src/lib/ai/` (Milestone 12)
+### `src/lib/ai/` (Milestone 12; extended Milestone 13)
 
 The Commerce Intelligence chat — an interface over the existing
 intelligence layer, never a second one:
 `Operational systems -> Authoritative engines -> Analytics & BI (M10) ->
-CEO Command Centre (M11) -> Commerce Intelligence chat (M12) -> CEO`.
+CEO Command Centre (M11) -> Commerce Intelligence chat (M12/13) -> CEO`.
 Every fact the chat can see is read straight off `getCEOCommandCentre()`
-(Milestone 11) plus the two adjacent repositories the CEO dashboard page
+(Milestone 11) plus the adjacent repositories the CEO dashboard page
 already calls directly (`getOpportunities`/`getIntelligenceSummary`,
-`getSuppliers`) — nothing here recomputes a priority, a health status, a
-compliance verdict, or a profit figure. Phase 1 is strictly read-only: no
-module in this directory imports a write path of any kind.
+`getSuppliers`, and — new in Milestone 13 — `getProducts` for catalogue
+titles/SKUs) — nothing here recomputes a priority, a health status, a
+compliance verdict, or a profit figure. Milestone 12 (Phase 1, Analyse)
+is strictly read-only. Milestone 13 adds Phase 2 (Recommend) and Phase 3
+(Propose), both still read-only in themselves — see `ai/actions/` below
+for the one narrow path that can create real (pending-approval) state.
 
 ```
 types.ts              ChatMessage, FactBundle, ChatAnswer, ChatReference,
@@ -414,21 +417,94 @@ anthropicProvider.ts   ChatProvider satisfied twice. anthropicRequest.ts
                        is directly unit tested
 repository.ts          server-only; askCommerceIntelligence() composes
                        getCEOCommandCentre/getOpportunities/
-                       getIntelligenceSummary/getSuppliers via
-                       Promise.allSettled, the same fail-safe pattern
+                       getIntelligenceSummary/getSuppliers/getProducts
+                       via Promise.allSettled, the same fail-safe pattern
                        Milestone 11 introduced, and falls back to the
                        offline answer if the live model itself fails —
                        a model outage degrades the answer, never the
-                       whole route
+                       whole route. Also builds Milestone 13's
+                       recommendations (deterministic, from the bundle)
+                       and, when the user's own message names a real
+                       product and a recognised action, a proposedAction
+                       preview — entirely independent of which provider
+                       answered content
+```
+
+`src/lib/ai/actions/` (Milestone 13 — Analyse, Recommend, Propose):
+
+```
+types.ts               The finite ProposedActionType vocabulary (8
+                       members) and the Recommendation/ProposedAction
+                       shapes. Module comment explains the central design
+                       choice: the model is never asked to emit
+                       structured JSON for a proposal at all — there is
+                       nothing for guardrails to parse-and-distrust,
+                       because nothing AI-authored is ever parsed in the
+                       first place. A proposal's every field is either a
+                       fixed vocabulary member or resolved fresh against
+                       real data
+intentExtraction.ts     Pure. Reads only the user's own latest message —
+                       never a model reply — and matches it against the
+                       FactBundle's real, already-known products only.
+                       Ambiguous or unmatched input produces null, never
+                       a guess; this is the entire technical answer to
+                       "the AI proposal is untrusted input" for the
+                       identification step
+recommend.ts            Pure. buildRecommendations: the same kind of
+                       deterministic rule set ceo/priorities.ts's
+                       buildPriorities already is, applied to "what's
+                       worth suggesting." Loss-making known products ->
+                       an UPDATE_PRICE recommendation; active compliance
+                       fail/review_required -> a REVIEW_PRODUCT
+                       recommendation pointing at /compliance, never
+                       marked executable; low-scoring/blocked suppliers
+                       -> REVIEW_SUPPLIER
+validate.ts             server-only. Re-resolves every number
+                       (current price, cost, margin) fresh from
+                       analytics/liveAnalyticsFacts.ts and re-runs it
+                       through the real profitability engine
+                       (analytics/profitAnalytics.ts's
+                       buildProductChannelProfitAnalytics ->
+                       profitability/channels.ts's projectChannel) —
+                       never the FactBundle's cached snapshot, never
+                       anything from the parsed intent's own numbers
+                       beyond the requested magnitude. Calls
+                       automation/priceAutomation.ts's new
+                       assessPriceChangePolicy with automationLevel
+                       hard-coded to 'assisted' — the one line that
+                       structurally guarantees an AI-chat-originated
+                       price change can never auto-apply, regardless of
+                       the org's real configured automation level. Only
+                       UPDATE_PRICE and REQUEST_APPROVAL currently have a
+                       real path to `outcome: 'requires_approval'`; the
+                       other six vocabulary members are always
+                       'not_executable' — see the module comment for
+                       exactly why each one is not yet wired to a real
+                       domain engine
+propose.ts              server-only. proposeAction: the one function that
+                       can create real state — re-derives the proposal
+                       from scratch (fresh getCEOCommandCentre/
+                       getProducts, not trusted from the client) and, only
+                       when validation lands on requires_approval, calls
+                       the pre-existing automation/proposeApproval.ts
+                       (Milestone 6) — never a second approval mechanism.
+                       The owner approves/rejects on the existing
+                       /approvals page exactly as any other automation
+                       decision
 ```
 
 `src/app/api/chat/route.ts` is the one HTTP entry point, session-gated
-identically to every Server Action in this codebase. `src/components/chat/
+identically to every Server Action in this codebase; it remains strictly
+read-only. `src/app/(dashboard)/chat/actions.ts`'s `requestActionApproval`
+is the one Server Action that can create state — reachable only from the
+chat page's "Request approval" button, itself only shown once
+`validate.ts` has already cleared a proposal. `src/components/chat/
 ChatPanel.tsx` is this codebase's **first Client Component** — a
 deliberate, minimal exception to "Server Components by default," because a
 chat transcript that updates as you type is the one interaction here that
 cannot be a plain form submit; it holds no session detail or credential,
-only the current turn's already-public response.
+only the current turn's already-public response, plus (Milestone 13) the
+recommendation/proposed-action cards `repository.ts` already computed.
 
 ## Rules the code follows
 

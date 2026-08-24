@@ -1849,13 +1849,45 @@ a real model's answers stay fact-first in practice is unverified.
 (no new table — a scope choice, not an oversight, per §13's
 "don't introduce unnecessary migrations").
 
-## Milestone 13 — AI actions
+## Milestone 13 — Commerce Intelligence: Analyse, Recommend & Propose ✅ complete (Execute intentionally deferred)
 
-Four interaction modes — ask, analyse, recommend, execute — where "execute"
-still passes through the same automation-level and approval machinery as any
-other action. The AI is never the source of authority: rules, permissions,
-validation and the action layer built in Milestones 5–6 remain authoritative
-regardless of what the AI recommends.
+Originally scoped as "AI actions" with four interaction modes (ask,
+analyse, recommend, execute). Rescoped, deliberately, after reviewing
+Milestone 12: execution was judged too consequential to build in the same
+pass as recommendations, so this milestone builds Analyse (already
+Milestone 12), Recommend, and Propose only — Execute remains exactly the
+pre-existing `automation/` policy engine and `/approvals` page, untouched,
+reached only through a real owner approval. The AI is never the source of
+authority: rules, permissions, validation and the action layer built in
+Milestones 5–6 remain authoritative regardless of what the AI recommends,
+enforced structurally (the model is never asked to produce the actionable
+proposal structure at all — see `docs/ARCHITECTURE.md`'s
+`src/lib/ai/actions/` section and `docs/SECURITY.md`'s Milestone 13
+section), not just by instruction.
+
+A finite, 8-member `ProposedActionType` vocabulary exists
+(`UPDATE_PRICE`/`CREATE_LISTING`/`PAUSE_LISTING`/`REVIEW_SUPPLIER`/
+`REVIEW_PRODUCT`/`ADJUST_INVENTORY_THRESHOLD`/`REVIEW_ADVERTISING`/
+`REQUEST_APPROVAL`), but only `UPDATE_PRICE` and `REQUEST_APPROVAL`
+currently reach a real `/approvals` entry — the other six are recognised,
+never silently dropped, but honestly `not_executable` until a real domain
+engine exists for each (documented per-type in `HANDOVER.md` §29 and in
+`ai/actions/validate.ts`'s own code).
+
+**Verified:** 876 tests (up from 845); typecheck/lint/build/`db:verify`
+all clean; no schema change; `/chat` confirmed live end-to-end for a
+price-change proposal (entity/channel resolved correctly, honest
+demo-mode limitation reported) and a `REQUEST_APPROVAL` proposal (reached
+`requires_approval`, "Request approval" button worked, honest demo-mode
+error on click, no crash). **Not live-verified:** the real `ai_decisions`
+write path against a live Supabase project, and live Anthropic API
+behaviour (unchanged from Milestone 12) — see `HANDOVER.md` §29.
+
+**A genuine bug found and fixed via browser verification**: the live
+price-lookup path had no demo-mode branch and threw a `500` in this
+environment's actual default (demo) state — every other repository
+function in this codebase checks `session.isDemo` first; this one didn't.
+Fixed; see `HANDOVER.md` §29 for the full story.
 
 ## Milestone 14 — Advertising intelligence
 

@@ -5,14 +5,16 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 24 August 2026 (Milestone 12, Commerce Intelligence chat —
-see §28 before trusting any claim about the chat's grounding or security
-model, and note it has not been live-verified against a real
-`ANTHROPIC_API_KEY`; §27 for Milestone 11's audit & hardening pass, §26
-for the rest of Milestone 11, §22 before trusting any claim about monitor
-subject discovery, real sales data, or supplier operational facts; §21 for
-the rest of Milestone 8, §19 for Milestone 7's execution work, and §18 for
-Milestone 6's engine-level
+Last updated: 24 August 2026 (Milestone 13, Commerce Intelligence —
+Analyse, Recommend & Propose — see §29 before trusting any claim about
+recommendations, proposed actions, or the approval-request path, and note
+neither it nor Milestone 12's live-model path has been verified against a
+real `ANTHROPIC_API_KEY` or a real Supabase project; §28 for Milestone
+12's chat grounding/security model, §27 for Milestone 11's audit &
+hardening pass, §26 for the rest of Milestone 11, §22 before trusting any
+claim about monitor subject discovery, real sales data, or supplier
+operational facts; §21 for the rest of Milestone 8, §19 for Milestone 7's
+execution work, and §18 for Milestone 6's engine-level
 verification).
 
 ## 1. What this is
@@ -1354,31 +1356,173 @@ automation-level/approval machinery Milestones 5–6 built, not a chat
 shortcut around it. No conversation persistence (see above — a deliberate
 scope choice to avoid an unnecessary migration, not an oversight).
 
-## 29. Next step
+## 29. Milestone 13 (Commerce Intelligence — Analyse, Recommend & Propose) — what was built
 
-Per `docs/MILESTONES.md` after this audit, the next real milestone is
-**Milestone 13 (AI actions)** — read `docs/MILESTONES.md`'s own note on it
-first: "execute" must still pass through the same automation-level and
-approval machinery Milestones 5–6 built; the AI is never the source of
-authority. `askCommerceIntelligence`/`FactBundle` (Milestone 12) are the
-facts an "analyse"/"recommend" mode should read through, never recreate.
+Deliberately **not** "AI actions" in the unrestricted sense — the owner
+reviewing Milestone 12 was explicit that jumping straight from chat to
+execution would be a mistake, and asked for Analyse -> Recommend ->
+Propose -> Approve -> Execute as separate, inspectable phases first. This
+milestone builds Recommend and Propose on top of Milestone 12's Analyse;
+Execute remains exactly what it already was — the pre-existing
+`automation/` policy engine and `/approvals` page, untouched. Full detail
+in `docs/ARCHITECTURE.md`'s `src/lib/ai/actions/` section and
+`docs/SECURITY.md`'s Milestone 13 section — this is the short version.
 
-Three smaller, genuine loose ends worth picking up opportunistically
-rather than as their own milestone: (1) a live-Supabase-backed test
-harness does not exist anywhere in this codebase — every `discover*`/
-`server-only` repository function, including the newly-fixed
-`discoverSalesPerformance` and now `ai/repository.ts`/
-`ai/anthropicProvider.ts`, is verified only by code inspection, its pure
-sub-functions, and manual browser checks, never automated; (2)
-`analytics/repository.ts`'s `getCashflow()` still returns a hardcoded-empty
-result in live mode (pre-existing, documented, deliberately unsurfaced in
-the UI — see Milestone 11's "Still not built" list); (3) a real
-`ANTHROPIC_API_KEY` should be exercised against the live chat before it is
-presented to an actual CEO — the structural safety guarantees (§28) hold
-either way, but whether the model's live answers are actually good,
-correctly cite sources, and never drift from the fact-first system prompt
-in practice is unverified in this environment. When international
-expansion is
+- **`src/lib/ai/actions/`** (new): `types.ts` defines a finite,
+  8-member `ProposedActionType` vocabulary — `UPDATE_PRICE`,
+  `CREATE_LISTING`, `PAUSE_LISTING`, `REVIEW_SUPPLIER`, `REVIEW_PRODUCT`,
+  `ADJUST_INVENTORY_THRESHOLD`, `REVIEW_ADVERTISING`, `REQUEST_APPROVAL`.
+  Only two — `UPDATE_PRICE` and `REQUEST_APPROVAL` — currently have a real
+  domain engine and a real path to `/approvals`; the other six are
+  recognised (so a genuine user intent is never silently dropped) but
+  always `executable: false`, routed to the real page as a review pointer
+  instead of a fake approval. Why: `CREATE_LISTING`/`PAUSE_LISTING` would
+  need lifecycle stage, resolved supplier capability and a full
+  `ComplianceAssessment` assembled together for an arbitrary product on
+  demand, which no existing function does yet; `ADJUST_INVENTORY_THRESHOLD`
+  is an organisation-wide setting, not a per-product action;
+  `REVIEW_ADVERTISING` has no live connector to act on (Milestone 10/11);
+  `REVIEW_SUPPLIER`/`REVIEW_PRODUCT` are deliberately left as human
+  judgement calls. This is a scoping decision, documented rather than
+  hidden — see `docs/SECURITY.md` for the full reasoning.
+- **The central design choice**: the model is never asked to produce the
+  actionable proposal structure at all. `intentExtraction.ts` reads only
+  the *user's own* typed message — never a model reply — and matches it
+  against real, already-known products from the current turn's
+  `FactBundle`; an unmatched or ambiguous reference produces no proposal,
+  never a guess. This is the entire technical answer to "the AI proposal
+  is untrusted input": there is no AI-authored structure anywhere in this
+  path for a prompt injection to forge in the first place. `recommend.ts`
+  (Phase 2) is a deterministic rule set over the bundle, the same shape as
+  `ceo/priorities.ts`'s `buildPriorities` — loss-making known products
+  become an `UPDATE_PRICE` recommendation, active compliance issues become
+  a `REVIEW_PRODUCT` recommendation pointing at `/compliance` (never
+  marked executable — a block is never bypassed), low-scoring/blocked
+  suppliers become `REVIEW_SUPPLIER`.
+- **`validate.ts`** re-resolves every number fresh from live data — never
+  the `FactBundle`'s cached snapshot, never anything from the parsed
+  intent beyond the requested magnitude. Reuses the real profitability
+  engine via `analytics/profitAnalytics.ts`'s
+  `buildProductChannelProfitAnalytics` (which itself resolves the correct
+  channel-fee profile through `profitability/channels.ts`'s
+  `projectChannel`) rather than reconstructing `CostInputs` by hand — that
+  reuse needed a small, behaviour-preserving refactor: `priceAutomation.ts`'s
+  `assessPriceChange` had its margin/policy decision extracted into a new
+  `assessPriceChangePolicy`, which takes already-computed `Profitability`
+  instead of raw `CostInputs`. `assessPriceChange` itself is now a thin
+  wrapper calling it — unchanged signature, unchanged behaviour, proven by
+  `tests/automation-price.test.ts`/`tests/automation-level-ladder.test.ts`
+  continuing to pass unmodified, plus new direct coverage
+  (`tests/automation-price-policy.test.ts`). `validate.ts` calls the new
+  function with `automationLevel` hard-coded to `'assisted'` — the one
+  line that structurally guarantees an AI-chat-originated price change can
+  never auto-apply, regardless of the org's real configured level.
+- **`propose.ts`** is the one function in this milestone that can create
+  real state: re-derives the whole proposal from scratch (fresh
+  `getCEOCommandCentre()`/`getProducts()`, never trusting anything the
+  client echoes back — only the user's own original message text
+  round-trips) and, only when validation lands on `requires_approval`,
+  calls the pre-existing `automation/proposeApproval.ts` (Milestone 6) —
+  never a second approval mechanism. One `ai_decisions` row, same RLS
+  posture as every other decision, same `/approvals` page, same
+  `approveDecision`/`rejectDecision` (unchanged) to actually approve or
+  reject it.
+- **UI**: `ChatPanel.tsx` gained recommendation cards and a proposed-action
+  card (current vs. proposed state, reason, risk, compliance/confidence
+  badges, an outcome badge that is never "approved") with a "Request
+  approval" button shown only once `validate.ts` has already cleared the
+  proposal. A new Server Action, `chat/actions.ts`'s
+  `requestActionApproval`, is the only write path the chat page exposes.
+- **A real, previously-latent bug found via browser verification, not by
+  inspection**: `validate.ts`'s live price-lookup
+  (`loadProductChannelProfitFacts`) had no demo-mode branch, unlike every
+  other repository function in this codebase. In this environment's
+  actual default state (demo mode, no Supabase configured), asking the
+  chat to propose a price change threw inside the route handler and
+  `/api/chat` returned a bare `500` — caught by actually driving the chat
+  in the browser and reading the dev server's own log file for the stack
+  trace (`preview_logs`/console history are scoped to the browser tool's
+  own launched servers, not another session's already-running one, so a
+  temporary file-based debug trap in `route.ts` was used to capture it,
+  then removed). Fixed with an explicit `session.isDemo` check in
+  `validateUpdatePrice`, returning the same honest "demo mode has no live
+  data" pattern every other feature in this codebase already uses.
+  Reproduced and confirmed fixed live (`POST /api/chat`: `500` before,
+  `200` with an honest `outcome: 'invalid'` proposal after).
+
+**Verified:** 876 tests (up from 845 — +31 across
+`tests/chat-intent-extraction.test.ts`, `tests/chat-recommend.test.ts`,
+`tests/chat-action-vocabulary.test.ts`, `tests/automation-price-policy.test.ts`);
+`npx tsc --noEmit`, `npm run lint`, `npm run build` and `npm run db:verify`
+all clean (25 migrations, 72 tables, unchanged — no schema change: a
+proposal is client-round-tripped like the rest of the conversation, and
+the one thing it can write, `ai_decisions`, already existed). Confirmed
+live in the browser: an analytical question with recommendation cards
+rendering real compliance/supplier data; a price-change request against a
+real catalogue product correctly resolving the entity and channel, then
+honestly reporting the demo-mode limitation (post-fix); a
+`REQUEST_APPROVAL` proposal correctly reaching `requires_approval` and
+rendering a working "Request approval" button; clicking it correctly
+invoking the Server Action and rendering the honest demo-mode error, with
+no crash and no stuck loading state; `/`, `/products`, `/compliance`,
+`/approvals` re-confirmed unaffected; no console errors or duplicate-key
+warnings across the whole flow; `informax-site` confirmed untouched
+throughout (git status compared, still at commit `2bf3d8a`).
+
+**Implemented but not live-verified:** the actual `requires_approval` ->
+real `ai_decisions` row -> `/approvals` -> `approveDecision` chain for a
+genuinely live (non-demo) organisation — no Supabase project exists in
+this environment, so `proposeAction`'s Supabase-writing branch has never
+executed against a real database; `validate.ts`/`propose.ts` are
+`server-only` and, like `ceo/repository.ts`/`ai/repository.ts` before
+them, cannot be imported into Vitest at all in this project, so they are
+exercised only by their pure sub-functions
+(`intentExtraction.ts`/`recommend.ts`/`assessPriceChangePolicy`, all
+directly tested) and by the live browser check above. Live
+`ANTHROPIC_API_KEY` behaviour remains unverified, unchanged from
+Milestone 12.
+
+**Not implemented (deliberately, this milestone's scope):** actual
+execution of any action — `Execute` in the phase diagram above is still
+entirely the pre-existing automation/approval machinery, never
+short-circuited; `CREATE_LISTING`/`PAUSE_LISTING`/
+`ADJUST_INVENTORY_THRESHOLD`/`REVIEW_ADVERTISING` real domain engines (see
+the scoping note above); any autonomous/unattended proposal generation —
+every proposal in this milestone originates from an explicit user chat
+message, never a background process.
+
+## 30. Next step
+
+Per `docs/MILESTONES.md` after this milestone, the next real work is
+**finishing the wiring for the review-only action types this milestone
+deliberately left un-executable** (`CREATE_LISTING`/`PAUSE_LISTING`
+specifically — the ones closest to having a real domain engine already,
+`marketplaces/publicationGate.ts`'s `assessPublicationReadiness`, but
+needing lifecycle stage/supplier capability/compliance assembled together
+for an arbitrary chat-named product first), **or** proceeding to a genuine
+Milestone 14 in the original numbering (advertising intelligence) if that
+is judged higher priority — read `docs/MILESTONES.md`'s own note on
+whichever is chosen next. `ai/actions/validate.ts`'s `ProposedAction`
+shape and the `EXECUTABLE_ACTION_TYPES` closed list are exactly where a
+newly-wired action type gets added — never a parallel proposal mechanism.
+
+Four smaller, genuine loose ends worth picking up opportunistically rather
+than as their own milestone: (1) a live-Supabase-backed test harness does
+not exist anywhere in this codebase — every `discover*`/`server-only`
+repository function, including `ai/repository.ts`/`ai/anthropicProvider.ts`
+and now `ai/actions/validate.ts`/`propose.ts`, is verified only by code
+inspection, its pure sub-functions, and manual browser checks, never
+automated; (2) `analytics/repository.ts`'s `getCashflow()` still returns a
+hardcoded-empty result in live mode (pre-existing, documented,
+deliberately unsurfaced in the UI); (3) a real `ANTHROPIC_API_KEY` should
+be exercised against the live chat before it is presented to an actual
+CEO — the structural safety guarantees (§28/§29) hold either way, but
+whether the model's live answers are actually good, correctly cite
+sources, and never drift from the fact-first system prompt in practice is
+unverified in this environment; (4) a real Supabase project should be
+exercised end-to-end for `requestActionApproval` -> `/approvals` ->
+`approveDecision`, the one genuinely new write path this milestone added,
+before relying on it for a real business. When international expansion is
 eventually revisited as Milestone 15, read Milestone 9's section first —
 the market model, FX intelligence, country-aware compliance delegation
 and expansion engine it built are designed to extend without a schema

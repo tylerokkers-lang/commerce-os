@@ -173,6 +173,99 @@ separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
 
+## What Milestone 13 changed here (Commerce Intelligence — Analyse, Recommend & Propose)
+
+Milestone 13's "AI proposal is untrusted input" requirement gets a
+structural answer, not just a validation pass — the same pattern Milestone
+12 already used for reference chips (code-derived, never model-derived),
+extended one step further:
+
+- **The model is never asked to produce the actionable structure at all.**
+  A "Proposed Action" is never parsed out of the model's (or the offline
+  fallback's) reply. `ai/actions/intentExtraction.ts` reads only the
+  *user's own* typed message and matches it against real, already-known
+  products from the current turn's `FactBundle` — an unmatched or
+  ambiguous reference produces no proposal, never a best-effort guess.
+  This means the entire class of "malicious structured output" / "malformed
+  AI output" attack this milestone's brief asks to defend against has no
+  surface to land on: there is no AI-authored JSON anywhere in this path
+  for a prompt-injected instruction to forge. Proven directly
+  (`tests/chat-intent-extraction.test.ts`): a message embedding a fake
+  JSON action block naming a fabricated id and `"approved":true` produces
+  no intent at all, because the action-keyword/product-name matching
+  never looks at JSON structure and the fabricated id never appears in
+  the real product list it matches against.
+- **Every number is re-resolved fresh from real data, never trusted from
+  the intent or the cached `FactBundle`.** `ai/actions/validate.ts` calls
+  the same live, org-scoped `analytics/liveAnalyticsFacts.ts` reads
+  Milestone 10 already established, then the real profitability engine
+  (`profitability/channels.ts`'s `projectChannel`, via
+  `analytics/profitAnalytics.ts`) — never a second calculation.
+- **An AI-chat-originated price change can never auto-apply, structurally,
+  regardless of the organisation's real configured automation level.**
+  `validate.ts` calls the new `automation/priceAutomation.ts`
+  `assessPriceChangePolicy` with `automationLevel` hard-coded to
+  `'assisted'` — per that module's own logic (unchanged, only exercised
+  differently), `'manual'`/`'assisted'` can only ever reach `block` or
+  `require_approval`, never `allow_automatic`. There is no parameter, no
+  override, and no code path in `ai/` that passes a different level.
+  Proven directly (`tests/automation-price-policy.test.ts`).
+- **The AI cannot approve its own recommendation, cannot simulate
+  approval, and cannot mark anything approved.** `ProposalOutcome` (a
+  closed type) has no `'approved'`/`'executed'` member at all — the only
+  two outcomes that can result from a successful validation are `'blocked'`
+  and `'requires_approval'`. Approval itself only ever happens through the
+  pre-existing, unchanged `/approvals` page and
+  `automation/approvalWorkflow.ts`'s `approveDecision` (Milestone 6),
+  which independently re-checks `canApprove(session)` (`owner` role only)
+  exactly as it already did before this milestone.
+- **No new approval mechanism, no new write path beyond one call into an
+  existing one.** `ai/actions/propose.ts`'s `proposeAction` is the single
+  function in this milestone that can create real state, and it does so
+  by calling the pre-existing `automation/proposeApproval.ts` (Milestone
+  6) — the same function `productHandlers.ts`'s job handlers already call.
+  It creates one `ai_decisions` row, nothing else; `ai_decisions` already
+  carries the same RLS posture documented above (read-only for org
+  members, service-role-only writes).
+- **Re-derives from scratch rather than trusting a round-tripped
+  proposal.** The only thing the client ever sends back to
+  `requestActionApproval` (`src/app/(dashboard)/chat/actions.ts`) is the
+  user's own original message text — the same text it already had.
+  `proposeAction` reloads `getCEOCommandCentre()`/`getProducts()` fresh
+  and re-runs the entire `intentExtraction`/`validateActionIntent`
+  pipeline before ever calling `proposeApproval`, the same "materially
+  changed facts invalidate a stale decision" discipline
+  `approveDecision` already applies one step later, at the owner's actual
+  approval.
+- **Cross-tenant access remains structurally impossible for the same
+  reason it already was.** Every function `ai/actions/` calls
+  (`loadProductChannelProfitFacts`, `getAutomationSettings`,
+  `getComplianceIssues`, `getProducts`, `getCEOCommandCentre`) resolves
+  `orgId` from the session Milestone 12's `requireSession()` already
+  established — no new function in this milestone accepts a
+  caller-supplied `orgId` or entity id from outside that session's own
+  already-loaded facts.
+- **A real, previously-latent bug found via browser verification, not by
+  inspection**: `validate.ts`'s live price-lookup path
+  (`loadProductChannelProfitFacts`) had no demo-mode branch — unlike
+  every other repository function in this codebase, which checks
+  `session.isDemo` before ever calling `createServiceSupabase()`. In the
+  default, credential-free demo session (this environment's actual
+  state), asking the chat to propose a price change threw, and
+  `/api/chat` returned a bare `500` rather than the honest "demo mode has
+  no live data" message every other feature gives. Fixed with an explicit
+  `session.isDemo` check in `validateUpdatePrice`, matching the pattern
+  every other repository function already follows. Not unit-tested
+  directly (the function is `server-only`), but reproduced and confirmed
+  fixed live in the browser (`POST /api/chat` returning `200` with an
+  honest `outcome: 'invalid'` proposal afterwards, where it previously
+  returned `500`).
+- **Not verified**: real RLS enforcement under an authenticated session
+  (the same pre-existing boundary documented above, unchanged by this
+  milestone) and actual Anthropic API behaviour (no `ANTHROPIC_API_KEY`
+  exists in this environment — see Milestone 12's section above, which
+  this milestone does not change).
+
 ## What Milestone 12 changed here (Commerce Intelligence chat, Phase 1: read-only)
 
 The chat's threat model is different in kind from every prior milestone —

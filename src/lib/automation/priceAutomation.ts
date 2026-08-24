@@ -37,12 +37,33 @@ function levelPermitsAutoApply(level: AutomationLevel): boolean {
   return level === 'supervised' || level === 'autonomous'
 }
 
-export function assessPriceChange(request: PriceChangeRequest, settings: AutomationSettings): PriceChangeAssessment {
-  const before = calculateProfitability(request.costInputsBefore)
-  const after = calculateProfitability({ ...request.costInputsBefore, sellingPrice: request.newSellingPrice })
+/**
+ * The margin/policy decision, taking already-computed `Profitability` for
+ * "before" and "after" rather than raw `CostInputs` — split out from
+ * `assessPriceChange` (Milestone 13) so a caller that already has real
+ * per-product profitability from elsewhere (`analytics/profitAnalytics.ts`'s
+ * `buildProductChannelProfitAnalytics`, which itself resolves the correct
+ * per-channel fee profile via `profitability/channels.ts`) can reuse this
+ * exact decision logic without reconstructing `CostInputs` by hand — which
+ * would risk silently drifting from the real channel-fee assumptions
+ * `channels.ts` owns. `assessPriceChange` below is now a thin wrapper that
+ * calls `calculateProfitability` itself and delegates here; its behaviour
+ * and signature are unchanged.
+ */
+export interface PriceChangePolicyInput {
+  productTitle: string
+  before: Profitability
+  after: Profitability
+  oldPriceMinor: number
+  newPriceMinor: number
+  automationLevel: AutomationLevel
+  /** Sum of any other price changes already applied to this product today, as a percentage. */
+  priorChangeTodayPct?: number
+}
 
-  const oldMinor = request.costInputsBefore.sellingPrice.minor
-  const pctChange = oldMinor === 0 ? 0 : ((request.newSellingPrice.minor - oldMinor) / oldMinor) * 100
+export function assessPriceChangePolicy(input: PriceChangePolicyInput, settings: AutomationSettings): PriceChangeAssessment {
+  const { before, after } = input
+  const pctChange = input.oldPriceMinor === 0 ? 0 : ((input.newPriceMinor - input.oldPriceMinor) / input.oldPriceMinor) * 100
 
   const marginSatisfied = (after.netMarginPct ?? -Infinity) >= settings.minNetMarginPct
 
@@ -55,15 +76,15 @@ export function assessPriceChange(request: PriceChangeRequest, settings: Automat
 
   const domainOutcome: DomainOutcome = !marginSatisfied
     ? 'blocked'
-    : levelPermitsAutoApply(request.automationLevel)
+    : levelPermitsAutoApply(input.automationLevel)
       ? 'auto_permitted'
       : 'pending_approval'
 
   const domainReason = !marginSatisfied
-    ? `Blocked: ${request.productTitle}'s net margin would fall to ${(after.netMarginPct ?? 0).toFixed(1)}%, below the configured minimum of ${settings.minNetMarginPct}%.`
-    : `${request.productTitle}: ${formatMoney(request.costInputsBefore.sellingPrice)} -> ${formatMoney(request.newSellingPrice)}. Net margin ${(before.netMarginPct ?? 0).toFixed(1)}% -> ${(after.netMarginPct ?? 0).toFixed(1)}%.`
+    ? `Blocked: ${input.productTitle}'s net margin would fall to ${(after.netMarginPct ?? 0).toFixed(1)}%, below the configured minimum of ${settings.minNetMarginPct}%.`
+    : `${input.productTitle}: ${formatMoney({ minor: input.oldPriceMinor, currency: before.currency })} -> ${formatMoney({ minor: input.newPriceMinor, currency: after.currency })}. Net margin ${(before.netMarginPct ?? 0).toFixed(1)}% -> ${(after.netMarginPct ?? 0).toFixed(1)}%.`
 
-  const cumulativePct = (request.priorChangeTodayPct ?? 0) + pctChange
+  const cumulativePct = (input.priorChangeTodayPct ?? 0) + pctChange
 
   const policy = evaluateAutomationPolicy({
     actionType: 'update_price',
@@ -79,4 +100,18 @@ export function assessPriceChange(request: PriceChangeRequest, settings: Automat
   })
 
   return { before, after, pctChange, policy }
+}
+
+export function assessPriceChange(request: PriceChangeRequest, settings: AutomationSettings): PriceChangeAssessment {
+  const before = calculateProfitability(request.costInputsBefore)
+  const after = calculateProfitability({ ...request.costInputsBefore, sellingPrice: request.newSellingPrice })
+
+  return assessPriceChangePolicy({
+    productTitle: request.productTitle,
+    before, after,
+    oldPriceMinor: request.costInputsBefore.sellingPrice.minor,
+    newPriceMinor: request.newSellingPrice.minor,
+    automationLevel: request.automationLevel,
+    priorChangeTodayPct: request.priorChangeTodayPct,
+  }, settings)
 }

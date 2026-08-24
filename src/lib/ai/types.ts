@@ -1,3 +1,5 @@
+import type { ProposedAction, Recommendation } from './actions/types'
+
 /**
  * Commerce Intelligence chat (Milestone 12).
  *
@@ -19,7 +21,7 @@ export interface ChatMessage {
 
 /** How a `FactBundle` reference maps back into the rest of the application — every one a real, existing route, never a fabricated link. */
 export type ChatReferenceType =
-  | 'priority' | 'compliance' | 'opportunity' | 'supplier' | 'channel' | 'approval'
+  | 'priority' | 'compliance' | 'opportunity' | 'supplier' | 'channel' | 'approval' | 'product'
 
 export interface ChatReference {
   type: ChatReferenceType
@@ -71,6 +73,19 @@ export interface FactBundle {
     shopifyStatus: string; amazonStatus: string; statusReason: string | null; onTimeRatePct: number | null
   }[]
   pendingApprovals: readonly { id: string; title: string; impact: string | null; expiresAt: string | null }[]
+  /**
+   * Milestone 13 — the bounded, real set of catalogue entities `ai/actions/`
+   * is allowed to match a user's own message against for entity resolution
+   * (`intentExtraction.ts`). Sourced from `products/repository.ts`'s
+   * `getProducts()` (titles/SKUs — a real Milestone 1 read) joined with
+   * whatever per-channel price/margin facts the CEO Command Centre's
+   * analytics already computed for that product; never a second product
+   * listing query.
+   */
+  products: readonly {
+    id: string; sku: string; title: string; category: string | null; stage: string
+    channels: readonly { channel: string; label: string; knownNetMarginPct: number | null; netProfitMinor: number | null }[]
+  }[]
 }
 
 /** Whether an answer used the real language model, or the deterministic fact-only fallback — the UI must never present the two identically. */
@@ -85,6 +100,15 @@ export interface ChatAnswer {
   references: readonly ChatReference[]
   /** e.g. a data-source failure, a currency-mixing caution — surfaced to the UI verbatim, never folded silently into `content`. */
   warnings: readonly string[]
+  /**
+   * Milestone 13 — deterministic, code-derived structured cards, built by
+   * `ai/actions/recommend.ts`/`validate.ts` from the same `FactBundle` as
+   * `content`, never parsed out of the model's own reply. See
+   * `ai/actions/types.ts`'s module comment for why the model contributes
+   * nothing to these beyond `content` itself.
+   */
+  recommendations: readonly Recommendation[]
+  proposedAction: ProposedAction | null
 }
 
 export type ChatProviderErrorKind = 'not_configured' | 'request_failed' | 'invalid_response'

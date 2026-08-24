@@ -191,7 +191,7 @@ describe('buildFactBundle: compliance visibility', () => {
     const bundle = buildFactBundle({ ceo, orgName: 'Test Co', opportunities: [], opportunitySummary: null, suppliers: [], now: NOW })
 
     expect(bundle.complianceIssues).toHaveLength(1)
-    expect(bundle.complianceIssues[0].channel).toBe('Amazon UK')
+    expect(bundle.complianceIssues[0].channel).toBe('amazon_uk')
     expect(bundle.complianceIssues[0].verdict).toBe('fail')
     const text = serializeFactBundle(bundle)
     expect(text).toContain('BLOCKED')
@@ -204,7 +204,7 @@ describe('buildFactBundle: compliance visibility', () => {
     const bundle = buildFactBundle({ ceo, orgName: 'Test Co', opportunities: [], opportunitySummary: null, suppliers: [], now: NOW })
 
     expect(bundle.complianceIssues).toHaveLength(1)
-    expect(bundle.complianceIssues.some((c) => c.channel === 'Shopify')).toBe(false)
+    expect(bundle.complianceIssues.some((c) => c.channel === 'shopify')).toBe(false)
   })
 })
 

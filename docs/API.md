@@ -225,10 +225,19 @@ route is stateless — nothing is persisted server-side; see
     "groundedIn": "live_model" | "fact_only",
     "factStatus": "grounded" | "partial" | "insufficient_data",
     "references": [{ "type": "compliance", "id": "p1", "label": "…", "href": "/compliance" }],
-    "warnings": []
+    "warnings": [],
+    "recommendations": [{ "id": "…", "type": "UPDATE_PRICE", "title": "…", "executable": true, "requiresApproval": true, "…": "…" }],
+    "proposedAction": { "id": "…", "actionType": "UPDATE_PRICE", "outcome": "requires_approval" | "blocked" | "not_executable" | "invalid", "approvalId": null, "…": "…" }
   }
 }
 ```
+
+`recommendations`/`proposedAction` (Milestone 13) are always present
+(possibly empty/`null`) and always deterministic — built by
+`src/lib/ai/actions/recommend.ts`/`validate.ts` directly from the same
+facts as `content`, never parsed out of whichever provider answered.
+`proposedAction` is a **preview only** — nothing is written by this route;
+see `POST` below for the one thing that is.
 
 `400` for a malformed/invalid body, `401` for no session, `500` for an
 unexpected failure. A failure to reach the language model itself is never
@@ -237,22 +246,41 @@ back to the same deterministic, fact-only answer used when
 `ANTHROPIC_API_KEY` is not configured at all, with a `warnings` entry
 explaining why, so a live-model outage degrades the answer, not the route.
 
+### `requestActionApproval` (Server Action, not a route under `src/app/api/` — noted here rather than skipped, since it is this feature's one write path)
+
+`src/app/(dashboard)/chat/actions.ts`, called from the chat page's
+"Request approval" button once `proposedAction.outcome ===
+'requires_approval'`. Takes only the user's own original message text —
+re-derives and re-validates the entire proposal from fresh data
+server-side (`src/lib/ai/actions/propose.ts`) rather than trusting
+anything the client echoes back, then calls the pre-existing
+`automation/proposeApproval.ts` (Milestone 6) to create one `ai_decisions`
+row. Returns the validated `ProposedAction` (now carrying a real
+`approvalId`) or `{ error: string }` — never throws to the client. The
+owner approves/rejects it on the pre-existing `/approvals` page,
+unchanged.
+
 ### What this route does not do
 
-Nothing in `src/lib/ai/` can write anything — no module here imports a
-`store.ts`/`AutomationStore` write method, a marketplace connector's write
-method, an execution pipeline, or `approvalWorkflow.ts`. The model itself
-is never given tool/function-calling access (`anthropicRequest.ts`'s
-`AnthropicCreateParams` has no `tools` field anywhere in this codebase) —
-it can only turn already-supplied text into more text, so it structurally
-cannot query, mutate, or execute anything beyond the one `FactBundle` it
-was handed for that turn. See `docs/SECURITY.md`'s Milestone 12 section
-for the full threat-model writeup.
+Nothing in `src/lib/ai/` can execute a mutation directly — no module here
+imports a `store.ts`/`AutomationStore` write method, a marketplace
+connector's write method, or an execution pipeline; the one exception,
+`requestActionApproval` above, only ever calls `proposeApproval` (a
+pending-decision write, never an execution). The model itself is never
+given tool/function-calling access (`anthropicRequest.ts`'s
+`AnthropicCreateParams` has no `tools` field anywhere in this codebase),
+and — Milestone 13 — is never even asked to produce the structured
+proposal at all; `intentExtraction.ts` reads only the user's own message.
+See `docs/SECURITY.md`'s Milestone 12/13 sections for the full
+threat-model writeup.
 
 ### Production infrastructure this route needs
 
 A real `ANTHROPIC_API_KEY` for `groundedIn: "live_model"` answers — absent
 one, every answer is `fact_only` (`src/lib/ai/offlineAnswer.ts`), which is
 fully implemented and tested, not a stub. Not live-verified against a real
-Anthropic account in this environment; see `HANDOVER.md`'s Milestone 12
-section for exactly what was and was not exercised.
+Anthropic account in this environment. A real Supabase project for
+`requestActionApproval` to do anything beyond an honest "demo mode has no
+database" message — not live-verified either, for the same reason; see
+`HANDOVER.md`'s Milestone 12/13 sections for exactly what was and was not
+exercised.

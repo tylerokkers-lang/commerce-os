@@ -9,7 +9,7 @@ function emptyBundle(overrides: Partial<FactBundle> = {}): FactBundle {
     generatedAt: NOW, isDemo: false, orgName: 'Test Co', dataSourceFailures: [], currencyCautions: [],
     overallHealth: 'healthy', healthAreas: [], executiveSummary: [],
     priorities: [], complianceIssues: [], channels: [], topOpportunities: [], opportunitySummary: null,
-    supplierRisk: [], pendingApprovals: [],
+    supplierRisk: [], pendingApprovals: [], products: [],
     ...overrides,
   }
 }
@@ -64,7 +64,7 @@ describe('buildOfflineAnswer: unavailable data', () => {
 describe('buildOfflineAnswer: compliance visibility', () => {
   it('surfaces a blocked product with its channel and reason', () => {
     const bundle = emptyBundle({
-      complianceIssues: [{ productId: 'p1', sku: 'CMO-1001', title: 'Vacuum', channel: 'Amazon UK', verdict: 'fail', blockingReasons: ['Cannot ship as seller of record.'] }],
+      complianceIssues: [{ productId: 'p1', sku: 'CMO-1001', title: 'Vacuum', channel: 'amazon_uk', verdict: 'fail', blockingReasons: ['Cannot ship as seller of record.'] }],
     })
     const answer = buildOfflineAnswer(bundle, 'Why is this product blocked?')
     expect(answer).toContain('BLOCKED')
@@ -96,7 +96,7 @@ describe('buildOfflineAnswer: keyword-based ordering is cosmetic only, never a c
   it('a supplier-flavoured question still contains every other section — nothing is dropped, only reordered', () => {
     const bundle = emptyBundle({
       supplierRisk: [{ id: 's1', name: 'Risky Co', score: 20, shopifyStatus: 'approved', amazonStatus: 'blocked', statusReason: null, onTimeRatePct: 50 }],
-      complianceIssues: [{ productId: 'p1', sku: 'X', title: 'X', channel: 'Amazon UK', verdict: 'fail', blockingReasons: [] }],
+      complianceIssues: [{ productId: 'p1', sku: 'X', title: 'X', channel: 'amazon_uk', verdict: 'fail', blockingReasons: [] }],
     })
     const answer = buildOfflineAnswer(bundle, 'Which suppliers are highest risk?')
     expect(answer.indexOf('Risky Co')).toBeLessThan(answer.indexOf('Compliance issues'))
