@@ -1603,34 +1603,195 @@ typecheck, lint and `npm run build` all clean; `db:verify` re-run clean;
 errors; `informax-site` confirmed untouched throughout (git status checked
 before and after).
 
-## Milestone 11 — CEO dashboard
+## Milestone 11 — CEO Command Centre ✅ complete
 
-The dashboard the owner actually reads every day: an AI CEO briefing (every
-claim traceable per the fact-first principle), a business pulse, an
-explainable business health score, winners and losers, products ready to
-scale (only when sales evidence, profitability, supplier capacity, returns,
-compliance and advertising efficiency all clear their thresholds), an
-attention-required section, an automation centre, a finance centre (VAT
-tracked, not filed — never presented as tax advice), supplier and advertising
-command centres, a product testing centre, a system health panel (connectors,
-workers, last sync, failed jobs), and an emergency stop that can pause
-automation categories while preserving critical order processing, itself
-logged like any other consequential action.
+The dashboard the owner actually reads every day, at `/` (the existing
+"Dashboard" nav entry — no new route). Milestone 10 built the business
+intelligence *facts*; this milestone composes them, plus Milestone 6/8's
+automation and monitoring status and the existing approvals queue, into
+one executive view — and adds only genuinely new orchestration logic
+(which alert outranks which, which classification an area's health boils
+down to), never a second calculation of anything Milestone 6–10 already
+computed. The layering the brief itself specified:
 
-**Note:** Milestone 10 already delivered substantial business-intelligence
-content on `/automation` — revenue & profit with period comparison,
-channel/product/supplier/fulfilment performance, a deterministic
-business-health alert feed, and a data-quality summary, all behind
-`analytics/repository.ts`'s `getAnalyticsDashboard()` and the named
-`getX()` entry points. What remains scoped to this milestone is genuinely
-new: the AI CEO briefing itself (needs Milestone 12's chat/tool layer),
-the explainable business-health *score* (Milestone 10 built the alert
-feed and the KPIs a score would be computed from, not a single blended
-number), products-ready-to-scale gating, finance/advertising/product
-command centres, and the emergency-stop UI (the underlying pause
-mechanism has existed since Milestone 6). Read Milestone 10's section
-first — its `getBusinessOverview`/`getProfitAnalytics`/etc. functions are
-designed to be read from directly, not re-summarised.
+```
+Operational systems -> Authoritative engines -> Analytics & BI (M10)
+-> CEO Command Centre (M11) -> CEO
+```
+
+- **`src/lib/ceo/`** (new module, mirroring `analytics/`'s one-file-per-
+  concern shape, kept deliberately separate from it per the layering
+  above):
+  - `types.ts` — `Priority`, `HealthArea`/`HealthStatus`
+    (`healthy`/`watch`/`at_risk`/`critical`/`unknown`), `CEOCommandCentre`,
+    `CEODemoScenario`.
+  - `priorities.ts` — `buildPriorities`, the deterministic executive
+    priority queue ("what needs my attention" and "your priorities today"
+    are the same list, shown once, per the brief's own "do not create a
+    second alert engine" instruction). Maps Milestone 10's
+    `analytics.alerts` straight through (revenue/profit decline,
+    data-quality gaps, supplier at-risk/unavailable — never re-derived),
+    and *adds* only what Milestone 10 did not already alert on:
+    channel-specific loss-making products, automation health (paused/
+    failed/dead-lettered), pending approvals (escalated to critical only
+    when genuinely within 24h of expiry — a real fact, not a guess),
+    compliance rechecks, and fulfilment problems. Sorted critical-first,
+    then most-recent-first — deterministic and stable.
+  - `healthScorecard.ts` — `buildBusinessHealthScorecard`, eight areas
+    (financial/product/supplier/marketplace/fulfilment/compliance/
+    automation/data quality), each a classification with a stated reason,
+    built entirely from existing counts and classifications
+    (`SupplierHealth.status`, `MarketConnectorStatus`, `DataQualitySummary`).
+    The overall status is the single worst area — never a separately
+    invented blended score, and never hidden behind unrelated
+    healthy/unknown areas.
+  - `repository.ts` (`server-only`) — `getCEOCommandCentre()`, the one
+    composition function the whole page calls. Uses `Promise.allSettled`
+    (never a bare `Promise.all`) across `getAnalyticsDashboard`/
+    `getMonitoringStatus`/`getAutomationStatus`/`getPendingApprovals`, so
+    one source failing falls back to a safe empty/unknown value and is
+    recorded in `dataSourceFailures`, rather than taking the whole
+    dashboard down — the brief's explicit "must fail safely" requirement.
+- **`src/components/dashboard/MetricStat.tsx`**: the fact-first metric
+  tile (value + comparison badge when known; an honest UNKNOWN/STALE/
+  UNAVAILABLE badge plus its source when not) extracted out of
+  `/automation`'s page so both it and the new `/` page render the exact
+  same `Metric<T>`/`PeriodMetric<T>` shape identically, rather than two
+  copies that could drift.
+- **`src/lib/demo/ceo.ts`**: the 10 required demo scenarios (healthy and
+  growing; revenue growth but declining profit; critical supplier
+  failure; multiple loss-making products; marketplace underperformance;
+  international expansion opportunity; stale FX/data-quality warning;
+  automation emergency stop; a pending approval expiring within 24h;
+  multiple simultaneous issues), each computed by calling the real
+  `buildPriorities`/`buildBusinessHealthScorecard` functions against
+  deliberately chosen fixture facts — never a hardcoded narrative string.
+- **UI** (`src/app/(dashboard)/page.tsx`, fully rebuilt): an emergency-stop
+  banner (shown above everything else when active); a data-source-failure
+  banner; "What needs your attention" (the priority queue); an executive
+  summary (revenue/net revenue/orders/AOV/refunds/refund & return rate/
+  known net margin, each with a period-over-period comparison badge, and
+  an explicit `*Data incomplete` marker when the margin is not fully
+  known); the business health scorecard; channel performance; top
+  performers / problem products (kept channel-specific throughout —
+  never "Product X is unprofitable" as a blanket claim); supplier health
+  plus the existing per-channel supplier approval table; fulfilment
+  health; international markets (real connector status, `planned` never
+  shown as live); automation health; an approvals summary; the existing
+  Milestone 1/2 opportunity-intelligence section (kept, not replaced —
+  genuinely different facts from Milestone 10's realized-performance
+  view); a dedicated "Can I trust these numbers?" data-quality section;
+  the existing stock/compliance detail cards; and a combined recent-
+  activity feed from real `domain_events` and `automation_actions` rows
+  (never a second audit log). The old page's `getBusinessSummary()`/
+  `getChannelSummaries()` calls (Milestone 1, hardcoded-empty stubs in
+  live mode) and `getProducts()`-based winners/losers were removed
+  entirely, replaced by Milestone 10's real data.
+- **A real, previously-latent bug found via live browser verification,
+  not by inspection**: two of the ten demo scenarios computed their
+  "current vs previous period" comparison using the *same* window bounds
+  for both — `aggregateSalesWindow(currentLines, [], period.start,
+  period.end)` and `aggregateSalesWindow(previousLines, [], period.start,
+  period.end)` — so the previous period's own order line (dated weeks
+  earlier) fell outside the window it was being checked against,
+  aggregated to zero, and produced `comparePeriods(revenue, 0)` ->
+  `percentChange: null` per Milestone 10's own divide-by-zero rule. The
+  page rendered "Revenue: null% vs the previous period" — a defect this
+  session's own automated tests did not catch (they checked for the
+  literal strings `"undefined"`/`"NaN"`, not `"null"`) but a live render
+  in the browser did. Fixed by computing `previousEquivalentPeriod(period)`
+  for the previous window, exactly as `demo/analytics.ts` (Milestone 10)
+  already did correctly — a regression test was added to catch this
+  specific class of mistake in future demo fixtures.
+
+**IMPLEMENTED AND VERIFIED:**
+
+- `buildPriorities`: deterministic critical-first ordering (proven with
+  50 simultaneous synthetic alerts), channel-specific loss-making
+  priorities, emergency-stop always critical, a paused category always
+  medium (never critical), approval-expiry-based severity escalation, and
+  that every alert Milestone 10 already produced is mapped through
+  exactly once, never re-derived (`tests/ceo-priorities-health.test.ts`).
+- `buildBusinessHealthScorecard`: every area unknown in demo mode, a
+  genuinely healthy live business reporting every area healthy, the
+  overall status always the single worst area, every non-healthy/
+  non-unknown area carrying a stated reason, and `planned` markets never
+  counting against marketplace health.
+- **A second real bug found and fixed via this milestone's own test
+  suite**: the data-quality health area was initially at least `watch`
+  for *every* business, forever — because "no advertising connector
+  configured" (Milestone 10, `severity: 'info'`, permanently true in this
+  codebase) was enough on its own to mark `dataQuality.overallStatus` as
+  `incomplete`, and the scorecard treated any `incomplete` status as at
+  least `watch`. Fixed so only `warning`/`critical`-severity data-quality
+  issues affect this area's health; a purely informational, permanent,
+  unresolvable gap like "no ad connector exists" is surfaced prominently
+  in the dedicated data-quality section instead, without depressing the
+  scorecard forever.
+- `getCEOCommandCentre()`'s graceful degradation: each of the four
+  fallback shapes (`fallbackAnalyticsDashboard`/`fallbackMonitoringStatus`/
+  `fallbackAutomationStatus`/an empty approvals array) is structurally
+  identical to the "genuinely no data yet" fixtures already exercised
+  throughout `tests/ceo-priorities-health.test.ts` and `tests/demo-ceo.test.ts`
+  — proven safe as input to `buildPriorities`/`buildBusinessHealthScorecard`,
+  though the `Promise.allSettled` wiring itself could not be unit tested
+  directly (see below).
+- All 10 demo scenarios, computed through the real builder functions
+  (`tests/demo-ceo.test.ts`).
+- `/` (the new CEO Command Centre), `/automation`, `/orders`,
+  `/marketplaces`, `/approvals` and `/opportunities/[id]` confirmed live
+  in the browser with no console errors, including a working drill-down
+  click from the priority queue straight through to `/approvals`.
+
+**IMPLEMENTED BUT NOT LIVE-VERIFIED:**
+
+- `getCEOCommandCentre()`'s own composition and its `Promise.allSettled`
+  fallback wiring — this function is `server-only` (like every repository
+  function since Milestone 1) and cannot be imported into a Vitest file
+  at all, so it is exercised only by its pure sub-functions
+  (`buildPriorities`/`buildBusinessHealthScorecard`) receiving the same
+  fallback shapes it would produce, and by the live browser check above,
+  never against a real deployed Postgres project.
+
+**REQUIRES PRODUCTION INFRASTRUCTURE:**
+
+- Everything Milestone 10 already listed here (a real advertising
+  connector; real order/fulfilment history at scale) — this milestone
+  added no new infrastructure requirement of its own.
+
+**NOT IMPLEMENTED (deliberately, not a hidden gap):**
+
+- The AI CEO briefing — needs Milestone 12's chat/tool layer; this
+  milestone makes `getCEOCommandCentre()` and `buildPriorities` the exact
+  facts a future assistant should query, per the brief's §21, rather than
+  build a chat interface here.
+- Products-ready-to-scale gating, and dedicated finance/advertising/
+  product "command centres" beyond what channel performance, supplier
+  health and fulfilment health already cover — the original brief's scope
+  for these was folded into what Milestone 10's real data already
+  supports; building separate dedicated sections for them without new
+  underlying facts would be decorative, not functional.
+- An interactive period selector — the dashboard states its "last 30
+  days" period and comparison window explicitly in its own header text;
+  a client-side selector was judged out of scope for the same reason
+  Milestone 10 deferred it (a genuine UI feature addition, not an
+  analytics-architecture one).
+- A dedicated cashflow-warning card — the pre-existing `getCashflow()`
+  (Milestone 1) still returns a hardcoded-empty result in live mode; this
+  milestone did not extend it, and deliberately does not surface a
+  cashflow card that would silently never fire, since doing so would
+  misrepresent this area's completeness. A real cashflow-forecasting pass
+  remains a documented, pre-existing gap (`docs/MILESTONES.md`'s
+  "Cross-cutting, ongoing" Payments and cashflow section), not part of
+  Milestone 10 or 11's brief.
+
+**Verified:** 792 tests (up from 770); no new migrations (25 migrations,
+72 tables, unchanged — every figure is composed from Milestone 6–10's
+existing reads); typecheck, lint and `npm run build` all clean;
+`db:verify` re-run clean; `/`, `/automation`, `/orders`, `/marketplaces`,
+`/approvals` and `/opportunities/[id]` confirmed live with no console
+errors; `informax-site` confirmed untouched throughout (git status
+checked before and after).
 
 ## Milestone 12 — Commerce Intelligence chat
 
@@ -1640,6 +1801,13 @@ never raw, unrestricted database access. Responses follow the fact-first
 categories (facts, calculations, rules, analysis, predictions, uncertainty)
 and the system can say "I don't have enough current data to answer that
 reliably." Credentials never enter conversational memory.
+
+**Note:** Milestone 11's `getCEOCommandCentre()` and `ceo/priorities.ts`'s
+`buildPriorities` are the exact facts this chat layer should query for
+"what needs my attention"/"how is the business doing" — the tool/query
+layer should call these functions directly, never recreate the priority
+ranking or business-health classification logic. See Milestone 11's
+section for the full function list.
 
 ## Milestone 13 — AI actions
 

@@ -1080,19 +1080,89 @@ real advertising connector; a real deployed Postgres project to verify
 `liveAnalyticsFacts.ts`'s own query composition against (same standing
 boundary as every live Supabase path since Milestone 1).
 
-## 25. Next step
+## 26. Milestone 11 (CEO Command Centre) — what was built
 
-Milestone 11 (CEO dashboard), per `docs/MILESTONES.md` — read its "Note"
-paragraph first: Milestone 10 already delivered the business-intelligence
-data layer (`analytics/repository.ts`'s `getAnalyticsDashboard` and named
-`getX()` functions) this milestone should read from directly, not
-re-summarise. What genuinely remains: the AI CEO briefing (needs
-Milestone 12's chat/tool layer first), an explainable business-health
-*score* on top of the alert feed Milestone 10 already built, products-
-ready-to-scale gating, finance/advertising/product command centres, and
-the emergency-stop UI (the pause mechanism itself has existed since
-Milestone 6). Read `docs/PRINCIPLES.md` first. When international
-expansion is eventually revisited as Milestone 15, read Milestone 9's
-section first — the market model, FX intelligence, country-aware
-compliance delegation and expansion engine it built are designed to
-extend without a schema redesign, not be rebuilt.
+Milestone 10 built the business-intelligence facts. This milestone
+composes them — plus Milestone 6/8's automation/monitoring status and the
+existing approvals queue — into the one executive view at `/` (the
+existing "Dashboard" nav entry, no new route), and adds only genuinely
+new orchestration logic, never a second calculation of anything Milestone
+6–10 already computed. Full detail in `docs/MILESTONES.md`'s Milestone 11
+section — this is the short version plus what you need to know before
+touching this code.
+
+- **`src/lib/ceo/`**: `priorities.ts`'s `buildPriorities` is the one
+  executive priority queue ("what needs my attention" and "your
+  priorities today" are the same list) — it maps Milestone 10's
+  `analytics.alerts` straight through and only *adds* what Milestone 10
+  did not already alert on (channel-specific loss-making products,
+  automation health, pending approvals, compliance rechecks, fulfilment
+  problems). `healthScorecard.ts`'s `buildBusinessHealthScorecard`
+  produces 8 deterministic area classifications
+  (HEALTHY/WATCH/AT_RISK/CRITICAL/UNKNOWN), each with a stated reason; the
+  overall status is always the single worst area. `repository.ts`'s
+  `getCEOCommandCentre()` composes all four sources via
+  `Promise.allSettled` — never a bare `Promise.all` — so one source
+  failing falls back to a safe empty value (recorded in
+  `dataSourceFailures`) rather than crashing the whole page.
+- **`src/components/dashboard/MetricStat.tsx`**: extracted out of
+  `/automation`'s page so both it and `/` render `Metric<T>`/
+  `PeriodMetric<T>` identically, not two copies that could drift.
+- **UI**: `/`'s `page.tsx` was fully rebuilt — emergency-stop banner (top
+  priority, above everything), a data-source-failure banner, the priority
+  queue, an executive summary with period comparisons, the business
+  health scorecard, channel performance, top/problem products (kept
+  channel-specific), supplier health, fulfilment health, international
+  markets, automation health, an approvals summary, the pre-existing
+  Milestone 1/2 opportunity-intelligence section (kept, not duplicated —
+  genuinely different facts), a dedicated "Can I trust these numbers?"
+  section, and a combined recent-activity feed from real `domain_events`
+  and `automation_actions` rows. The old page's Milestone-1 stubs
+  (`getBusinessSummary`/`getChannelSummaries`, hardcoded-empty in live
+  mode) were removed entirely.
+- **Two real bugs found this milestone, one via live browser check, one
+  via this milestone's own tests**: two demo scenarios aggregated their
+  "previous period" sales window using the *current* period's bounds
+  instead of `previousEquivalentPeriod`'s — the previous line fell outside
+  that window, aggregated to zero, and rendered "Revenue: null% vs the
+  previous period" (a defect the automated tests missed because they only
+  checked for `"undefined"`/`"NaN"`, not `"null"`, until a live render
+  caught it). Separately, the data-quality health area was initially at
+  least WATCH for every business, forever, because "no advertising
+  connector configured" (Milestone 10, permanently true, `severity:
+  'info'`) alone was enough to mark it `incomplete`; fixed so only
+  `warning`/`critical`-severity issues affect this area.
+- **A structural robustness addition beyond what the brief's happy path
+  needed**: `getCEOCommandCentre()`'s `Promise.allSettled` fallback wiring
+  is new to this codebase (every prior repository function since
+  Milestone 1 uses a bare `Promise.all` and lets Next.js's own error
+  boundary catch a failure) — added specifically because Milestone 11's
+  brief explicitly required the dashboard to "fail safely" and never let
+  one broken source crash the whole page.
+
+**Verified:** 792 tests (up from 770); no new migrations (25 migrations,
+72 tables, unchanged); typecheck, lint and `npm run build` all clean;
+`db:verify` re-run clean; `/`, `/automation`, `/orders`, `/marketplaces`,
+`/approvals` and `/opportunities/[id]` confirmed live in the browser with
+no console errors, including a working priority-queue drill-down click
+straight to `/approvals`; `informax-site` confirmed untouched throughout.
+
+**Still not built, documented not hidden**: the AI CEO briefing itself
+(needs Milestone 12's chat/tool layer — `getCEOCommandCentre`/
+`buildPriorities` are the facts it should query, never recreate);
+products-ready-to-scale gating and separate finance/advertising/product
+"command centres" beyond what channel/supplier/fulfilment health already
+cover; an interactive period selector; a working cashflow-warning card
+(the pre-existing Milestone 1 `getCashflow()` stub was deliberately left
+unsurfaced rather than shown non-functioning).
+
+## 27. Next step
+
+Milestone 12 (Commerce Intelligence chat), per `docs/MILESTONES.md` —
+read its "Note" paragraph first: `getCEOCommandCentre()` and
+`buildPriorities` (Milestone 11) are the exact facts the chat's tool/query
+layer should call, never recreate. Read `docs/PRINCIPLES.md` first. When
+international expansion is eventually revisited as Milestone 15, read
+Milestone 9's section first — the market model, FX intelligence,
+country-aware compliance delegation and expansion engine it built are
+designed to extend without a schema redesign, not be rebuilt.

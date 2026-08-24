@@ -81,6 +81,8 @@ src/lib/
                  supplier, fulfilment, advertising-architecture, data
                  quality, business health, plus the Milestone 1 reporting
                  reads `/report` still uses — see below
+  ceo/           the CEO Command Centre composition layer — priority
+                 queue, business health scorecard — see below
   amazon/ shopify/ pricing/ invoices/ accounting/ research/ ai/
 ```
 
@@ -311,6 +313,51 @@ that had been reserved in `EVENT_TO_JOB_MAPPING` since Milestone 8 but
 never actually emitted. A frozen reference margin is kept while a product
 is in a dropped state, so a margin that merely stops falling is never
 misreported as recovered.
+
+### `src/lib/ceo/` (Milestone 11)
+
+The CEO Command Centre — a presentation/composition layer, deliberately
+kept out of `analytics/` per the brief's own layering:
+`Operational systems -> Authoritative engines -> Analytics & BI (M10) ->
+CEO Command Centre (M11) -> CEO`. Nothing here recalculates a metric
+Milestone 6–10 already computed.
+
+```
+types.ts             Priority, HealthArea/HealthStatus, CEOCommandCentre,
+                      CEODemoScenario
+priorities.ts         buildPriorities: the one executive priority queue.
+                      Maps analytics.alerts (Milestone 10) straight
+                      through — never re-derived — and adds only what
+                      Milestone 10 did not already alert on: channel-
+                      specific loss-making products, automation health,
+                      pending approvals (severity escalates only on a
+                      real expiry-proximity fact), compliance rechecks,
+                      fulfilment problems. Sorted critical-first, then
+                      most-recent-first
+healthScorecard.ts    buildBusinessHealthScorecard: 8 deterministic areas
+                      (financial/product/supplier/marketplace/
+                      fulfilment/compliance/automation/data quality),
+                      each HEALTHY/WATCH/AT_RISK/CRITICAL/UNKNOWN with a
+                      stated reason, built entirely from existing counts
+                      and classifications. Overall status is always the
+                      single worst area — never a separately invented
+                      blended score
+repository.ts         server-only; getCEOCommandCentre() composes
+                      getAnalyticsDashboard/getMonitoringStatus/
+                      getAutomationStatus/getPendingApprovals via
+                      Promise.allSettled — never a bare Promise.all — so
+                      one source failing falls back to a safe empty
+                      value (recorded in dataSourceFailures) rather than
+                      crashing the whole page; the first use of this
+                      fallback pattern in this codebase, added because
+                      this milestone's brief explicitly required it
+```
+
+`src/components/dashboard/MetricStat.tsx` (extracted from `/automation`'s
+page) is the one place a `Metric<T>`/`PeriodMetric<T>` renders — a value
+plus a comparison badge when known, an honest UNKNOWN/STALE/UNAVAILABLE
+badge plus its source when not — shared by `/automation` and `/` so
+neither can drift from the other's rendering rules.
 
 ## Rules the code follows
 

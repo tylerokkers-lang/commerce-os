@@ -1,6 +1,6 @@
 # Database
 
-72 tables across 25 migrations (as of Milestone 10 — unchanged since
+72 tables across 25 migrations (as of Milestone 11 — unchanged since
 Milestone 9), applied in filename order. Every migration is executed
 against a real Postgres engine by `npm run db:verify`, so nothing in here
 is untested SQL. This file describes the conventions that have held since
@@ -18,6 +18,14 @@ alert, classification, or data-quality finding is persisted anywhere —
 each is derived fresh on every read, the same "a real open-event list, not
 a stored count" discipline `monitoring/repository.ts` already established
 in Milestone 8.5.
+
+Milestone 11 also added **zero migrations** — the CEO Command Centre
+(`src/lib/ceo/`) reads nothing from the database directly at all. It
+composes Milestone 6/8/10's own repository reads (which already query the
+tables above, plus `automation_actions`/`automation_jobs`/`ai_decisions`
+for automation health and approvals); the priority queue and business
+health scorecard are computed in memory from those results, never
+persisted anywhere.
 
 Milestone 8.5's monitoring reads `supplier_products.dispatch_days_min/max`,
 `.cancellation_rate_pct`, `.fulfilment_success_rate_pct` and

@@ -173,6 +173,39 @@ separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
 
+## What Milestone 11 changed here
+
+- No new tables, no new RLS policies, no new credential types, and no new
+  database query of its own — `src/lib/ceo/repository.ts`'s
+  `getCEOCommandCentre()` composes four existing, already-org-scoped
+  repository calls (`getAnalyticsDashboard`/`getMonitoringStatus`/
+  `getAutomationStatus`/`getPendingApprovals`), each of which
+  independently resolves `orgId` from the current request's own session
+  via `requireSession()` — there is no code path anywhere in this
+  milestone that accepts a caller-supplied `orgId`, so cross-organisation
+  access is structurally impossible here for exactly the same reason it
+  already was in the four functions being composed.
+- No new write path: every function in `ceo/` (`buildPriorities`,
+  `buildBusinessHealthScorecard`, `getCEOCommandCentre`) is a read or a
+  pure computation over already-loaded facts. The dashboard's action
+  links (`actionHref` on a `Priority`, the drill-down links throughout
+  `/`'s page) are plain navigation to existing pages
+  (`/approvals`, `/automation`, `/suppliers/[id]`, …) — none of them
+  mutate anything directly; approving or rejecting still goes through
+  `/approvals`'s existing `approveApproval`/`rejectApproval` Server
+  Actions (Milestone 6), unchanged by this milestone.
+- **New in this codebase**: `getCEOCommandCentre()` is the first
+  repository function to use `Promise.allSettled` instead of a bare
+  `Promise.all` across its underlying calls, so a single source failing
+  (a transient error from `getAnalyticsDashboard`, say) falls back to a
+  safe empty/unknown value — recorded in the response's
+  `dataSourceFailures` array, which the UI surfaces as a visible warning
+  banner rather than silently rendering a partial dashboard as if it were
+  complete. This is a defence against a genuinely different failure mode
+  than RLS/credentials (a healthy-but-momentarily-erroring dependency),
+  not a security boundary change, but it is a new resilience pattern
+  future repository composition functions should follow.
+
 ## What Milestone 10 changed here
 
 - No new tables, no new RLS policies, no new credential types —
