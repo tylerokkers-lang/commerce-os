@@ -1,6 +1,7 @@
 import type { CEOCommandCentre } from '@/lib/ceo/types'
 import type { OpportunitySummary, ProductSummary, SupplierListItem } from '@/lib/core/domain'
 import type { IntelligenceSummary } from '@/lib/products/opportunities'
+import type { AdvertisingIntelligence } from '@/lib/analytics/repository'
 import { isKnown, type Metric } from '@/lib/analytics/types'
 import { formatMoney, type Money } from '@/lib/core/money'
 import type { ChatReference, FactBundle } from './types'
@@ -32,6 +33,10 @@ function countMetric(m: Metric<number>): string {
   return isKnown(m) ? String(m.value) : `unavailable — ${m.source}`
 }
 
+function ratioMetric(m: Metric<number>): string {
+  return isKnown(m) ? m.value.toFixed(2) : `unavailable — ${m.source}`
+}
+
 /** Every metric this bundle chose to represent as "unavailable" rather than a number, named once here so a provider can cite the *reason* (e.g. a real mixed-currency finding) instead of silently dropping the topic. */
 function collectCurrencyCautions(ceo: CEOCommandCentre): readonly string[] {
   const cautions: string[] = []
@@ -54,6 +59,8 @@ export function buildFactBundle(input: {
   suppliers: readonly SupplierListItem[]
   /** Optional so every pre-existing call site (tests, demo scenarios not focused on catalogue matching) keeps working unchanged — defaults to no known products, never a guess. */
   products?: readonly ProductSummary[]
+  /** Optional for the same reason — defaults to no known campaigns, never a guess (Milestone 14). */
+  advertisingIntelligence?: AdvertisingIntelligence
   now: string
 }): FactBundle {
   const { ceo } = input
@@ -136,6 +143,22 @@ export function buildFactBundle(input: {
         .filter((c) => marginByProductChannel.has(`${p.id}:${c}`))
         .map((c) => ({ channel: c, label: CHANNEL_LABELS[c] ?? c, ...marginByProductChannel.get(`${p.id}:${c}`)! })),
     })),
+    advertisingCampaigns: (input.advertisingIntelligence?.campaigns ?? []).map(({ fact: c, classification }) => ({
+      campaignKey: c.identity.campaignKey, campaignName: c.identity.campaignName,
+      channel: c.identity.channel, isPaused: c.identity.isPaused,
+      spend: moneyMetric(c.spend), attributedRevenue: moneyMetric(c.attributedRevenue),
+      roas: ratioMetric(c.roas), acosPct: pctMetric(c.acosPct),
+      classification: classification.classification, severity: classification.severity, reasons: classification.reasons,
+    })),
+    advertisingScorecard: input.advertisingIntelligence && input.advertisingIntelligence.scorecard.totalCampaigns > 0
+      ? {
+          overall: input.advertisingIntelligence.scorecard.overall,
+          totalCampaigns: input.advertisingIntelligence.scorecard.totalCampaigns,
+          totalSpend: moneyMetric(input.advertisingIntelligence.scorecard.totalSpend),
+          overallRoas: ratioMetric(input.advertisingIntelligence.scorecard.overallRoas),
+          tacosPct: pctMetric(input.advertisingIntelligence.scorecard.tacosPct),
+        }
+      : null,
   }
 }
 
@@ -191,6 +214,16 @@ export function serializeFactBundle(bundle: FactBundle): string {
     }
   }
 
+  if (bundle.advertisingScorecard) {
+    lines.push('', `Advertising overall: ${bundle.advertisingScorecard.overall.toUpperCase()} across ${bundle.advertisingScorecard.totalCampaigns} campaign(s) — total spend ${bundle.advertisingScorecard.totalSpend}, overall ROAS ${bundle.advertisingScorecard.overallRoas}, TACOS ${bundle.advertisingScorecard.tacosPct}.`)
+  }
+  if (bundle.advertisingCampaigns.length > 0) {
+    lines.push('Advertising campaigns (never blended across channels; a classification is a deterministic rule outcome, never an AI judgement):')
+    for (const c of bundle.advertisingCampaigns) {
+      lines.push(`  - ${c.campaignName} on ${CHANNEL_LABELS[c.channel] ?? c.channel}${c.isPaused ? ' [PAUSED]' : ''}: spend ${c.spend}, revenue ${c.attributedRevenue}, ROAS ${c.roas}, ACOS ${c.acosPct} — ${c.classification.toUpperCase()} (${c.severity})${c.reasons.length ? `: ${c.reasons.join(' ')}` : ''}`)
+    }
+  }
+
   return lines.join('\n')
 }
 
@@ -220,6 +253,9 @@ export function deriveReferences(bundle: FactBundle): readonly ChatReference[] {
   }
   for (const a of bundle.pendingApprovals.slice(0, 5)) {
     refs.push({ type: 'approval', id: a.id, label: a.title, href: '/approvals' })
+  }
+  for (const c of bundle.advertisingCampaigns.filter((c) => c.classification !== 'healthy').slice(0, 5)) {
+    refs.push({ type: 'advertising_campaign', id: c.campaignKey, label: `${c.campaignName} (${CHANNEL_LABELS[c.channel] ?? c.channel})`, href: '/advertising' })
   }
   return refs
 }

@@ -1889,7 +1889,7 @@ environment's actual default (demo) state — every other repository
 function in this codebase checks `session.isDemo` first; this one didn't.
 Fixed; see `HANDOVER.md` §29 for the full story.
 
-## Milestone 14 — Advertising intelligence
+## Milestone 14 — Advertising intelligence ✅ complete (Analyse/Recommend/Propose layer; live platform integrations and automated execution deferred)
 
 Advertising platform integrations (Amazon Ads, Meta, Google, TikTok as
 applicable) evaluated on contribution after advertising, never on ROAS alone —
@@ -1898,6 +1898,59 @@ once real costs are included. Automated advertising actions carry account,
 daily and per-product limits, maximum percentage changes, approval thresholds,
 cooldowns, rollback logic and audit logging, with no path to unlimited
 automated spend.
+
+**What this pass actually delivered**: the `advertising` table already
+existed (Milestone 1's schema) with no live data ever written to it, so
+this milestone is entirely an intelligence layer over real spend/revenue
+figures, not a schema change — a deterministic classification engine
+(`analytics/advertisingAnalytics.ts`: `wasted_spend`/`poor_profitability`/
+`high_acos_low_roas`/`declining_performance`/`scale_opportunity`/`healthy`/
+`insufficient_data`, each traceable to a measured fact or a named,
+configurable threshold, never an LLM call), an org-wide scorecard using
+the same "worst campaign wins" rule as Milestone 11's health scorecard,
+full CEO Command Centre integration (priorities, health area, and the
+compliance-block override that keeps a non-compliant product's campaign
+from ever appearing as an unrestricted scaling recommendation), Commerce
+Intelligence chat integration (Milestone 12/13's `FactBundle`/
+`intentExtraction`/`validate`/`propose` pipeline extended to campaigns,
+never a second AI pathway), and a new `/advertising` page. **Not**
+delivered, deliberately: no advertising platform connector exists (Amazon
+Ads, Meta, Google, TikTok), so there is no real spend data source beyond
+whatever is written into the `advertising` table by hand or by a future
+connector, and no automated advertising action exists at all —
+`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` are recognised
+vocabulary but honestly `not_executable`; only `REVIEW_CAMPAIGN` (a pure
+escalation, identical in kind to Milestone 13's `REQUEST_APPROVAL`)
+reaches a real `/approvals` entry. The account/daily/per-product spend
+limits, cooldowns and rollback logic this section originally scoped
+belong to a future milestone that builds a real connector and a real
+automated-execution path — building that automation policy now, with
+nothing real to execute against, would be exactly the kind of premature
+abstraction this codebase avoids elsewhere.
+
+**Verified:** typecheck/lint/build/`db:verify` all clean; no schema
+change (72 tables, unchanged); `/advertising`, `/`, `/chat`, `/approvals`
+and `/compliance` all confirmed live in the browser in demo mode with no
+console errors — `/advertising` shows an honest empty scorecard plus all
+seven demo scenarios (computed via the real classification engine against
+fixed fixture data), and asking chat "What is my advertising ROAS and are
+any campaigns wasting money?" honestly answered "No advertising campaign
+data for this period" in the same session the demo scenarios render in,
+confirming demo scenarios never leak into the live data path. **Not
+live-verified:** a real `REVIEW_CAMPAIGN` proposal actually reaching
+`/approvals` end-to-end (this environment's demo session has no real
+campaign data to match a chat message against, and `validate.ts`/
+`propose.ts`'s campaign paths are `server-only`, so — like Milestone 13's
+price-change path — they cannot be imported into Vitest either); real
+Anthropic API behaviour (unchanged from Milestone 12/13, no
+`ANTHROPIC_API_KEY` in this environment).
+
+**A real correctness gap found and fixed**: `ceo/priorities.ts`'s
+advertising section was missing a branch for `high_acos_low_roas` — a
+real `severity: 'high'` classification that the health scorecard already
+surfaced but that never reached the CEO priority queue. See
+`docs/SECURITY.md`'s Milestone 14 section and `HANDOVER.md` for the full
+story.
 
 ## Milestone 15 — International expansion
 

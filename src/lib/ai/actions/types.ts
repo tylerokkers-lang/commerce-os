@@ -20,18 +20,21 @@ import type { ChannelKey } from '@/lib/core/domain'
  */
 
 /**
- * The finite, closed vocabulary. Two are backed by a real deterministic
+ * The finite, closed vocabulary. Three are backed by a real deterministic
  * domain engine and a real path into the existing approval system —
  * `UPDATE_PRICE` (`profitability/channels.ts` + `automation/priceAutomation.ts`'s
- * policy check) and `REQUEST_APPROVAL` (a pure escalation — the same
- * `request_approval` automation action type Milestone 9's expansion engine
- * already uses for "flag this for the owner, nothing to execute"). The
- * rest are recognised — so a real user intent is never silently dropped —
- * but this milestone does not yet assemble the full input a genuine
- * domain engine for them would need (lifecycle stage, resolved supplier
- * capability, a full `ComplianceAssessment`, an inventory-threshold
- * config path); they are always `executable: false`, routed to the real
- * page as a review pointer instead of a fake approval.
+ * policy check), `REQUEST_APPROVAL`, and (Milestone 14) `REVIEW_CAMPAIGN`
+ * (both pure escalations — the same `request_approval` automation action
+ * type Milestone 9's expansion engine already uses for "flag this for the
+ * owner, nothing to execute"). The rest are recognised — so a real user
+ * intent is never silently dropped — but this milestone does not yet
+ * assemble the full input a genuine domain engine for them would need
+ * (lifecycle stage, resolved supplier capability, a full
+ * `ComplianceAssessment`, an inventory-threshold config path, or — for
+ * `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` — a real advertising
+ * platform connector to actually change a live budget/pause state, which
+ * does not exist in this codebase); they are always `executable: false`,
+ * routed to the real page as a review pointer instead of a fake approval.
  */
 export type ProposedActionType =
   | 'UPDATE_PRICE'
@@ -42,14 +45,22 @@ export type ProposedActionType =
   | 'ADJUST_INVENTORY_THRESHOLD'
   | 'REVIEW_ADVERTISING'
   | 'REQUEST_APPROVAL'
+  | 'REVIEW_CAMPAIGN'
+  | 'PAUSE_CAMPAIGN'
+  | 'INCREASE_BUDGET'
+  | 'DECREASE_BUDGET'
 
 export const PROPOSED_ACTION_TYPES: readonly ProposedActionType[] = [
   'UPDATE_PRICE', 'CREATE_LISTING', 'PAUSE_LISTING', 'REVIEW_SUPPLIER',
   'REVIEW_PRODUCT', 'ADJUST_INVENTORY_THRESHOLD', 'REVIEW_ADVERTISING', 'REQUEST_APPROVAL',
+  'REVIEW_CAMPAIGN', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET',
 ]
 
-/** The only two types this milestone can actually route into the real approval system. See the module comment above for why the rest cannot yet. */
-export const EXECUTABLE_ACTION_TYPES: readonly ProposedActionType[] = ['UPDATE_PRICE', 'REQUEST_APPROVAL']
+/** The only types this milestone can actually route into the real approval system. See the module comment above for why the rest cannot yet. */
+export const EXECUTABLE_ACTION_TYPES: readonly ProposedActionType[] = ['UPDATE_PRICE', 'REQUEST_APPROVAL', 'REVIEW_CAMPAIGN']
+
+/** Which vocabulary members target a product (matched against `FactBundle.products`) vs an advertising campaign (matched against `FactBundle.advertisingCampaigns`) — `intentExtraction.ts` uses this to decide which real entity list to match a user's message against. */
+export const CAMPAIGN_ACTION_TYPES: readonly ProposedActionType[] = ['REVIEW_CAMPAIGN', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET']
 
 export type FactCategory = 'fact' | 'calculated' | 'ai_interpretation' | 'recommendation' | 'assumption'
 
@@ -72,7 +83,7 @@ export interface Recommendation {
   title: string
   explanation: string
   supportingFacts: readonly LabelledFact[]
-  targetEntityType: 'product' | 'supplier' | 'channel' | null
+  targetEntityType: 'product' | 'supplier' | 'channel' | 'advertising_campaign' | null
   targetEntityId: string | null
   targetLabel: string | null
   channel: ChannelKey | null
@@ -90,11 +101,23 @@ export interface Recommendation {
   href: string | null
 }
 
-/** The user's own message, deterministically parsed — never the model's. Nothing here is trusted; `validate.ts` re-resolves every field against real data. */
+/**
+ * The user's own message, deterministically parsed — never the model's.
+ * Nothing here is trusted; `validate.ts` re-resolves every field against
+ * real data. Exactly one of the two entity-match pairs is ever populated,
+ * decided by whether `actionType` is in `CAMPAIGN_ACTION_TYPES` — a
+ * product-vocabulary action always matches against
+ * `FactBundle.products`, a campaign-vocabulary action always matches
+ * against `FactBundle.advertisingCampaigns`; the two entity spaces are
+ * never conflated.
+ */
 export interface RawActionIntent {
   actionType: ProposedActionType
-  matchedProductId: string
-  matchedProductTitle: string
+  matchedProductId: string | null
+  matchedProductTitle: string | null
+  /** Milestone 14 — the real, matched campaign's `campaignKey` (`channel:externalId`), never a guess. */
+  matchedCampaignKey: string | null
+  matchedCampaignName: string | null
   channel: ChannelKey | null
   /** A percentage explicitly stated in the user's own message (e.g. "by 10%"), or null. */
   requestedPricePct: number | null
@@ -116,7 +139,7 @@ export type ProposalOutcome = 'blocked' | 'requires_approval' | 'not_executable'
 export interface ProposedAction {
   id: string
   actionType: ProposedActionType
-  targetEntityType: 'product' | 'supplier' | 'channel'
+  targetEntityType: 'product' | 'supplier' | 'channel' | 'advertising_campaign'
   targetEntityId: string
   targetLabel: string
   channel: ChannelKey | null

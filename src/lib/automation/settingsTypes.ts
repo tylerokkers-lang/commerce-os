@@ -22,6 +22,16 @@ export interface AutomationSettings {
   maxDailyAutoSupplierSpendMinor: number
   maxAutoSupplierSwitchCostIncreasePct: number
   minNetMarginPct: number
+  /**
+   * Milestone 14 — `business_settings.max_daily_ad_spend_minor`/`min_roas`
+   * have existed since Milestone 1 (the Settings page already edits them,
+   * `products/settings.ts`'s `businessSettingsSchema` already validates
+   * them) but were never read by any analysis code until now — wired in
+   * here rather than a second settings read, matching how every other
+   * threshold in this file is already read once, in one place.
+   */
+  maxDailyAdSpendMinor: number
+  minRoas: number
 }
 
 /**
@@ -44,6 +54,8 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   maxDailyAutoSupplierSpendMinor: 100000,
   maxAutoSupplierSwitchCostIncreasePct: 10,
   minNetMarginPct: 10,
+  maxDailyAdSpendMinor: 5000, // Matches business_settings' own column default (£50).
+  minRoas: 3,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

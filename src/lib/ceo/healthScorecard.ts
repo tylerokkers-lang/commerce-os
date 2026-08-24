@@ -1,4 +1,4 @@
-import type { AnalyticsDashboard } from '@/lib/analytics/repository'
+import type { AnalyticsDashboard, AdvertisingIntelligence } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
 import type { ComplianceIssue } from '@/lib/core/domain'
@@ -23,6 +23,8 @@ export interface BuildScorecardInput {
   automation: AutomationStatus
   /** Optional so every pre-existing call site (tests, demo scenarios not focused on compliance) keeps working unchanged — defaults to no known issues, never a guess. */
   complianceIssues?: readonly ComplianceIssue[]
+  /** Optional for the same reason — defaults to no campaigns, never a guess (Milestone 14). */
+  advertisingIntelligence?: AdvertisingIntelligence
 }
 
 function financialArea(analytics: AnalyticsDashboard): HealthArea {
@@ -144,6 +146,30 @@ function complianceArea(monitoring: MonitoringStatus, complianceIssues: readonly
   return { key: 'compliance', label: 'Compliance', status: 'healthy', reasons: [], detailHref: '/compliance' }
 }
 
+/**
+ * Milestone 14 — reads `AdvertisingIntelligence.scorecard`, already built
+ * by the real classification engine (`analytics/advertisingAnalytics.ts`'s
+ * `buildAdvertisingScorecard`); this function only maps that scorecard's
+ * own `AdvertisingHealthStatus` onto the CEO scorecard's shared
+ * `HealthStatus` vocabulary — never a second classification of anything.
+ */
+function advertisingArea(advertising: AdvertisingIntelligence | undefined): HealthArea {
+  if (!advertising || advertising.isDemo) return { key: 'advertising', label: 'Advertising', status: 'unknown', reasons: ['Demo mode has no live advertising data.'], detailHref: null }
+  if (advertising.scorecard.totalCampaigns === 0) return { key: 'advertising', label: 'Advertising', status: 'unknown', reasons: ['No advertising campaigns recorded for this period.'], detailHref: null }
+
+  const { byClassification } = advertising.scorecard
+  const reasons: string[] = []
+  if (byClassification.wasted_spend > 0) reasons.push(`${byClassification.wasted_spend} campaign(s) are wasting spend.`)
+  if (byClassification.poor_profitability > 0) reasons.push(`${byClassification.poor_profitability} campaign(s) exceed their break-even advertising cost.`)
+  if (byClassification.high_acos_low_roas > 0) reasons.push(`${byClassification.high_acos_low_roas} campaign(s) are below the configured minimum ROAS.`)
+  if (byClassification.declining_performance > 0) reasons.push(`${byClassification.declining_performance} campaign(s) have declined against the prior period.`)
+
+  const ADVERTISING_STATUS_MAP: Record<string, HealthStatus> = { critical: 'critical', at_risk: 'at_risk', review: 'watch', scale_opportunity: 'healthy', healthy: 'healthy', insufficient_data: 'unknown' }
+  const status = ADVERTISING_STATUS_MAP[advertising.scorecard.overall] ?? 'unknown'
+
+  return { key: 'advertising', label: 'Advertising', status, reasons, detailHref: '/advertising' }
+}
+
 function automationArea(automation: AutomationStatus): HealthArea {
   if (automation.isDemo) return { key: 'automation', label: 'Automation', status: 'unknown', reasons: ['Demo mode has no live job queue.'], detailHref: null }
   if (automation.settings.automationPaused) {
@@ -188,6 +214,7 @@ export function buildBusinessHealthScorecard(input: BuildScorecardInput): Busine
     marketplaceArea(input.monitoring),
     fulfilmentArea(input.analytics),
     complianceArea(input.monitoring, input.complianceIssues ?? []),
+    advertisingArea(input.advertisingIntelligence),
     automationArea(input.automation),
     dataQualityArea(input.analytics),
   ]

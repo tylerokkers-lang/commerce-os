@@ -34,6 +34,7 @@ const PRIORITY_TONE: Record<Priority['severity'], Tone> = { critical: 'negative'
 const CATEGORY_LABEL: Record<PriorityCategory, string> = {
   financial_risk: 'Financial', compliance_risk: 'Compliance', customer_risk: 'Customer', supplier_failure: 'Supplier',
   automation_failure: 'Automation', pending_approval: 'Approval', data_quality: 'Data quality', opportunity: 'Opportunity',
+  advertising_risk: 'Advertising',
 }
 
 function PriorityRow({ priority }: { priority: Priority }) {

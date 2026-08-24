@@ -111,6 +111,51 @@ function supplierRecommendations(bundle: FactBundle): Recommendation[] {
     }))
 }
 
+/**
+ * Milestone 14 — a non-healthy campaign becomes a `REVIEW_CAMPAIGN`
+ * recommendation: the one campaign-vocabulary type that is actually
+ * `executable` today (see `actions/types.ts`'s module comment) because it
+ * is a pure escalation, never a budget or pause change. `scale_opportunity`
+ * is deliberately excluded here: `bundle.advertisingCampaigns` (unlike the
+ * `CampaignIntelligence` list `ceo/priorities.ts` reads) carries no
+ * `productId`, so this function cannot re-check the compliance-block
+ * override that keeps a compliance-blocked product's campaign from being
+ * recommended for scaling (`ceo/priorities.ts`'s "7. Advertising
+ * intelligence" section already does this correctly for the priorities
+ * list) — recommending a budget increase here without that check would
+ * risk exactly the unrestricted-scaling-recommendation bug that rule
+ * exists to prevent, so no scaling recommendation is generated from this
+ * function at all; `/advertising` and the CEO priorities list remain the
+ * only places a scaling opportunity is ever surfaced.
+ */
+function campaignRecommendations(bundle: FactBundle): Recommendation[] {
+  return bundle.advertisingCampaigns
+    .filter((c) => c.classification !== 'healthy' && c.classification !== 'insufficient_data' && c.classification !== 'scale_opportunity')
+    .slice(0, 5)
+    .map((c) => ({
+      id: `rec:campaign:${c.campaignKey}`,
+      type: 'REVIEW_CAMPAIGN' as const,
+      title: `Review campaign ${c.campaignName} on ${CHANNEL_LABELS[c.channel] ?? c.channel}`,
+      explanation: c.reasons[0] ?? `${c.campaignName} was classified ${c.classification.replace(/_/g, ' ')}.`,
+      supportingFacts: [
+        { category: 'fact' as const, label: 'Spend', value: c.spend },
+        { category: 'fact' as const, label: 'Attributed revenue', value: c.attributedRevenue },
+        { category: 'calculated' as const, label: 'ROAS', value: c.roas },
+      ],
+      targetEntityType: 'advertising_campaign' as const, targetEntityId: c.campaignKey, targetLabel: c.campaignName, channel: c.channel as ChannelKey,
+      expectedBenefit: 'Raises this campaign for your review — no spend, budget or pause state changes on its own.',
+      risk: 'This only escalates the item; a real budget or pause change would need a live advertising platform connector, which this codebase does not have yet.',
+      confidence: 'high' as const,
+      complianceStatus: 'unknown' as const,
+      currencyContext: null,
+      assumptions: [],
+      requiresApproval: true,
+      executable: true,
+      suggestedNextStep: `Ask "review campaign ${c.campaignName}" to raise this for your review.`,
+      href: '/advertising',
+    }))
+}
+
 export function buildRecommendations(bundle: FactBundle): readonly Recommendation[] {
-  return [...priceRecommendations(bundle), ...complianceRecommendations(bundle), ...supplierRecommendations(bundle)]
+  return [...priceRecommendations(bundle), ...complianceRecommendations(bundle), ...supplierRecommendations(bundle), ...campaignRecommendations(bundle)]
 }

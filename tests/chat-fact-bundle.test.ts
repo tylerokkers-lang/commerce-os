@@ -5,10 +5,10 @@ import { buildBusinessHealthScorecard } from '@/lib/ceo/healthScorecard'
 import { resolvePeriod } from '@/lib/orders/salesAggregation'
 import { emptySalesAnalytics, unavailableSalesAnalytics } from '@/lib/analytics/salesAnalytics'
 import { buildFulfilmentAnalytics } from '@/lib/analytics/fulfilmentAnalytics'
-import { unavailableAdvertisingAnalytics } from '@/lib/analytics/advertisingAnalytics'
+import { unavailableAdvertisingAnalytics, buildAdvertisingScorecard } from '@/lib/analytics/advertisingAnalytics'
 import { unknownDataQualitySummary } from '@/lib/analytics/dataQuality'
 import { buildChannelProfitRollup, type ChannelAnalytics } from '@/lib/analytics/channelAnalytics'
-import type { AnalyticsDashboard } from '@/lib/analytics/repository'
+import type { AnalyticsDashboard, AdvertisingIntelligence } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
 import type { ApprovalItem, ComplianceIssue, OpportunitySummary, SupplierListItem } from '@/lib/core/domain'
@@ -84,6 +84,7 @@ function baseCEO(input: {
   automation?: Partial<AutomationStatus>
   approvals?: readonly ApprovalItem[]
   complianceIssues?: readonly ComplianceIssue[]
+  advertisingIntelligence?: AdvertisingIntelligence
   dataSourceFailures?: readonly string[]
 } = {}): CEOCommandCentre {
   const analytics = baseAnalytics(input.analytics)
@@ -91,6 +92,10 @@ function baseCEO(input: {
   const automation = baseAutomation(input.automation)
   const approvals = input.approvals ?? []
   const complianceIssues = input.complianceIssues ?? []
+  const advertisingIntelligence = input.advertisingIntelligence ?? {
+    isDemo: false, period: resolvePeriod('last_30_days', new Date(NOW)),
+    campaigns: [], scorecard: buildAdvertisingScorecard([], null, 'GBP'), demoScenarios: [],
+  }
 
   return {
     isDemo: analytics.isDemo,
@@ -102,8 +107,8 @@ function baseCEO(input: {
       refundRatePct: analytics.sales.refundRatePct, returnRatePct: analytics.sales.returnRatePct,
       knownNetMarginPct: null, profitDataComplete: false,
     },
-    priorities: buildPriorities({ analytics, monitoring, automation, approvals, complianceIssues, now: NOW }),
-    businessHealth: buildBusinessHealthScorecard({ analytics, monitoring, automation, complianceIssues }),
+    priorities: buildPriorities({ analytics, monitoring, automation, approvals, complianceIssues, advertisingIntelligence, now: NOW }),
+    businessHealth: buildBusinessHealthScorecard({ analytics, monitoring, automation, complianceIssues, advertisingIntelligence }),
     financialPerformance: analytics,
     supplierHealth: analytics.supplierHealth,
     fulfilmentHealth: analytics.fulfilment,
@@ -111,6 +116,7 @@ function baseCEO(input: {
     automationHealth: automation,
     approvals,
     complianceIssues,
+    advertisingIntelligence,
     dataQuality: analytics.dataQuality,
     recentActivity: [],
     demoScenarios: [],

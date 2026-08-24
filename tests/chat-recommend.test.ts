@@ -9,7 +9,7 @@ function emptyBundle(overrides: Partial<FactBundle> = {}): FactBundle {
     generatedAt: NOW, isDemo: false, orgName: 'Test Co', dataSourceFailures: [], currencyCautions: [],
     overallHealth: 'healthy', healthAreas: [], executiveSummary: [],
     priorities: [], complianceIssues: [], channels: [], topOpportunities: [], opportunitySummary: null,
-    supplierRisk: [], pendingApprovals: [], products: [],
+    supplierRisk: [], pendingApprovals: [], products: [], advertisingCampaigns: [], advertisingScorecard: null,
     ...overrides,
   }
 }
@@ -98,6 +98,43 @@ describe('buildRecommendations: supplier risk', () => {
       supplierRisk: [{ id: 's1', name: 'Good Supplier', score: 90, shopifyStatus: 'approved', amazonStatus: 'approved', statusReason: null, onTimeRatePct: 98 }],
     })
     expect(buildRecommendations(bundle).some((r) => r.type === 'REVIEW_SUPPLIER')).toBe(false)
+  })
+})
+
+describe('buildRecommendations: advertising campaigns (Milestone 14)', () => {
+  function campaign(overrides: Partial<FactBundle['advertisingCampaigns'][number]> = {}): FactBundle['advertisingCampaigns'][number] {
+    return {
+      campaignKey: 'amazon_uk:camp-1', campaignName: 'Wasteful Campaign', channel: 'amazon_uk', isPaused: false,
+      spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — no revenue', acosPct: 'unavailable — no revenue',
+      classification: 'wasted_spend', severity: 'critical', reasons: ['Spent with zero conversions.'],
+      ...overrides,
+    }
+  }
+
+  it('a non-healthy campaign becomes an executable REVIEW_CAMPAIGN recommendation', () => {
+    const bundle = emptyBundle({ advertisingCampaigns: [campaign()] })
+    const recs = buildRecommendations(bundle).filter((r) => r.type === 'REVIEW_CAMPAIGN')
+    expect(recs).toHaveLength(1)
+    expect(recs[0].targetEntityType).toBe('advertising_campaign')
+    expect(recs[0].targetEntityId).toBe('amazon_uk:camp-1')
+    expect(recs[0].requiresApproval).toBe(true)
+    expect(recs[0].executable).toBe(true)
+    expect(recs[0].href).toBe('/advertising')
+  })
+
+  it('a healthy campaign is never recommended', () => {
+    const bundle = emptyBundle({ advertisingCampaigns: [campaign({ classification: 'healthy', severity: 'info', reasons: [] })] })
+    expect(buildRecommendations(bundle).some((r) => r.type === 'REVIEW_CAMPAIGN')).toBe(false)
+  })
+
+  it('insufficient_data is never recommended — an honest "not enough data" result is not actionable', () => {
+    const bundle = emptyBundle({ advertisingCampaigns: [campaign({ classification: 'insufficient_data', severity: 'info', reasons: ['Too few impressions.'] })] })
+    expect(buildRecommendations(bundle).some((r) => r.type === 'REVIEW_CAMPAIGN')).toBe(false)
+  })
+
+  it('scale_opportunity is deliberately never recommended here — the compliance-block override this needs lives in ceo/priorities.ts, which carries productId; this bundle shape does not', () => {
+    const bundle = emptyBundle({ advertisingCampaigns: [campaign({ classification: 'scale_opportunity', severity: 'opportunity', reasons: ['ROAS well above minimum.'] })] })
+    expect(buildRecommendations(bundle).some((r) => r.type === 'REVIEW_CAMPAIGN')).toBe(false)
   })
 })
 

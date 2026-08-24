@@ -1,7 +1,9 @@
-import type { AnalyticsDashboard } from '@/lib/analytics/repository'
+import type { AnalyticsDashboard, AdvertisingIntelligence } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
 import type { ApprovalItem, ComplianceIssue } from '@/lib/core/domain'
+import { formatMoney } from '@/lib/core/money'
+import { isKnown } from '@/lib/analytics/types'
 import type { Priority, PrioritySeverity } from './types'
 
 /**
@@ -38,6 +40,8 @@ export interface BuildPrioritiesInput {
   approvals: readonly ApprovalItem[]
   /** Optional so every pre-existing call site (tests, demo scenarios not focused on compliance) keeps working unchanged — defaults to no known issues, never a guess. */
   complianceIssues?: readonly ComplianceIssue[]
+  /** Optional for the same reason — defaults to no campaigns, never a guess (Milestone 14). */
+  advertisingIntelligence?: AdvertisingIntelligence
   now: string
 }
 
@@ -251,6 +255,99 @@ export function buildPriorities(input: BuildPrioritiesInput): readonly Priority[
       recommendedNextStep: 'Review delivery performance on /orders.',
       actionRequired: true, actionHref: '/orders',
     })
+  }
+
+  // 7. Advertising intelligence (Milestone 14) — real per-campaign
+  // classifications from `analytics/advertisingAnalytics.ts`'s
+  // `classifyCampaign`, never re-derived here. A `scale_opportunity` is
+  // never surfaced as an unrestricted recommendation for a product that is
+  // currently compliance-BLOCKED on the same channel (`docs/PRINCIPLES.md`
+  // §3/Milestone 11's compliance-visibility rule extended to advertising)
+  // — the block is never bypassed, and the conflict is stated explicitly
+  // rather than silently dropping the campaign from view.
+  const CHANNEL_LABELS_AD: Record<string, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK' }
+  for (const { fact: campaignFact, classification } of input.advertisingIntelligence?.campaigns ?? []) {
+    const { identity } = campaignFact
+    const channelLabel = CHANNEL_LABELS_AD[identity.channel] ?? identity.channel
+    const blockedForCompliance = identity.productId
+      ? complianceIssues.some((c) => c.productId === identity.productId && c.channel === identity.channel && c.verdict === 'fail')
+      : false
+
+    if (classification.classification === 'wasted_spend') {
+      priorities.push({
+        id: `advertising:wasted_spend:${identity.campaignKey}`,
+        severity: 'critical', category: 'advertising_risk',
+        title: `${identity.campaignName} on ${channelLabel} is wasting advertising spend.`,
+        detail: classification.reasons.join(' '),
+        affectedEntityType: 'advertising_campaign', affectedEntityId: identity.campaignKey,
+        occurredAt: input.now, source: 'analytics/advertisingAnalytics.ts: classifyCampaign',
+        evidence: { campaignKey: identity.campaignKey, channel: identity.channel, spend: isKnown(campaignFact.spend) ? formatMoney(campaignFact.spend.value) : null },
+        recommendedNextStep: 'Review or pause this campaign on /advertising.',
+        actionRequired: true, actionHref: '/advertising',
+      })
+    } else if (classification.classification === 'poor_profitability') {
+      priorities.push({
+        id: `advertising:poor_profitability:${identity.campaignKey}`,
+        severity: 'high', category: 'advertising_risk',
+        title: `${identity.campaignName} on ${channelLabel} is spending above its break-even advertising cost.`,
+        detail: classification.reasons.join(' '),
+        affectedEntityType: 'advertising_campaign', affectedEntityId: identity.campaignKey,
+        occurredAt: input.now, source: 'analytics/advertisingAnalytics.ts: classifyCampaign',
+        evidence: { campaignKey: identity.campaignKey, channel: identity.channel },
+        recommendedNextStep: 'Review this campaign\'s bids/targeting or the product\'s own cost and price on /advertising.',
+        actionRequired: true, actionHref: '/advertising',
+      })
+    } else if (classification.classification === 'high_acos_low_roas') {
+      priorities.push({
+        id: `advertising:high_acos_low_roas:${identity.campaignKey}`,
+        severity: 'high', category: 'advertising_risk',
+        title: `${identity.campaignName} on ${channelLabel} is below the configured minimum ROAS.`,
+        detail: classification.reasons.join(' '),
+        affectedEntityType: 'advertising_campaign', affectedEntityId: identity.campaignKey,
+        occurredAt: input.now, source: 'analytics/advertisingAnalytics.ts: classifyCampaign',
+        evidence: { campaignKey: identity.campaignKey, channel: identity.channel },
+        recommendedNextStep: 'Review this campaign\'s targeting/bids on /advertising.',
+        actionRequired: true, actionHref: '/advertising',
+      })
+    } else if (classification.classification === 'declining_performance') {
+      priorities.push({
+        id: `advertising:declining:${identity.campaignKey}`,
+        severity: 'medium', category: 'advertising_risk',
+        title: `${identity.campaignName} on ${channelLabel} has declined against the prior period.`,
+        detail: classification.reasons.join(' '),
+        affectedEntityType: 'advertising_campaign', affectedEntityId: identity.campaignKey,
+        occurredAt: input.now, source: 'analytics/advertisingAnalytics.ts: classifyCampaign',
+        evidence: { campaignKey: identity.campaignKey, channel: identity.channel },
+        recommendedNextStep: 'Review recent performance on /advertising.',
+        actionRequired: true, actionHref: '/advertising',
+      })
+    } else if (classification.classification === 'scale_opportunity') {
+      if (blockedForCompliance) {
+        priorities.push({
+          id: `advertising:scale_blocked:${identity.campaignKey}`,
+          severity: 'high', category: 'advertising_risk',
+          title: `${identity.campaignName} on ${channelLabel} looks like a scaling opportunity, but the product is compliance-blocked.`,
+          detail: 'This campaign would otherwise qualify for a scaling recommendation, but the advertised product is currently BLOCKED by compliance on this channel — the block is never bypassed, so scaling is not recommended until it is resolved.',
+          affectedEntityType: 'advertising_campaign', affectedEntityId: identity.campaignKey,
+          occurredAt: input.now, source: 'analytics/advertisingAnalytics.ts: classifyCampaign + compliance/repository.ts: getComplianceIssues',
+          evidence: { campaignKey: identity.campaignKey, channel: identity.channel, productId: identity.productId },
+          recommendedNextStep: 'Resolve the compliance block on /compliance before considering a budget increase.',
+          actionRequired: true, actionHref: '/compliance',
+        })
+      } else {
+        priorities.push({
+          id: `advertising:scale:${identity.campaignKey}`,
+          severity: 'low', category: 'opportunity',
+          title: `${identity.campaignName} on ${channelLabel} may be a profitable scaling opportunity.`,
+          detail: classification.reasons.join(' '),
+          affectedEntityType: 'advertising_campaign', affectedEntityId: identity.campaignKey,
+          occurredAt: input.now, source: 'analytics/advertisingAnalytics.ts: classifyCampaign',
+          evidence: { campaignKey: identity.campaignKey, channel: identity.channel },
+          recommendedNextStep: 'Review on /advertising — a budget increase is never applied automatically.',
+          actionRequired: false, actionHref: '/advertising',
+        })
+      }
+    }
   }
 
   return sortPriorities(priorities)

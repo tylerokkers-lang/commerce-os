@@ -274,10 +274,12 @@ supplierAnalytics.ts    HEALTHY/WATCH/AT_RISK/UNAVAILABLE/UNKNOWN from
 fulfilmentAnalytics.ts  dispatch time, on-time delivery, cancellation
                         rate, missing tracking — a shipped-but-
                         unconfirmed delivery is unknown, never assumed
-advertisingAnalytics.ts the interface a future ad-platform connector
-                        will satisfy; every figure is unavailable today
-                        because no connector exists — never a
-                        fabricated £0 spend
+advertisingAnalytics.ts (Milestone 14) the deterministic advertising
+                        classification engine — see the dedicated
+                        paragraph below the code block; still no ad-
+                        platform connector exists, so every figure is
+                        genuinely unavailable until real spend/revenue
+                        rows exist in the advertising table
 dataQuality.ts,
 businessHealth.ts       roll every other module's unknown/stale/
                         unavailable counts into a CEO-legible issue
@@ -315,6 +317,35 @@ that had been reserved in `EVENT_TO_JOB_MAPPING` since Milestone 8 but
 never actually emitted. A frozen reference margin is kept while a product
 is in a dropped state, so a margin that merely stops falling is never
 misreported as recovered.
+
+**Milestone 14 extends `advertisingAnalytics.ts`** from an empty interface
+into a real, deterministic engine over the `advertising` table (created in
+Milestone 1, never written to until now): `buildCampaignFact` (per-campaign
+`Metric<T>` figures — spend, revenue, ROAS, ACOS, CTR, CPC, conversion
+rate), `resolveCampaignProfitability` (ties a campaign to the one real
+profitability engine's `breakEvenAdSpend`, never a second calculation),
+`classifyCampaign` (the seven-way classification —
+`wasted_spend`/`poor_profitability`/`high_acos_low_roas`/
+`scale_opportunity`/`declining_performance`/`healthy`/`insufficient_data`,
+each gated by a named threshold or a minimum-sample-size check, never an
+LLM call), and `buildAdvertisingScorecard` (org-wide roll-up, worst
+campaign wins, the same rule `healthScorecard.ts` already established).
+`liveAdvertisingFacts.ts` (server-only) is the one org-scoped Supabase
+reader, following the same `paginate.ts` pattern as every other Milestone
+10 live loader. `analytics/repository.ts`'s `getAdvertisingIntelligence()`
+composes the two — genuinely empty in demo mode (never injecting fixture
+data into the live path), with `demo/advertising.ts`'s seven narrative
+scenarios computed through the real functions above against fixed fixture
+data instead. Wired into `ceo/repository.ts`'s existing `Promise.allSettled`
+(a seventh source, `advertisingIntelligence`, with its own
+`dataSourceFailures` entry), `ceo/priorities.ts` (a seventh priority
+section, including the compliance-block override that prevents a
+non-compliant product's campaign from ever appearing as an unrestricted
+scaling recommendation), and `ceo/healthScorecard.ts` (a ninth health
+area). `src/app/(dashboard)/advertising/page.tsx` presents this — scorecard,
+priorities, per-campaign detail, demo scenarios — and deliberately has no
+pause/budget-change control anywhere on it (see `docs/SECURITY.md`'s
+Milestone 14 section for why).
 
 ### `src/lib/ceo/` (Milestone 11)
 
@@ -361,21 +392,25 @@ plus a comparison badge when known, an honest UNKNOWN/STALE/UNAVAILABLE
 badge plus its source when not — shared by `/automation` and `/` so
 neither can drift from the other's rendering rules.
 
-### `src/lib/ai/` (Milestone 12; extended Milestone 13)
+### `src/lib/ai/` (Milestone 12; extended Milestone 13, 14)
 
 The Commerce Intelligence chat — an interface over the existing
 intelligence layer, never a second one:
 `Operational systems -> Authoritative engines -> Analytics & BI (M10) ->
-CEO Command Centre (M11) -> Commerce Intelligence chat (M12/13) -> CEO`.
+CEO Command Centre (M11) -> Commerce Intelligence chat (M12/13/14) -> CEO`.
 Every fact the chat can see is read straight off `getCEOCommandCentre()`
 (Milestone 11) plus the adjacent repositories the CEO dashboard page
 already calls directly (`getOpportunities`/`getIntelligenceSummary`,
 `getSuppliers`, and — new in Milestone 13 — `getProducts` for catalogue
 titles/SKUs) — nothing here recomputes a priority, a health status, a
-compliance verdict, or a profit figure. Milestone 12 (Phase 1, Analyse)
+compliance verdict, or a profit figure. `ceo.advertisingIntelligence`
+(Milestone 14) is already composed into `CEOCommandCentre` — the chat
+never issues a second advertising query. Milestone 12 (Phase 1, Analyse)
 is strictly read-only. Milestone 13 adds Phase 2 (Recommend) and Phase 3
 (Propose), both still read-only in themselves — see `ai/actions/` below
 for the one narrow path that can create real (pending-approval) state.
+Milestone 14 extends both phases to advertising campaigns without adding
+a second pipeline.
 
 ```
 types.ts              ChatMessage, FactBundle, ChatAnswer, ChatReference,
@@ -430,26 +465,38 @@ repository.ts          server-only; askCommerceIntelligence() composes
                        answered content
 ```
 
-`src/lib/ai/actions/` (Milestone 13 — Analyse, Recommend, Propose):
+`src/lib/ai/actions/` (Milestone 13 — Analyse, Recommend, Propose; extended Milestone 14 for campaigns):
 
 ```
-types.ts               The finite ProposedActionType vocabulary (8
-                       members) and the Recommendation/ProposedAction
-                       shapes. Module comment explains the central design
-                       choice: the model is never asked to emit
-                       structured JSON for a proposal at all — there is
-                       nothing for guardrails to parse-and-distrust,
-                       because nothing AI-authored is ever parsed in the
-                       first place. A proposal's every field is either a
-                       fixed vocabulary member or resolved fresh against
-                       real data
+types.ts               The finite ProposedActionType vocabulary (12
+                       members as of Milestone 14 — 8 product-targeting
+                       plus 4 campaign-targeting: REVIEW_CAMPAIGN/
+                       PAUSE_CAMPAIGN/INCREASE_BUDGET/DECREASE_BUDGET,
+                       see CAMPAIGN_ACTION_TYPES) and the
+                       Recommendation/ProposedAction shapes. Module
+                       comment explains the central design choice: the
+                       model is never asked to emit structured JSON for a
+                       proposal at all — there is nothing for guardrails
+                       to parse-and-distrust, because nothing AI-authored
+                       is ever parsed in the first place. A proposal's
+                       every field is either a fixed vocabulary member or
+                       resolved fresh against real data. RawActionIntent
+                       is polymorphic — exactly one of a
+                       product-match-pair or a campaign-match-pair is
+                       ever populated, decided by whether actionType is
+                       in CAMPAIGN_ACTION_TYPES
 intentExtraction.ts     Pure. Reads only the user's own latest message —
                        never a model reply — and matches it against the
-                       FactBundle's real, already-known products only.
+                       FactBundle's real, already-known products or (new
+                       in Milestone 14) advertising campaigns only.
                        Ambiguous or unmatched input produces null, never
                        a guess; this is the entire technical answer to
                        "the AI proposal is untrusted input" for the
-                       identification step
+                       identification step. Campaign-specific keyword
+                       patterns (budget/pause/review-campaign) are
+                       checked before their generic product-vocabulary
+                       counterparts so "pause this campaign" never
+                       resolves to the unrelated PAUSE_LISTING
 recommend.ts            Pure. buildRecommendations: the same kind of
                        deterministic rule set ceo/priorities.ts's
                        buildPriorities already is, applied to "what's
@@ -458,7 +505,13 @@ recommend.ts            Pure. buildRecommendations: the same kind of
                        fail/review_required -> a REVIEW_PRODUCT
                        recommendation pointing at /compliance, never
                        marked executable; low-scoring/blocked suppliers
-                       -> REVIEW_SUPPLIER
+                       -> REVIEW_SUPPLIER; (Milestone 14) a non-healthy
+                       campaign -> a REVIEW_CAMPAIGN recommendation —
+                       scale_opportunity is deliberately excluded here,
+                       because the FactBundle's campaign shape carries no
+                       productId to re-check the compliance-block
+                       override that ceo/priorities.ts applies with the
+                       full CampaignIntelligence list
 validate.ts             server-only. Re-resolves every number
                        (current price, cost, margin) fresh from
                        analytics/liveAnalyticsFacts.ts and re-runs it
@@ -475,22 +528,24 @@ validate.ts             server-only. Re-resolves every number
                        structurally guarantees an AI-chat-originated
                        price change can never auto-apply, regardless of
                        the org's real configured automation level. Only
-                       UPDATE_PRICE and REQUEST_APPROVAL currently have a
-                       real path to `outcome: 'requires_approval'`; the
-                       other six vocabulary members are always
-                       'not_executable' — see the module comment for
-                       exactly why each one is not yet wired to a real
-                       domain engine
+                       UPDATE_PRICE, REQUEST_APPROVAL and (Milestone 14)
+                       REVIEW_CAMPAIGN currently have a real path to
+                       `outcome: 'requires_approval'` (the latter two are
+                       pure escalations, handled by one shared
+                       validateEscalation); the other nine vocabulary
+                       members are always 'not_executable' — see the
+                       module comment for exactly why each one is not yet
+                       wired to a real domain engine
 propose.ts              server-only. proposeAction: the one function that
                        can create real state — re-derives the proposal
                        from scratch (fresh getCEOCommandCentre/
                        getProducts, not trusted from the client) and, only
                        when validation lands on requires_approval, calls
                        the pre-existing automation/proposeApproval.ts
-                       (Milestone 6) — never a second approval mechanism.
-                       The owner approves/rejects on the existing
-                       /approvals page exactly as any other automation
-                       decision
+                       (Milestone 6) — never a second approval mechanism,
+                       for either a product or a campaign target. The
+                       owner approves/rejects on the existing /approvals
+                       page exactly as any other automation decision
 ```
 
 `src/app/api/chat/route.ts` is the one HTTP entry point, session-gated

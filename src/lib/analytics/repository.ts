@@ -99,6 +99,11 @@ import { classifyProduct, isLossMakingOnAllKnownChannels, DEFAULT_PRODUCT_CLASSI
 import { classifySupplierHealth, type SupplierHealth } from './supplierAnalytics'
 import { buildFulfilmentAnalytics, type FulfilmentAnalytics } from './fulfilmentAnalytics'
 import { unavailableAdvertisingAnalytics, type AdvertisingAnalytics } from './advertisingAnalytics'
+import {
+  buildAdvertisingScorecard, buildCampaignFact, classifyCampaign, groupCampaignRows, latestCampaignIdentity,
+  resolveCampaignProfitability, sumCampaignRows, type AdvertisingCampaignFact, type AdvertisingScorecard, type CampaignClassificationResult,
+} from './advertisingAnalytics'
+import { demoAdvertisingScenarios, type AdvertisingDemoScenario } from '@/lib/demo/advertising'
 import { buildDataQualitySummary, unknownDataQualitySummary, type DataQualitySummary } from './dataQuality'
 import { revenueDeclineAlert, dataQualityAlerts, supplierHealthAlerts, type BusinessAlert } from './businessHealth'
 import { demoAnalyticsScenarios, type AnalyticsDemoScenario } from '@/lib/demo/analytics'
@@ -264,6 +269,115 @@ export async function getAnalyticsDashboard(periodKey: PeriodKey = 'last_30_days
     automationHealthKnown: true,
     demoScenarios: [],
   }
+}
+
+// -----------------------------------------------------------------------------
+// Advertising intelligence (Milestone 14) — a separate entry point from
+// getAnalyticsDashboard(), the same "getCashflow() is its own read" shape
+// this module already uses, rather than growing AnalyticsDashboard's
+// shape (and every test that constructs one) for a feature with genuinely
+// different consumers (the new /advertising page, the CEO dashboard, the
+// chat) and its own per-campaign detail no single Metric<T> field could
+// carry. `AnalyticsDashboard.advertising` itself is deliberately left
+// exactly as Milestone 10 built it (always `unavailableAdvertisingAnalytics()`
+// in live mode) — not touched by this milestone, so nothing about
+// Milestone 10/11's tested dashboard aggregate changes; the real
+// intelligence lives here instead.
+// -----------------------------------------------------------------------------
+
+export interface CampaignIntelligence {
+  fact: AdvertisingCampaignFact
+  classification: CampaignClassificationResult
+}
+
+export interface AdvertisingIntelligence {
+  isDemo: boolean
+  period: Period
+  campaigns: readonly CampaignIntelligence[]
+  scorecard: AdvertisingScorecard
+  demoScenarios: readonly AdvertisingDemoScenario[]
+}
+
+async function liveAdFacts() {
+  return import('./liveAdvertisingFacts')
+}
+
+function rowsInWindow<T extends { periodDate: string }>(rows: readonly T[], start: string, end: string): T[] {
+  const startDate = start.slice(0, 10)
+  const endDate = end.slice(0, 10)
+  return rows.filter((r) => r.periodDate >= startDate && r.periodDate <= endDate)
+}
+
+export async function getAdvertisingIntelligence(periodKey: PeriodKey = 'last_30_days'): Promise<AdvertisingIntelligence> {
+  const session = await requireSession()
+  const period = resolvePeriod(periodKey, new Date())
+  const previousPeriod = previousEquivalentPeriod(period)
+
+  if (session.isDemo) {
+    // Demo mode has no database — `campaigns`/`scorecard` are genuinely
+    // empty (the same "empty is a fact, not a fallback" rule
+    // `getAnalyticsDashboard()`'s own demo branch already follows), and
+    // `demoScenarios` illustrates the real classification engine working
+    // against fixed, self-contained fixture data instead — the same
+    // "narrative scenarios, computed through the real builder functions,
+    // never a hardcoded string" pattern `demo/analytics.ts`/`demo/ceo.ts`
+    // already established.
+    return { isDemo: true, period, campaigns: [], scorecard: buildAdvertisingScorecard([], null, 'GBP'), demoScenarios: demoAdvertisingScenarios() }
+  }
+
+  const settings = await getAutomationSettings(session)
+  const { loadAdvertisingFacts } = await liveAdFacts()
+  const { loadProductChannelProfitFacts, toPriceCostInput, loadOrgSalesFacts } = await liveFacts()
+
+  const [adFacts, profitFacts, salesFacts] = await Promise.all([
+    loadAdvertisingFacts(session.orgId, period, previousPeriod),
+    loadProductChannelProfitFacts(session.orgId),
+    loadOrgSalesFacts(session.orgId, period, previousPeriod),
+  ])
+
+  const profitByProductChannel = new Map(
+    profitFacts.rows.map((r) => [`${r.productId}:${r.channel}`, buildProductChannelProfitAnalytics(r.productId, r.channel, toPriceCostInput(r, settings.minNetMarginPct))]),
+  )
+
+  const campaigns = buildCampaignIntelligence(adFacts.rows, profitByProductChannel, settings, period, previousPeriod, adFacts.currency)
+
+  // TACOS needs the org's total sales revenue for the same window — never used if sales itself is currency-unsafe (Milestone 11 §5/§8's rule extended here).
+  const orgRevenueMinor = salesFacts.mixedCurrencies.length === 0 && salesFacts.currency === adFacts.currency ? salesFacts.current.grossRevenueMinor : null
+  const scorecard = buildAdvertisingScorecard(campaigns, orgRevenueMinor, adFacts.currency)
+
+  return { isDemo: false, period, campaigns, scorecard, demoScenarios: [] }
+}
+
+function buildCampaignIntelligence(
+  rows: Parameters<typeof groupCampaignRows>[0],
+  profitByProductChannel: Map<string, ProductChannelProfitAnalytics> | null,
+  settings: Awaited<ReturnType<typeof getAutomationSettings>>,
+  period: Period,
+  previousPeriod: Period,
+  currency: AdvertisingCampaignFact['currency'],
+): readonly CampaignIntelligence[] {
+  const groups = groupCampaignRows(rows)
+  const results: CampaignIntelligence[] = []
+
+  for (const [key, groupRows] of groups) {
+    const identity = latestCampaignIdentity(key, groupRows)
+    const currentRows = rowsInWindow(groupRows, period.start, period.end)
+    const previousRows = rowsInWindow(groupRows, previousPeriod.start, previousPeriod.end)
+    if (currentRows.length === 0) continue // Nothing in the requested window for this campaign — not a real fact for this period.
+
+    let fact = buildCampaignFact(identity, sumCampaignRows(currentRows), currency, period.start, period.end)
+    const previousFact = previousRows.length > 0 ? buildCampaignFact(identity, sumCampaignRows(previousRows), currency, previousPeriod.start, previousPeriod.end) : null
+
+    if (profitByProductChannel && identity.productId) {
+      const channelProfit = profitByProductChannel.get(`${identity.productId}:${identity.channel}`) ?? null
+      fact = { ...fact, profitability: resolveCampaignProfitability(fact, channelProfit) }
+    }
+
+    const classification = classifyCampaign(fact, settings, previousFact)
+    results.push({ fact, classification })
+  }
+
+  return results
 }
 
 export async function getDailyReport(): Promise<DailyReport> {

@@ -1,0 +1,254 @@
+import { describe, expect, it } from 'vitest'
+import { money } from '@/lib/core/money'
+import { isKnown } from '@/lib/analytics/types'
+import {
+  buildAdvertisingScorecard, buildCampaignFact, buildRealAdvertisingAnalytics, classifyCampaign,
+  groupCampaignRows, latestCampaignIdentity, resolveCampaignProfitability, sumCampaignRows,
+  type AdvertisingCampaignFact,
+} from '@/lib/analytics/advertisingAnalytics'
+import type { AdvertisingRow } from '@/lib/analytics/liveAdvertisingFacts'
+import type { ProductChannelProfitAnalytics } from '@/lib/analytics/profitAnalytics'
+import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+
+const WINDOW_START = '2026-07-25T00:00:00.000Z'
+const WINDOW_END = '2026-08-24T00:00:00.000Z'
+
+function row(overrides: Partial<AdvertisingRow> = {}): AdvertisingRow {
+  return {
+    channel: 'amazon_uk', productId: 'p1', campaignName: 'Test Campaign', externalId: 'camp-1',
+    periodDate: '2026-08-01', spendMinor: 0, revenueMinor: 0, clicks: 0, impressions: 0, conversions: 0,
+    dailyBudgetMinor: null, isPaused: false,
+    ...overrides,
+  }
+}
+
+function fact(overrides: Partial<AdvertisingRow>[] = [{}]): AdvertisingCampaignFact {
+  const rows = overrides.map((o) => row(o))
+  const groups = groupCampaignRows(rows)
+  const [key, groupRows] = [...groups.entries()][0]
+  const identity = latestCampaignIdentity(key, groupRows)
+  const totals = sumCampaignRows(groupRows)
+  return buildCampaignFact(identity, totals, 'GBP', WINDOW_START, WINDOW_END)
+}
+
+describe('groupCampaignRows / latestCampaignIdentity: real entities only', () => {
+  it('groups by channel + externalId, never merging two channels sharing an id', () => {
+    const rows = [row({ channel: 'amazon_uk', externalId: 'x' }), row({ channel: 'shopify', externalId: 'x' })]
+    const groups = groupCampaignRows(rows)
+    expect(groups.size).toBe(2)
+  })
+
+  it('excludes a row with no external id — never attributed to a guessed campaign', () => {
+    const rows = [row({ externalId: null })]
+    expect(groupCampaignRows(rows).size).toBe(0)
+  })
+
+  it('takes the most recent row for current state (campaign name, paused, budget)', () => {
+    const rows = [
+      row({ periodDate: '2026-08-01', campaignName: 'Old Name', isPaused: false, dailyBudgetMinor: 1000 }),
+      row({ periodDate: '2026-08-05', campaignName: 'New Name', isPaused: true, dailyBudgetMinor: 2000 }),
+    ]
+    const identity = latestCampaignIdentity('amazon_uk:camp-1', rows)
+    expect(identity.campaignName).toBe('New Name')
+    expect(identity.isPaused).toBe(true)
+    expect(identity.dailyBudgetMinor).toBe(2000)
+  })
+})
+
+describe('buildCampaignFact: unavailable is never zero, ratios never divide by zero', () => {
+  it('zero impressions/clicks/spend/conversions across real rows is a genuine fact, not unavailable', () => {
+    const f = fact([{ spendMinor: 0, impressions: 0, clicks: 0, conversions: 0 }])
+    expect(f.spend.status).toBe('fact')
+    expect(isKnown(f.spend) && f.spend.value.minor).toBe(0)
+  })
+
+  it('CTR is unavailable (not 0% or NaN) when there are no impressions', () => {
+    const f = fact([{ impressions: 0, clicks: 5 }])
+    expect(f.ctrPct.status).toBe('unavailable')
+    expect(f.ctrPct.value).toBeNull()
+  })
+
+  it('ROAS is unavailable when there is no spend', () => {
+    const f = fact([{ spendMinor: 0, revenueMinor: 500 }])
+    expect(f.roas.status).toBe('unavailable')
+  })
+
+  it('ACOS is unavailable when there is no attributed revenue', () => {
+    const f = fact([{ spendMinor: 500, revenueMinor: 0 }])
+    expect(f.acosPct.status).toBe('unavailable')
+  })
+
+  it('a genuinely healthy campaign computes real ratios', () => {
+    const f = fact([{ impressions: 1000, clicks: 50, spendMinor: 5000, revenueMinor: 20000, conversions: 10 }])
+    expect(f.ctrPct.value).toBeCloseTo(5)
+    expect(isKnown(f.roas) && f.roas.value).toBeCloseTo(4)
+    expect(isKnown(f.acosPct) && f.acosPct.value).toBeCloseTo(25)
+  })
+})
+
+describe('resolveCampaignProfitability: reuses the real profitability engine, currency-safe', () => {
+  function channelProfit(netMarginPct: number | null, breakEvenAdSpendMinor: number, currency: 'GBP' | 'USD' = 'GBP'): ProductChannelProfitAnalytics {
+    return {
+      productId: 'p1', channel: 'amazon_uk',
+      sellingPrice: { value: money(2500, currency), status: 'fact', source: 'test' },
+      productCost: { value: money(900, currency), status: 'fact', source: 'test' },
+      projection: {
+        status: 'calculated', source: 'test', value: {
+          channel: 'amazon_uk', label: 'Amazon UK',
+          profile: {} as never,
+          profitability: {
+            currency, netRevenue: money(0, currency), vat: money(0, currency), cogs: money(0, currency),
+            grossProfit: money(0, currency), variableCosts: money(0, currency), contribution: money(0, currency),
+            adSpend: money(0, currency), netProfit: money(0, currency),
+            grossMarginPct: null, contributionMarginPct: null, netMarginPct,
+            breakEvenPrice: money(0, currency), breakEvenAdSpend: money(breakEvenAdSpendMinor, currency), breakEvenAcosPct: null,
+            cashRequiredPerUnit: money(0, currency), breakdown: [],
+          },
+          gate: { passes: true, failures: [], warnings: [] },
+          landedCost: money(0, currency), assumptions: {},
+        },
+      },
+    }
+  }
+
+  it('flags exceedsBreakEven when actual ad spend per conversion is above the real break-even figure', () => {
+    const f = fact([{ spendMinor: 3000, conversions: 1 }]) // £30/conversion
+    const result = resolveCampaignProfitability(f, channelProfit(15, 2000)) // break-even £20/unit
+    expect(result?.exceedsBreakEven).toBe(true)
+  })
+
+  it('does not flag when actual ad spend is within the break-even figure', () => {
+    const f = fact([{ spendMinor: 1000, conversions: 1 }]) // £10/conversion
+    const result = resolveCampaignProfitability(f, channelProfit(15, 2000)) // break-even £20/unit
+    expect(result?.exceedsBreakEven).toBe(false)
+  })
+
+  it('returns null actualAdSpendPerUnit (never a guess) when there are zero conversions', () => {
+    const f = fact([{ spendMinor: 3000, conversions: 0 }])
+    const result = resolveCampaignProfitability(f, channelProfit(15, 2000))
+    expect(result?.actualAdSpendPerUnit).toBeNull()
+    expect(result?.exceedsBreakEven).toBeNull()
+  })
+
+  it('CURRENCY SAFETY: a mismatched currency between campaign spend and product cost is never combined — reported as unresolvable, not guessed', () => {
+    const f = fact([{ spendMinor: 3000, conversions: 1 }]) // campaign assumed GBP
+    const result = resolveCampaignProfitability(f, channelProfit(15, 2000, 'USD')) // product priced in USD
+    expect(result?.actualAdSpendPerUnit).toBeNull()
+    expect(result?.exceedsBreakEven).toBeNull()
+  })
+
+  it('returns null entirely when no channel profitability is known', () => {
+    const f = fact([{ spendMinor: 3000, conversions: 1 }])
+    expect(resolveCampaignProfitability(f, null)).toBeNull()
+  })
+})
+
+describe('classifyCampaign: deterministic rules', () => {
+  it('INSUFFICIENT DATA: too little sample size never yields a confident classification', () => {
+    const f = fact([{ impressions: 5, clicks: 1, spendMinor: 100000 }])
+    const result = classifyCampaign(f, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).toBe('insufficient_data')
+  })
+
+  it('WASTED SPEND: significant spend with zero conversions', () => {
+    const f = fact([{ impressions: 5000, clicks: 200, spendMinor: DEMO_AUTOMATION_SETTINGS.maxDailyAdSpendMinor * 4, conversions: 0, revenueMinor: 0 }])
+    const result = classifyCampaign(f, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).toBe('wasted_spend')
+    expect(result.severity).toBe('critical')
+  })
+
+  it('never declares waste on modest spend, even with zero conversions — avoids overreacting to a small sample', () => {
+    const f = fact([{ impressions: 500, clicks: 30, spendMinor: 100, conversions: 0, revenueMinor: 0 }])
+    const result = classifyCampaign(f, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).not.toBe('wasted_spend')
+  })
+
+  it('HIGH ACOS / LOW ROAS: below the configured minimum ROAS', () => {
+    const f = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 15000, conversions: 20 }]) // ROAS 1.5, below default min 3
+    const result = classifyCampaign(f, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).toBe('high_acos_low_roas')
+  })
+
+  it('HEALTHY: solid ROAS, no waste, no decline, not near budget cap', () => {
+    const f = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 35000, conversions: 20, dailyBudgetMinor: null }])
+    const result = classifyCampaign(f, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).toBe('healthy')
+  })
+
+  it('DECLINING PERFORMANCE: ROAS falls materially against a comparable previous window with adequate sample size', () => {
+    // A current window that's still above the minimum ROAS (so it wouldn't be caught by the high-ACOS/low-ROAS rule) but has fallen sharply from a much healthier previous window.
+    const currentHealthyButFalling = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 32000, conversions: 20 }]) // ROAS 3.2
+    const currentWithDays = { ...currentHealthyButFalling, days: 10 }
+    const previous = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 50000, conversions: 20 }]) // ROAS 5.0
+    const result = classifyCampaign(currentWithDays, DEMO_AUTOMATION_SETTINGS, previous)
+    expect(result.classification).toBe('declining_performance')
+  })
+
+  it('SCALE OPPORTUNITY: healthy ROAS, conversions, and spend near the daily budget cap', () => {
+    const dailyBudget = 2000
+    const f = fact([{ impressions: 5000, clicks: 200, spendMinor: dailyBudget * 30 * 0.95, revenueMinor: dailyBudget * 30 * 0.95 * 10, conversions: 20, dailyBudgetMinor: dailyBudget }])
+    const withDays = { ...f, days: 30 }
+    const result = classifyCampaign(withDays, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).toBe('scale_opportunity')
+    expect(result.severity).toBe('opportunity')
+  })
+
+  it('never recommends scaling when budget is not actually constraining spend', () => {
+    const f = fact([{ impressions: 5000, clicks: 200, spendMinor: 1000, revenueMinor: 10000, conversions: 20, dailyBudgetMinor: 100000 }])
+    const withDays = { ...f, days: 30 }
+    const result = classifyCampaign(withDays, DEMO_AUTOMATION_SETTINGS, null)
+    expect(result.classification).not.toBe('scale_opportunity')
+  })
+})
+
+describe('buildAdvertisingScorecard: worst-campaign-wins, never a blended invented score', () => {
+  it('overall status is the single worst campaign classification', () => {
+    const healthy = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 35000, conversions: 20 }])
+    const wasted = fact([{ externalId: 'camp-2', impressions: 5000, clicks: 200, spendMinor: DEMO_AUTOMATION_SETTINGS.maxDailyAdSpendMinor * 4, conversions: 0, revenueMinor: 0 }])
+    const scorecard = buildAdvertisingScorecard(
+      [
+        { fact: healthy, classification: classifyCampaign(healthy, DEMO_AUTOMATION_SETTINGS, null) },
+        { fact: wasted, classification: classifyCampaign(wasted, DEMO_AUTOMATION_SETTINGS, null) },
+      ],
+      100000, 'GBP',
+    )
+    expect(scorecard.overall).toBe('critical')
+    expect(scorecard.byClassification.wasted_spend).toBe(1)
+    expect(scorecard.byClassification.healthy).toBe(1)
+  })
+
+  it('an empty campaign list is honestly insufficient_data, never healthy-by-default', () => {
+    const scorecard = buildAdvertisingScorecard([], null, 'GBP')
+    expect(scorecard.overall).toBe('insufficient_data')
+    expect(scorecard.totalCampaigns).toBe(0)
+  })
+
+  it('TACOS is unavailable when org revenue is not supplied, never a fabricated percentage', () => {
+    const healthy = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 35000, conversions: 20 }])
+    const scorecard = buildAdvertisingScorecard([{ fact: healthy, classification: classifyCampaign(healthy, DEMO_AUTOMATION_SETTINGS, null) }], null, 'GBP')
+    expect(scorecard.tacosPct.status).toBe('unavailable')
+  })
+
+  it('TACOS is a real calculated figure when org revenue is known', () => {
+    const healthy = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 35000, conversions: 20 }])
+    const scorecard = buildAdvertisingScorecard([{ fact: healthy, classification: classifyCampaign(healthy, DEMO_AUTOMATION_SETTINGS, null) }], 100000, 'GBP')
+    expect(scorecard.tacosPct.status).toBe('calculated')
+    expect(scorecard.tacosPct.value).toBeCloseTo(10)
+  })
+})
+
+describe('buildRealAdvertisingAnalytics: converts to the Milestone 10 shape without ever coercing unavailable to zero', () => {
+  it('unavailable money metrics remain unavailable after conversion to bare-number Metric', () => {
+    const scorecard = buildAdvertisingScorecard([], null, 'GBP')
+    const analytics = buildRealAdvertisingAnalytics(scorecard)
+    expect(analytics.spend.status).toBe('unavailable')
+    expect(analytics.spend.value).toBeNull()
+  })
+
+  it('a known spend total converts to its minor-unit number, not the Money object', () => {
+    const healthy = fact([{ impressions: 5000, clicks: 200, spendMinor: 10000, revenueMinor: 35000, conversions: 20 }])
+    const scorecard = buildAdvertisingScorecard([{ fact: healthy, classification: classifyCampaign(healthy, DEMO_AUTOMATION_SETTINGS, null) }], null, 'GBP')
+    const analytics = buildRealAdvertisingAnalytics(scorecard)
+    expect(analytics.spend.value).toBe(10000)
+  })
+})

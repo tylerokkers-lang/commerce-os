@@ -13,6 +13,7 @@ export const NAV_SECTIONS = [
       { href: '/approvals', label: 'Approvals' },
       { href: '/automation', label: 'Automation' },
       { href: '/marketplaces', label: 'Marketplaces' },
+      { href: '/advertising', label: 'Advertising' },
       { href: '/orders', label: 'Orders' },
     ],
   },

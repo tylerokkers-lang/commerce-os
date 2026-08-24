@@ -5,17 +5,20 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 24 August 2026 (Milestone 13, Commerce Intelligence —
-Analyse, Recommend & Propose — see §29 before trusting any claim about
-recommendations, proposed actions, or the approval-request path, and note
-neither it nor Milestone 12's live-model path has been verified against a
-real `ANTHROPIC_API_KEY` or a real Supabase project; §28 for Milestone
-12's chat grounding/security model, §27 for Milestone 11's audit &
-hardening pass, §26 for the rest of Milestone 11, §22 before trusting any
-claim about monitor subject discovery, real sales data, or supplier
-operational facts; §21 for the rest of Milestone 8, §19 for Milestone 7's
-execution work, and §18 for Milestone 6's engine-level
-verification).
+Last updated: 25 August 2026 (Milestone 14, Advertising Intelligence &
+Optimisation — see §30 before trusting any claim about campaign
+classifications, advertising priorities/health, or campaign
+recommendations/proposals, and note the `REVIEW_CAMPAIGN` proposal path
+has not been verified against a real Supabase project, same as Milestone
+13's price-change path; §29 for Milestone 13, Commerce Intelligence —
+Analyse, Recommend & Propose, and note neither it nor Milestone 12's
+live-model path has been verified against a real `ANTHROPIC_API_KEY` or a
+real Supabase project; §28 for Milestone 12's chat grounding/security
+model, §27 for Milestone 11's audit & hardening pass, §26 for the rest of
+Milestone 11, §22 before trusting any claim about monitor subject
+discovery, real sales data, or supplier operational facts; §21 for the
+rest of Milestone 8, §19 for Milestone 7's execution work, and §18 for
+Milestone 6's engine-level verification).
 
 ## 1. What this is
 
@@ -1491,39 +1494,207 @@ the scoping note above); any autonomous/unattended proposal generation —
 every proposal in this milestone originates from an explicit user chat
 message, never a background process.
 
-## 30. Next step
+## 30. Milestone 14 (Advertising Intelligence & Optimisation) — what was built
 
-Per `docs/MILESTONES.md` after this milestone, the next real work is
-**finishing the wiring for the review-only action types this milestone
-deliberately left un-executable** (`CREATE_LISTING`/`PAUSE_LISTING`
-specifically — the ones closest to having a real domain engine already,
+Explicitly **not** a live advertising system — no advertising platform
+connector (Amazon Ads, Meta, Google, TikTok) exists anywhere in this
+codebase, confirmed by searching the tree before writing any Milestone 14
+code, so nothing built here can pause a campaign or change a budget for
+real. This milestone is an intelligence layer over the `advertising`
+table, which Milestone 1's schema already created and which nothing had
+ever written a row into until now — **no migration was needed**. Full
+detail in `docs/ARCHITECTURE.md`'s `advertisingAnalytics.ts` paragraph and
+`src/lib/ai/` section, and `docs/SECURITY.md`'s Milestone 14 section
+(twelve threat categories) — this is the short version.
+
+- **`analytics/advertisingAnalytics.ts`** (extended from an empty
+  Milestone 10 stub into a real engine): `buildCampaignFact` wraps every
+  campaign figure (spend, revenue, ROAS, ACOS, CTR, CPC, conversion rate)
+  in a `Metric<T>` — a campaign with no clicks reports `unavailable`, never
+  a coerced `0%`. `resolveCampaignProfitability` ties a campaign to the
+  **existing** profitability engine's `breakEvenAdSpend`
+  (`profitability/channels.ts`, via `analytics/profitAnalytics.ts`) —
+  never a second calculation — and explicitly refuses to compare when the
+  campaign's currency and the product's listing currency differ, rather
+  than silently combining them. `classifyCampaign` is the one deterministic
+  rule set (never an LLM call) producing seven classifications:
+  `wasted_spend` (significant spend, zero conversions/revenue),
+  `poor_profitability` (ad cost per conversion exceeds the product's real
+  break-even), `high_acos_low_roas` (below a configurable minimum ROAS,
+  default 3.0), `declining_performance` (CPC up / conversion rate down /
+  ROAS down vs. a comparable prior window, gated by a minimum sample size
+  and a minimum 7-day comparison window so a two-day blip is never
+  reported as a decline), `scale_opportunity` (strong ROAS, healthy
+  conversions, spend near the daily budget cap — a recommendation only,
+  never an automatic budget increase), `healthy`, and `insufficient_data`
+  (fewer than 100 impressions and 20 clicks — an honest "not enough data"
+  result, never a guess). `buildAdvertisingScorecard` rolls campaigns into
+  an org-wide status using the same "worst campaign wins, never a blended
+  invented score" rule `ceo/healthScorecard.ts` already established, plus
+  TACOS (ad spend ÷ org sales revenue) computed only when both figures
+  share the org's own base currency.
+- **`analytics/liveAdvertisingFacts.ts`** (new, server-only):
+  `loadAdvertisingFacts(orgId, period, previousPeriod)` — the one
+  org-scoped Supabase reader for the `advertising` table, following the
+  same `supabase/paginate.ts` pattern every other Milestone 10 live loader
+  already uses. The table has no currency column, so every row is treated
+  as the org's own `base_currency` (resolved once via the same
+  `loadOrgCurrency` `liveAnalyticsFacts.ts` already exports) — a documented
+  single-currency-slot design, not a mixing risk given the schema as it
+  exists today.
+- **`analytics/repository.ts`**: new `getAdvertisingIntelligence()`
+  composes the two above. Genuinely empty `campaigns`/`scorecard` in demo
+  mode (never injecting fixture data into the live query path — the same
+  "demo mode returns honest empty facts" rule `getAnalyticsDashboard()`
+  already follows) — `demo/advertising.ts`'s seven narrative scenarios are
+  computed by running the real `classifyCampaign`/`buildAdvertisingScorecard`
+  functions above against fixed, self-contained fixture data with a fixed
+  `NOW`, exactly the pattern `demo/analytics.ts`/`demo/ceo.ts` established.
+- **CEO Command Centre integration** (`ceo/repository.ts`,
+  `ceo/priorities.ts`, `ceo/healthScorecard.ts`): `advertisingIntelligence`
+  is a seventh source in the existing `Promise.allSettled` (its own
+  `dataSourceFailures` entry, its own fallback — a failed advertising fetch
+  degrades that one section, never the whole dashboard). `priorities.ts`
+  gained a seventh section mapping each non-healthy classification to a
+  `Priority` — including the one genuinely new rule this milestone adds on
+  top of Milestone 11's compliance-visibility work: a `scale_opportunity`
+  campaign for a product that is currently compliance-**BLOCKED** on the
+  same channel never becomes an unrestricted scaling recommendation; it
+  becomes an explicit, differently-worded `HIGH` severity caution instead,
+  proven by a dedicated test. `healthScorecard.ts` gained a ninth health
+  area (`advertising`), `UNKNOWN` when no advertising intelligence was
+  supplied, never silently `healthy` by default.
+- **Chat integration** (`src/lib/ai/`): `FactBundle` gained
+  `advertisingCampaigns`/`advertisingScorecard` — populated straight from
+  `ceo.advertisingIntelligence`, never a second advertising query.
+  `offlineAnswer.ts` gained an advertising topic/section. The "no tools
+  field, ever" Milestone 12 guarantee is unaffected — there is no
+  advertising-specific request path, the same `buildAnthropicRequest`
+  handles every topic, proven directly for advertising content.
+- **Recommend/Propose extended to campaigns** (`ai/actions/`):
+  `ProposedActionType` grew from 8 to 12 members — `REVIEW_CAMPAIGN`,
+  `PAUSE_CAMPAIGN`, `INCREASE_BUDGET`, `DECREASE_BUDGET` — with
+  `RawActionIntent` made polymorphic (exactly one of a product-match-pair
+  or campaign-match-pair is ever populated). `intentExtraction.ts`'s
+  `matchCampaign` follows the identical "real, already-known entity only,
+  ambiguous or unmatched produces null" discipline as `matchProduct`, with
+  campaign-specific keyword patterns checked first so "pause this
+  campaign" never resolves to the unrelated `PAUSE_LISTING`. Only
+  `REVIEW_CAMPAIGN` — a pure escalation, identical in kind to
+  `REQUEST_APPROVAL` — is executable; `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
+  `DECREASE_BUDGET` are recognised (never silently dropped) but always
+  `not_executable`, because no advertising platform connector exists to
+  actually change a budget or pause state. `recommend.ts` gained
+  `campaignRecommendations`, generating a `REVIEW_CAMPAIGN` recommendation
+  for every non-healthy campaign — `scale_opportunity` is deliberately
+  excluded from this function specifically, because the `FactBundle`
+  campaign shape carries no `productId` to re-check the compliance-block
+  override `ceo/priorities.ts` applies with the full entity list; adding an
+  unrestricted scaling recommendation here without that check would risk
+  exactly the bug that override exists to prevent. `propose.ts` picked up
+  a real bug fix in the same pass: its bundle rebuild was missing
+  `advertisingIntelligence`, which would have made every campaign proposal
+  fail to re-match against a freshly reloaded bundle.
+- **UI**: new `src/app/(dashboard)/advertising/page.tsx` — scorecard,
+  advertising-specific CEO priorities (including the compliance-override
+  message), full per-campaign detail, demo scenarios. Deliberately **no**
+  pause/budget-change control anywhere on the page — the page's own
+  explanatory card states the only real path from a recommendation to a
+  trackable decision is asking chat to raise a `REVIEW_CAMPAIGN`
+  escalation, which still only ever reaches `/approvals`. Added to
+  `NAV_SECTIONS` in `src/lib/constants.ts`.
+- **A real correctness gap found and fixed**: `ceo/priorities.ts`'s
+  advertising section had branches for `wasted_spend`/`poor_profitability`/
+  `declining_performance`/`scale_opportunity` but was missing
+  `high_acos_low_roas` entirely — a real `severity: 'high'` classification
+  that `healthScorecard.ts`'s `advertisingArea` already surfaced but that
+  never reached the CEO priority queue at all. A silently-dropped alert,
+  not a crash — the kind of gap that is easy to miss without deliberately
+  cross-checking every classification against every consumer. Fixed;
+  proven by a dedicated test.
+
+**Verified:** 942 tests (up from 923 at the start of this session — +19
+across `tests/chat-campaign-intent.test.ts` (new, 14 tests: campaign
+matching, ambiguity, injected-JSON inertness), `tests/chat-recommend.test.ts`
+(+4, campaign recommendations), `tests/ceo-advertising-integration.test.ts`
+(+1, the `high_acos_low_roas` priority)); `npx tsc --noEmit`, `npm run
+lint`, `npm run build` and `npm run db:verify` all clean (25 migrations,
+72 tables, unchanged — genuinely no schema change, since the `advertising`
+table already existed and this milestone only ever reads/classifies it).
+Confirmed live in the browser, demo mode: `/advertising` renders an honest
+empty scorecard (`UNAVAILABLE` metrics, not zeros) plus all seven demo
+scenarios with correct classification text; `/` (dashboard), `/chat`,
+`/approvals`, `/compliance` all re-confirmed with no console errors; the
+new "Advertising" nav entry present and correctly highlighted; asking chat
+"What is my advertising ROAS and are any campaigns wasting money?"
+honestly answered "No advertising campaign data for this period" in the
+very same session `/advertising` was rendering all seven demo scenarios in
+— direct proof the demo scenarios never leak into the live data/chat path.
+`informax-site` confirmed untouched throughout (git status compared).
+
+**Implemented but not live-verified:** a real `REVIEW_CAMPAIGN` proposal
+actually reaching `requires_approval` and then a real `ai_decisions` row
+via a live Supabase project — this environment's demo session has no real
+campaign data for a chat message to match against, and (like Milestone
+13's `validate.ts`/`propose.ts` before it) the campaign paths through
+those same two files are `server-only` and cannot be imported into Vitest
+at all in this project, so they are exercised only by
+`intentExtraction.ts`'s pure campaign-matching tests and by code
+inspection. Live `ANTHROPIC_API_KEY` behaviour remains unverified,
+unchanged from Milestone 12/13.
+
+**Not implemented (deliberately, this milestone's scope):** any real
+advertising platform connector; any code path that can actually pause a
+campaign or change a budget — `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
+`DECREASE_BUDGET` are recognised, always `not_executable`; the
+account/daily/per-product spend limits, cooldowns and rollback logic
+`docs/MILESTONES.md`'s original Milestone 14 scope describes, which belong
+to a future milestone that has a real connector and a real
+automated-execution path to apply them to.
+
+## 31. Next step
+
+Per `docs/MILESTONES.md`, the two real options are: (1) **a genuine
+advertising platform connector** (Amazon Ads first, matching the existing
+Amazon UK marketplace connector's priority) — this is what would let
+`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` graduate from
+`not_executable` to real, approval-gated actions, following the identical
+pattern Milestone 13 established for `UPDATE_PRICE` (re-resolve fresh,
+run through policy at `automationLevel: 'assisted'`, never bypass
+approval); or (2) **finishing the wiring for Milestone 13's still-review-only
+product action types** (`CREATE_LISTING`/`PAUSE_LISTING` specifically —
+closest to a real domain engine already,
 `marketplaces/publicationGate.ts`'s `assessPublicationReadiness`, but
 needing lifecycle stage/supplier capability/compliance assembled together
-for an arbitrary chat-named product first), **or** proceeding to a genuine
-Milestone 14 in the original numbering (advertising intelligence) if that
-is judged higher priority — read `docs/MILESTONES.md`'s own note on
-whichever is chosen next. `ai/actions/validate.ts`'s `ProposedAction`
-shape and the `EXECUTABLE_ACTION_TYPES` closed list are exactly where a
-newly-wired action type gets added — never a parallel proposal mechanism.
+for an arbitrary chat-named product first). `ai/actions/validate.ts`'s
+`ProposedAction` shape and the `EXECUTABLE_ACTION_TYPES` closed list are
+exactly where a newly-wired action type gets added, for either — never a
+parallel proposal mechanism.
 
-Four smaller, genuine loose ends worth picking up opportunistically rather
+Five smaller, genuine loose ends worth picking up opportunistically rather
 than as their own milestone: (1) a live-Supabase-backed test harness does
 not exist anywhere in this codebase — every `discover*`/`server-only`
 repository function, including `ai/repository.ts`/`ai/anthropicProvider.ts`
-and now `ai/actions/validate.ts`/`propose.ts`, is verified only by code
-inspection, its pure sub-functions, and manual browser checks, never
-automated; (2) `analytics/repository.ts`'s `getCashflow()` still returns a
-hardcoded-empty result in live mode (pre-existing, documented,
-deliberately unsurfaced in the UI); (3) a real `ANTHROPIC_API_KEY` should
-be exercised against the live chat before it is presented to an actual
-CEO — the structural safety guarantees (§28/§29) hold either way, but
-whether the model's live answers are actually good, correctly cite
-sources, and never drift from the fact-first system prompt in practice is
-unverified in this environment; (4) a real Supabase project should be
-exercised end-to-end for `requestActionApproval` -> `/approvals` ->
-`approveDecision`, the one genuinely new write path this milestone added,
-before relying on it for a real business. When international expansion is
-eventually revisited as Milestone 15, read Milestone 9's section first —
-the market model, FX intelligence, country-aware compliance delegation
-and expansion engine it built are designed to extend without a schema
-redesign, not be rebuilt.
+and `ai/actions/validate.ts`/`propose.ts` (product and, now, campaign
+paths alike), is verified only by code inspection, its pure sub-functions,
+and manual browser checks, never automated; (2) `analytics/repository.ts`'s
+`getCashflow()` still returns a hardcoded-empty result in live mode
+(pre-existing, documented, deliberately unsurfaced in the UI); (3) a real
+`ANTHROPIC_API_KEY` should be exercised against the live chat before it is
+presented to an actual CEO — the structural safety guarantees
+(§28/§29/§30) hold either way, but whether the model's live answers are
+actually good, correctly cite sources, and never drift from the
+fact-first system prompt in practice is unverified in this environment;
+(4) a real Supabase project should be exercised end-to-end for
+`requestActionApproval` -> `/approvals` -> `approveDecision`, both for a
+product proposal and a `REVIEW_CAMPAIGN` proposal, before relying on
+either for a real business; (5) `ai/actions/recommend.ts`'s
+`campaignRecommendations` deliberately never generates a `scale_opportunity`
+recommendation — if a future change threads `productId` through
+`FactBundle.advertisingCampaigns`, that exclusion should be revisited so
+scaling recommendations can appear in chat too, with the same
+compliance-block override `ceo/priorities.ts` already applies. When
+international expansion is eventually revisited as Milestone 15, read
+Milestone 9's section first — the market model, FX intelligence,
+country-aware compliance delegation and expansion engine it built are
+designed to extend without a schema redesign, not be rebuilt.

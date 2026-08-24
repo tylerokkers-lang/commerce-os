@@ -13,10 +13,11 @@ import { EXECUTABLE_ACTION_TYPES, PROPOSED_ACTION_TYPES, type ProposedActionType
 const EXPECTED: readonly ProposedActionType[] = [
   'UPDATE_PRICE', 'CREATE_LISTING', 'PAUSE_LISTING', 'REVIEW_SUPPLIER',
   'REVIEW_PRODUCT', 'ADJUST_INVENTORY_THRESHOLD', 'REVIEW_ADVERTISING', 'REQUEST_APPROVAL',
+  'REVIEW_CAMPAIGN', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET',
 ]
 
 describe('ProposedActionType vocabulary is closed and exact', () => {
-  it('PROPOSED_ACTION_TYPES contains exactly the documented 8 types, no more, no fewer', () => {
+  it('PROPOSED_ACTION_TYPES contains exactly the documented 12 types, no more, no fewer', () => {
     expect([...PROPOSED_ACTION_TYPES].sort()).toEqual([...EXPECTED].sort())
   })
 
@@ -24,7 +25,7 @@ describe('ProposedActionType vocabulary is closed and exact', () => {
     for (const t of EXECUTABLE_ACTION_TYPES) expect(PROPOSED_ACTION_TYPES).toContain(t)
   })
 
-  it('exactly UPDATE_PRICE and REQUEST_APPROVAL are executable today — every other type is review-only, deliberately, not by omission', () => {
-    expect([...EXECUTABLE_ACTION_TYPES].sort()).toEqual(['REQUEST_APPROVAL', 'UPDATE_PRICE'])
+  it('exactly UPDATE_PRICE, REQUEST_APPROVAL and REVIEW_CAMPAIGN are executable today — every other type is review-only, deliberately, not by omission', () => {
+    expect([...EXECUTABLE_ACTION_TYPES].sort()).toEqual(['REQUEST_APPROVAL', 'REVIEW_CAMPAIGN', 'UPDATE_PRICE'])
   })
 })

@@ -21,7 +21,7 @@ export interface ChatMessage {
 
 /** How a `FactBundle` reference maps back into the rest of the application — every one a real, existing route, never a fabricated link. */
 export type ChatReferenceType =
-  | 'priority' | 'compliance' | 'opportunity' | 'supplier' | 'channel' | 'approval' | 'product'
+  | 'priority' | 'compliance' | 'opportunity' | 'supplier' | 'channel' | 'approval' | 'product' | 'advertising_campaign'
 
 export interface ChatReference {
   type: ChatReferenceType
@@ -86,6 +86,19 @@ export interface FactBundle {
     id: string; sku: string; title: string; category: string | null; stage: string
     channels: readonly { channel: string; label: string; knownNetMarginPct: number | null; netProfitMinor: number | null }[]
   }[]
+  /**
+   * Milestone 14 — real, classified advertising campaigns from
+   * `analytics/repository.ts`'s `getAdvertisingIntelligence()`. Every
+   * figure here is already a fact/calculated `Metric` collapsed to a
+   * plain string by `factBundle.ts` — an `unavailable` metric becomes an
+   * explicit "unavailable — reason" string, never a coerced zero.
+   */
+  advertisingCampaigns: readonly {
+    campaignKey: string; campaignName: string; channel: string; isPaused: boolean
+    spend: string; attributedRevenue: string; roas: string; acosPct: string
+    classification: string; severity: string; reasons: readonly string[]
+  }[]
+  advertisingScorecard: { overall: string; totalCampaigns: number; totalSpend: string; overallRoas: string; tacosPct: string } | null
 }
 
 /** Whether an answer used the real language model, or the deterministic fact-only fallback — the UI must never present the two identically. */

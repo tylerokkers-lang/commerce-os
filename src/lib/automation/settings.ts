@@ -9,7 +9,7 @@ export type { AutomationSettings } from './settingsTypes'
 export { isCategoryPaused } from './settingsTypes'
 
 const SETTINGS_COLUMNS =
-  'automation_level, automation_paused, automation_paused_at, automation_paused_reason, automation_paused_categories, max_auto_purchase_minor, max_auto_price_change_pct, max_price_movement_per_day_pct, max_auto_refund_minor, max_daily_auto_refund_minor, max_refunds_per_order, max_daily_auto_supplier_spend_minor, max_auto_supplier_switch_cost_increase_pct, min_net_margin_pct'
+  'automation_level, automation_paused, automation_paused_at, automation_paused_reason, automation_paused_categories, max_auto_purchase_minor, max_auto_price_change_pct, max_price_movement_per_day_pct, max_auto_refund_minor, max_daily_auto_refund_minor, max_refunds_per_order, max_daily_auto_supplier_spend_minor, max_auto_supplier_switch_cost_increase_pct, min_net_margin_pct, max_daily_ad_spend_minor, min_roas'
 
 interface SettingsRow {
   automation_level: AutomationSettings['automationLevel']
@@ -26,6 +26,8 @@ interface SettingsRow {
   max_daily_auto_supplier_spend_minor: number
   max_auto_supplier_switch_cost_increase_pct: number | string
   min_net_margin_pct: number | string
+  max_daily_ad_spend_minor: number
+  min_roas: number | string
 }
 
 function mapSettingsRow(data: SettingsRow): AutomationSettings {
@@ -44,6 +46,8 @@ function mapSettingsRow(data: SettingsRow): AutomationSettings {
     maxDailyAutoSupplierSpendMinor: data.max_daily_auto_supplier_spend_minor,
     maxAutoSupplierSwitchCostIncreasePct: Number(data.max_auto_supplier_switch_cost_increase_pct),
     minNetMarginPct: Number(data.min_net_margin_pct),
+    maxDailyAdSpendMinor: data.max_daily_ad_spend_minor,
+    minRoas: Number(data.min_roas),
   }
 }
 

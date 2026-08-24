@@ -1,4 +1,4 @@
-import type { AnalyticsDashboard } from '@/lib/analytics/repository'
+import type { AnalyticsDashboard, AdvertisingIntelligence } from '@/lib/analytics/repository'
 import type { MonitoringStatus } from '@/lib/monitoring/repository'
 import type { AutomationStatus } from '@/lib/automation/repository'
 import type { ApprovalItem, ComplianceIssue } from '@/lib/core/domain'
@@ -21,7 +21,7 @@ export type PrioritySeverity = 'critical' | 'high' | 'medium' | 'low'
 
 export type PriorityCategory =
   | 'financial_risk' | 'compliance_risk' | 'customer_risk' | 'supplier_failure'
-  | 'automation_failure' | 'pending_approval' | 'data_quality' | 'opportunity'
+  | 'automation_failure' | 'pending_approval' | 'data_quality' | 'opportunity' | 'advertising_risk'
 
 /** One entry in the executive priority queue — "what needs my attention" / "your priorities today" are the same underlying list. */
 export interface Priority {
@@ -89,6 +89,8 @@ export interface CEOCommandCentre {
   approvals: readonly ApprovalItem[]
   /** Every product-channel listing currently `fail` (blocked) or `review_required` — the same real, org-scoped `compliance_records` read `/compliance` already uses (Milestone 1/2), never a second compliance engine. */
   complianceIssues: readonly ComplianceIssue[]
+  /** Milestone 14 — real per-campaign classification and the org-wide scorecard, from `analytics/repository.ts`'s `getAdvertisingIntelligence()`, never a second analysis engine. */
+  advertisingIntelligence: AdvertisingIntelligence
   dataQuality: AnalyticsDashboard['dataQuality']
   recentActivity: readonly RecentActivityItem[]
   demoScenarios: readonly CEODemoScenario[]

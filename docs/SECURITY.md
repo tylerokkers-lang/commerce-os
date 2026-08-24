@@ -173,6 +173,150 @@ separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
 
+## What Milestone 14 changed here (Advertising Intelligence & Optimisation)
+
+Milestone 14 extends Commerce Intelligence to advertising campaigns without
+opening any new execution surface — no live advertising platform connector
+exists in this codebase (confirmed by inspection before writing any code),
+so nothing here can pause a campaign, change a budget, or change bids for
+real. The threat model below is organised by the twelve categories the
+brief asked to cover explicitly.
+
+- **Prompt injection**: no new surface. Advertising facts flow into the
+  system prompt through the same `serializeFactBundle` path every other
+  fact category already uses (Milestone 12's guardrails, unchanged); a
+  campaign name is just more code-derived text in the facts block, never a
+  new instruction channel. `tests/chat-advertising.test.ts` proves a system
+  prompt containing real campaign data still produces an Anthropic request
+  with no `tools` field.
+- **AI hallucinating campaign performance**: structurally bounded the same
+  way price/margin figures already are. `buildOfflineAnswer`'s advertising
+  section and the live-model system prompt both only ever contain
+  campaign figures `factBundle.ts` derived from
+  `AdvertisingIntelligence.campaigns` — the model is never asked to
+  produce a ROAS, spend, or classification figure itself, only to discuss
+  ones already computed. **Not proven**: as with every other topic
+  (Milestone 12), no purely textual defence can guarantee the live model's
+  prose never mischaracterises a real figure it was given — the guarantee
+  is that it cannot invent a campaign, a number, or an action that does
+  not already exist in the bundle.
+- **Incorrect currency aggregation**: the `advertising` table has no
+  currency column — every row is treated as the org's own
+  `base_currency`, resolved once by `liveAdvertisingFacts.ts`
+  (`loadOrgCurrency`, the same resolver `liveAnalyticsFacts.ts` already
+  used), so there is no per-row currency to mix. The one place two
+  different figures are combined — `buildAdvertisingScorecard`'s TACOS
+  (ad spend ÷ org sales revenue) — is computed only when
+  `getAdvertisingIntelligence` confirms `salesFacts.currency ===
+  adFacts.currency` and `salesFacts.mixedCurrencies.length === 0`;
+  otherwise `orgRevenueMinor` is passed as `null` and TACOS is reported
+  `unavailable`, never silently computed across a mismatch. This is the
+  same `resolveSalesAnalyticsSafely` discipline Milestone 11 established,
+  applied at the one cross-figure join this milestone adds.
+- **Incorrect profitability calculations**: `resolveCampaignProfitability`
+  never reimplements profitability — it reads `profitability/channels.ts`'s
+  already-real `breakEvenAdSpend` off the same
+  `ProductChannelProfitAnalytics` every other feature uses, and explicitly
+  checks `fact.spend.value.currency !== breakEven.currency` before ever
+  comparing the two, returning `actualAdSpendPerUnit: null` rather than a
+  silently wrong comparison on a mismatch. `classifyCampaign`'s
+  `poor_profitability` branch only fires on `exceedsBreakEven === true`,
+  never on a `null` (unknown) result.
+- **Stale campaign state**: `ai/actions/propose.ts` (the only place a
+  campaign proposal can become a real `ai_decisions` row) reloads
+  `getCEOCommandCentre()` fresh and rebuilds the `FactBundle` from scratch
+  before re-running `extractActionIntent`/`validateActionIntent` — the
+  same "never trust a round-tripped proposal" discipline Milestone 13
+  established for price changes, extended to campaigns without a second
+  code path: `propose.ts` has exactly one reload-and-revalidate flow for
+  both entity types.
+- **Manipulated user prompts**: `matchCampaign` (`intentExtraction.ts`)
+  follows the identical discipline as `matchProduct` — it matches only
+  the *user's own* typed message against real, already-known campaign
+  names from the current turn's bundle, and returns `null` on zero or
+  more than one match rather than guessing. Proven directly
+  (`tests/chat-campaign-intent.test.ts`): a fabricated campaign name, an
+  ambiguous substring match, and an embedded fake JSON action block
+  naming a fabricated `matchedCampaignKey` all produce no intent at all.
+- **AI bypassing approval workflows**: `ProposalOutcome` still has no
+  `'approved'`/`'executed'` member (unchanged from Milestone 13) — a
+  matched `REVIEW_CAMPAIGN` intent can only reach `'requires_approval'`
+  (`validateEscalation`) or fail validation entirely, never anything that
+  looks approved. `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` are
+  always routed to `reviewOnly()`, which hardcodes `outcome:
+  'not_executable'`, `executable: false` — there is no branch anywhere in
+  `validate.ts` that can mark one of these three types executable, because
+  `EXECUTABLE_ACTION_TYPES` (a closed array checked by
+  `tests/chat-action-vocabulary.test.ts`) does not contain them.
+- **Automatic advertising spend changes**: impossible by construction, not
+  by policy — this codebase has no marketplace/advertising connector with
+  a budget-write or pause-write method at all (confirmed by search during
+  Phase 1 investigation before any Milestone 14 code was written). The
+  `/advertising` page has no "Pause" or "Increase budget" control anywhere
+  on it; the page's own explanatory card states plainly that the only real
+  path from a recommendation to a trackable decision is asking chat to
+  raise a `REVIEW_CAMPAIGN` escalation, which still only ever reaches
+  `/approvals` — never a fake button that looks like it executes something
+  it cannot.
+- **Missing/incomplete data**: every campaign figure is a `Metric<T>`
+  (`factMetric`/`calculatedMetric`/`unavailableMetric`) — a campaign with
+  no clicks never reports a `0%` conversion rate, it reports
+  `unavailable` with the reason. `classifyCampaign`'s first check is
+  `sampleSizeAdequate` (`MIN_IMPRESSIONS_FOR_SIGNIFICANCE`/
+  `MIN_CLICKS_FOR_CONVERSION_SIGNIFICANCE`), returning the honest
+  `insufficient_data` classification rather than guessing from a handful
+  of impressions; `declining_performance` additionally requires
+  `MIN_DAYS_FOR_TREND_COMPARISON` days and an adequately-sampled previous
+  window before comparing trends, so a two-day dip is never reported as a
+  decline.
+- **Cross-tenant campaign leakage**: `loadAdvertisingFacts(orgId, ...)`
+  (`liveAdvertisingFacts.ts`) filters by `org_id` using the same
+  `supabase/paginate.ts` helper every other Milestone 10 live loader
+  already uses, and `getAdvertisingIntelligence()` resolves `orgId` from
+  the caller's own session (`requireSession()`), never from a parameter a
+  client could supply — the same rule documented above for every other
+  analytics query.
+- **Demo vs live mode**: `getAdvertisingIntelligence()`'s demo branch
+  returns genuinely empty `campaigns`/`scorecard` — it never injects
+  `demoAdvertisingScenarios()`'s fixture rows into the real query path.
+  The seven demo scenarios are narrative text computed by running the
+  real `classifyCampaign`/`buildAdvertisingScorecard` functions against
+  fixed, self-contained fixture data with a fixed `NOW`, exactly the
+  pattern `demo/analytics.ts`/`demo/ceo.ts` already established — and
+  confirmed live in the browser this milestone: with `ANTHROPIC_API_KEY`
+  unset and the default demo session, asking chat "What is my advertising
+  ROAS and are any campaigns wasting money?" honestly answered "No
+  advertising campaign data for this period", even though seven demo
+  scenarios render on `/advertising` in the same session.
+- **Auditability**: no second approval mechanism was introduced.
+  `propose.ts`'s campaign path creates exactly one `ai_decisions` row via
+  the pre-existing `proposeApproval()` (Milestone 6), carrying the same
+  read-only-through-RLS posture documented above — a campaign proposal is
+  indistinguishable, from an audit standpoint, from any other proposal
+  this codebase has ever created.
+- **A real correctness gap found and fixed, not security-relevant in the
+  credential/access-control sense but relevant to auditability**:
+  `ceo/priorities.ts`'s advertising section originally handled
+  `wasted_spend`/`poor_profitability`/`declining_performance`/
+  `scale_opportunity` but had no branch for `high_acos_low_roas` — a real,
+  `severity: 'high'` classification that the health scorecard already
+  surfaced (`healthScorecard.ts`'s `advertisingArea`) but that never
+  reached the CEO priority queue at all, a silently-dropped alert.
+  Fixed by adding the missing branch, proven by a dedicated test
+  (`tests/ceo-advertising-integration.test.ts`).
+- **Not verified**: real RLS enforcement under an authenticated session
+  and actual Anthropic API behaviour (both the same pre-existing,
+  unchanged boundaries documented above) — Milestone 14 adds no new
+  instance of either. Also not verified: `validate.ts`'s campaign
+  escalation path and `propose.ts`'s campaign proposal path are
+  `server-only` and cannot be imported into Vitest at all in this project
+  (the same established limitation Milestone 13's price-change path has);
+  their behaviour is proven only by the pure `intentExtraction.ts`
+  campaign-matching tests plus code inspection, not by a live
+  `REVIEW_CAMPAIGN` proposal actually reaching `/approvals` in the
+  browser — this environment's demo session has no real campaign data to
+  match against, so that end-to-end path is genuinely untested live.
+
 ## What Milestone 13 changed here (Commerce Intelligence — Analyse, Recommend & Propose)
 
 Milestone 13's "AI proposal is untrusted input" requirement gets a

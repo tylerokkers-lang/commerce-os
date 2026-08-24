@@ -20,6 +20,7 @@ const TOPIC_KEYWORDS: Record<string, RegExp> = {
   opportunities: /opportunit|invest|new product/i,
   channels: /channel|marketplace|amazon|shopify/i,
   approvals: /approv/i,
+  advertising: /advertis|campaign|ad spend|roas|acos|tacos|ppc/i,
   financials: /revenue|profit|margin|financ|sales/i,
   priorities: /priorit|attention|risk/i,
 }
@@ -34,6 +35,13 @@ function leadingTopic(question: string): string | null {
 
 function section(title: string, lines: readonly string[]): string {
   return lines.length > 0 ? `${title}\n${lines.map((l) => `- ${l}`).join('\n')}` : ''
+}
+
+function advertisingLines(bundle: FactBundle): readonly string[] {
+  if (bundle.advertisingCampaigns.length === 0) return ['No advertising campaign data for this period.']
+  const notable = bundle.advertisingCampaigns.filter((c) => c.classification !== 'healthy').slice(0, 8)
+  if (notable.length === 0) return [`All ${bundle.advertisingCampaigns.length} campaign(s) are currently healthy — no waste, poor profitability, or decline detected.`]
+  return notable.map((c) => `${c.campaignName} on ${CHANNEL_LABELS[c.channel] ?? c.channel}: ${c.classification.toUpperCase()} — spend ${c.spend}, ROAS ${c.roas}${c.reasons.length ? `. ${c.reasons[0]}` : ''}`)
 }
 
 export function buildOfflineAnswer(bundle: FactBundle, question: string): string {
@@ -84,6 +92,12 @@ export function buildOfflineAnswer(bundle: FactBundle, question: string): string
       bundle.pendingApprovals.length > 0
         ? bundle.pendingApprovals.map((a) => `${a.title}${a.impact ? ` (${a.impact})` : ''}`)
         : ['Nothing awaiting approval.'],
+    ),
+    advertising: section(
+      bundle.advertisingScorecard
+        ? `Advertising — ${bundle.advertisingScorecard.overall.toUpperCase()} across ${bundle.advertisingScorecard.totalCampaigns} campaign(s), overall ROAS ${bundle.advertisingScorecard.overallRoas}, TACOS ${bundle.advertisingScorecard.tacosPct}`
+        : 'Advertising',
+      advertisingLines(bundle),
     ),
   }
 

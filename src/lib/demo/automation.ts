@@ -37,6 +37,8 @@ const RUNNING_SETTINGS: AutomationSettings = {
   maxDailyAutoSupplierSpendMinor: 100000,
   maxAutoSupplierSwitchCostIncreasePct: 10,
   minNetMarginPct: 10,
+  maxDailyAdSpendMinor: 5000,
+  minRoas: 3,
 }
 
 const PAUSED_SETTINGS: AutomationSettings = { ...RUNNING_SETTINGS, automationPaused: true, automationPausedReason: 'Owner paused automation while reviewing Q3 numbers' }

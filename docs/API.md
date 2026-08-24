@@ -196,7 +196,7 @@ itself enumerates every eligible row per page rather than a genuine SQL "is
 this one actually due" predicate — a real optimisation for future scale,
 not built yet.
 
-## `POST /api/chat` (Milestone 12 — Commerce Intelligence chat, Phase 1: read-only)
+## `POST /api/chat` (Milestone 12 — Commerce Intelligence chat, Phase 1: read-only; extended Milestone 13/14)
 
 Session-gated (`requireSession()`), unlike the two scheduler routes above —
 this one is reachable only by a logged-in org member (any role; matching
@@ -232,12 +232,14 @@ route is stateless — nothing is persisted server-side; see
 }
 ```
 
-`recommendations`/`proposedAction` (Milestone 13) are always present
-(possibly empty/`null`) and always deterministic — built by
-`src/lib/ai/actions/recommend.ts`/`validate.ts` directly from the same
-facts as `content`, never parsed out of whichever provider answered.
-`proposedAction` is a **preview only** — nothing is written by this route;
-see `POST` below for the one thing that is.
+`recommendations`/`proposedAction` (Milestone 13; extended Milestone 14 to
+also cover advertising campaigns — `targetEntityType: "advertising_campaign"`,
+`actionType: "REVIEW_CAMPAIGN"` alongside the existing product-targeting
+types) are always present (possibly empty/`null`) and always deterministic
+— built by `src/lib/ai/actions/recommend.ts`/`validate.ts` directly from
+the same facts as `content`, never parsed out of whichever provider
+answered. `proposedAction` is a **preview only** — nothing is written by
+this route; see `POST` below for the one thing that is.
 
 `400` for a malformed/invalid body, `401` for no session, `500` for an
 unexpected failure. A failure to reach the language model itself is never
@@ -270,8 +272,14 @@ pending-decision write, never an execution). The model itself is never
 given tool/function-calling access (`anthropicRequest.ts`'s
 `AnthropicCreateParams` has no `tools` field anywhere in this codebase),
 and — Milestone 13 — is never even asked to produce the structured
-proposal at all; `intentExtraction.ts` reads only the user's own message.
-See `docs/SECURITY.md`'s Milestone 12/13 sections for the full
+proposal at all; `intentExtraction.ts` reads only the user's own message,
+whether it names a product or (Milestone 14) an advertising campaign.
+`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` are recognised
+vocabulary but always resolve to `outcome: "not_executable"` — no
+advertising platform connector exists in this codebase to actually change
+a budget or pause state; only `REVIEW_CAMPAIGN` (a pure escalation,
+identical in kind to `REQUEST_APPROVAL`) can reach `requires_approval`.
+See `docs/SECURITY.md`'s Milestone 12/13/14 sections for the full
 threat-model writeup.
 
 ### Production infrastructure this route needs
@@ -282,5 +290,5 @@ fully implemented and tested, not a stub. Not live-verified against a real
 Anthropic account in this environment. A real Supabase project for
 `requestActionApproval` to do anything beyond an honest "demo mode has no
 database" message — not live-verified either, for the same reason; see
-`HANDOVER.md`'s Milestone 12/13 sections for exactly what was and was not
-exercised.
+`HANDOVER.md`'s Milestone 12/13/14 sections for exactly what was and was
+not exercised.

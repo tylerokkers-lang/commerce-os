@@ -1,6 +1,6 @@
 import type { ChannelKey } from '@/lib/core/domain'
 import type { FactBundle } from '../types'
-import type { ProposedActionType, RawActionIntent } from './types'
+import { CAMPAIGN_ACTION_TYPES, type ProposedActionType, type RawActionIntent } from './types'
 
 /**
  * Pure, deterministic parsing of the user's own most recent chat message —
@@ -9,12 +9,23 @@ import type { ProposedActionType, RawActionIntent } from './types'
  * milestone's answer to "the AI proposal is untrusted input": there is no
  * AI-authored structure here to distrust in the first place. Every field
  * this produces is either a fixed vocabulary member or a real, exact match
- * against `bundle.products`/`bundle.channels` — never a fuzzy guess, never
- * an id invented from thin air. Ambiguous or unmatched input produces
- * `null`, not a best-effort proposal.
+ * against `bundle.products`/`bundle.advertisingCampaigns`/`bundle.channels`
+ * — never a fuzzy guess, never an id invented from thin air. Ambiguous or
+ * unmatched input produces `null`, not a best-effort proposal.
+ *
+ * Campaign-specific patterns (budget/pause/review-campaign) are checked
+ * before their generic product-vocabulary counterparts (`UPDATE_PRICE`'s
+ * "increase/decrease", `PAUSE_LISTING`'s bare "pause",
+ * `REVIEW_ADVERTISING`'s bare "ad(s)") so "pause this campaign" and
+ * "increase the budget" resolve to the campaign-specific type, never the
+ * unrelated product one.
  */
 
 const ACTION_KEYWORDS: readonly { type: ProposedActionType; pattern: RegExp }[] = [
+  { type: 'INCREASE_BUDGET', pattern: /\b(increase|raise|up)\b.{0,20}\bbudget\b|\bbudget\b.{0,20}\b(increase|raise)\b/i },
+  { type: 'DECREASE_BUDGET', pattern: /\b(decrease|lower|cut|drop|reduce)\b.{0,20}\bbudget\b|\bbudget\b.{0,20}\b(decrease|lower|cut|drop|reduce)\b/i },
+  { type: 'PAUSE_CAMPAIGN', pattern: /\bpause\b.{0,20}\bcampaign\b|\bcampaign\b.{0,20}\bpause\b/i },
+  { type: 'REVIEW_CAMPAIGN', pattern: /\breview\b.{0,20}\bcampaign\b|\bcampaign\b.{0,20}\breview\b/i },
   { type: 'UPDATE_PRICE', pattern: /\b(increase|raise|put up|lower|decrease|cut|drop|reduce|change)\b.{0,20}\bprice\b|\bprice\b.{0,20}\b(increase|raise|lower|decrease|cut|drop|reduce|change)\b/i },
   { type: 'PAUSE_LISTING', pattern: /\bpause\b/i },
   { type: 'CREATE_LISTING', pattern: /\b(create|launch|publish|list)\b.{0,20}\blisting\b|\blist\b.{0,10}\bit\b/i },
@@ -56,14 +67,44 @@ function matchProduct(message: string, products: FactBundle['products']): FactBu
   return matches.length === 1 ? matches[0] : null
 }
 
+/** Same discipline as `matchProduct`, against real campaign names only (Milestone 14). */
+function matchCampaign(message: string, campaigns: FactBundle['advertisingCampaigns']): FactBundle['advertisingCampaigns'][number] | null {
+  const lower = message.toLowerCase()
+  const matches = campaigns.filter((c) => lower.includes(c.campaignName.toLowerCase()))
+  return matches.length === 1 ? matches[0] : null
+}
+
 function detectSign(message: string, actionType: ProposedActionType): 1 | -1 {
-  if (actionType !== 'UPDATE_PRICE') return 1
+  if (actionType !== 'UPDATE_PRICE' && actionType !== 'DECREASE_BUDGET' && actionType !== 'INCREASE_BUDGET') return 1
+  if (actionType === 'DECREASE_BUDGET') return -1
   return /\b(lower|decrease|cut|drop|reduce)\b/i.test(message) ? -1 : 1
 }
 
-export function extractActionIntent(userMessage: string, products: FactBundle['products']): RawActionIntent | null {
+export function extractActionIntent(
+  userMessage: string,
+  products: FactBundle['products'],
+  advertisingCampaigns: FactBundle['advertisingCampaigns'] = [],
+): RawActionIntent | null {
   const actionType = detectActionType(userMessage)
   if (!actionType) return null
+
+  const sign = detectSign(userMessage, actionType)
+  const pctMatch = userMessage.match(PERCENT_PATTERN)
+  const priceMatch = userMessage.match(PRICE_PATTERN)
+  const requestedPricePct = pctMatch ? sign * parseFloat(pctMatch[1]) : null
+  const requestedPriceMinor = priceMatch ? Math.round(parseFloat(priceMatch[1]) * 100) : null
+
+  if (CAMPAIGN_ACTION_TYPES.includes(actionType)) {
+    const campaign = matchCampaign(userMessage, advertisingCampaigns)
+    if (!campaign) return null
+    return {
+      actionType,
+      matchedProductId: null, matchedProductTitle: null,
+      matchedCampaignKey: campaign.campaignKey, matchedCampaignName: campaign.campaignName,
+      channel: campaign.channel as ChannelKey,
+      requestedPricePct, requestedPriceMinor,
+    }
+  }
 
   const product = matchProduct(userMessage, products)
   if (!product) return null
@@ -74,16 +115,11 @@ export function extractActionIntent(userMessage: string, products: FactBundle['p
     if (product.channels.length === 1) channel = product.channels[0].channel as ChannelKey
   }
 
-  const sign = detectSign(userMessage, actionType)
-  const pctMatch = userMessage.match(PERCENT_PATTERN)
-  const priceMatch = userMessage.match(PRICE_PATTERN)
-
   return {
     actionType,
-    matchedProductId: product.id,
-    matchedProductTitle: product.title,
+    matchedProductId: product.id, matchedProductTitle: product.title,
+    matchedCampaignKey: null, matchedCampaignName: null,
     channel,
-    requestedPricePct: pctMatch ? sign * parseFloat(pctMatch[1]) : null,
-    requestedPriceMinor: priceMatch ? Math.round(parseFloat(priceMatch[1]) * 100) : null,
+    requestedPricePct, requestedPriceMinor,
   }
 }

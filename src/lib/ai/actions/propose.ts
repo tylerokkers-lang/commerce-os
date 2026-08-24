@@ -43,10 +43,11 @@ export async function proposeAction(session: SessionContext, userMessage: string
   const [ceo, products] = await Promise.all([getCEOCommandCentre(), getProducts()])
   const bundle = buildFactBundle({
     ceo, orgName: session.orgName, opportunities: [], opportunitySummary: null, suppliers: [], products,
+    advertisingIntelligence: ceo.advertisingIntelligence,
     now: new Date().toISOString(),
   })
 
-  const intent = extractActionIntent(userMessage, bundle.products)
+  const intent = extractActionIntent(userMessage, bundle.products, bundle.advertisingCampaigns)
   if (!intent) return { error: 'Could not identify a specific, real product and action from that message. Name the product exactly as it appears in the catalogue, e.g. "increase the price of Magnetic Knife Rail by 10%".' }
 
   const validated = await validateActionIntent(session, intent, bundle)
@@ -57,7 +58,11 @@ export async function proposeAction(session: SessionContext, userMessage: string
     decisionType: validated.actionType === 'UPDATE_PRICE' ? 'update_price' : 'request_approval',
     entityType: validated.targetEntityType,
     entityId: validated.targetEntityId,
-    title: validated.actionType === 'UPDATE_PRICE' ? `Update price: ${validated.targetLabel}` : validated.reason,
+    title: validated.actionType === 'UPDATE_PRICE'
+      ? `Update price: ${validated.targetLabel}`
+      : validated.actionType === 'REVIEW_CAMPAIGN'
+        ? `Review campaign: ${validated.targetLabel}`
+        : validated.reason,
     detail: validated.reason,
     reasoning: `Proposed via Commerce Intelligence chat: "${userMessage}". ${validated.reason}`,
     confidence: validated.confidence === 'high' ? 0.9 : validated.confidence === 'medium' ? 0.6 : 0.3,

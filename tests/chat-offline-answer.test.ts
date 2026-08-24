@@ -9,7 +9,7 @@ function emptyBundle(overrides: Partial<FactBundle> = {}): FactBundle {
     generatedAt: NOW, isDemo: false, orgName: 'Test Co', dataSourceFailures: [], currencyCautions: [],
     overallHealth: 'healthy', healthAreas: [], executiveSummary: [],
     priorities: [], complianceIssues: [], channels: [], topOpportunities: [], opportunitySummary: null,
-    supplierRisk: [], pendingApprovals: [], products: [],
+    supplierRisk: [], pendingApprovals: [], products: [], advertisingCampaigns: [], advertisingScorecard: null,
     ...overrides,
   }
 }

@@ -45,7 +45,8 @@ export interface OrgSalesFacts {
   mixedCurrencies: readonly CurrencyCode[]
 }
 
-async function loadOrgCurrency(orgId: string): Promise<CurrencyCode> {
+/** Exported so `liveAdvertisingFacts.ts` (Milestone 14) resolves the org's base currency the same way every other live fact loader in this module already does, rather than a second copy. */
+export async function loadOrgCurrency(orgId: string): Promise<CurrencyCode> {
   const supabase = createServiceSupabase()
   const { data } = await supabase.from('organisations').select('base_currency').eq('id', orgId).maybeSingle()
   return (data?.base_currency ?? 'GBP') as CurrencyCode

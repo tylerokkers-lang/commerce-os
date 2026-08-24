@@ -12,8 +12,9 @@ import { demoCEOScenarios } from '@/lib/demo/ceo'
 import { resolvePeriod } from '@/lib/orders/salesAggregation'
 import { emptySalesAnalytics } from '@/lib/analytics/salesAnalytics'
 import { buildFulfilmentAnalytics } from '@/lib/analytics/fulfilmentAnalytics'
-import { unavailableAdvertisingAnalytics } from '@/lib/analytics/advertisingAnalytics'
+import { unavailableAdvertisingAnalytics, buildAdvertisingScorecard } from '@/lib/analytics/advertisingAnalytics'
 import { unknownDataQualitySummary } from '@/lib/analytics/dataQuality'
+import { getAdvertisingIntelligence, type AdvertisingIntelligence } from '@/lib/analytics/repository'
 import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import type { CEOCommandCentre, ExecutiveSummary, RecentActivityItem, ActivityCategory } from './types'
 import type { DomainEventRow } from '@/lib/monitoring/repository'
@@ -52,6 +53,11 @@ function fallbackMonitoringStatus(): MonitoringStatus {
   }
 }
 
+function fallbackAdvertisingIntelligence(): AdvertisingIntelligence {
+  const period = resolvePeriod('last_30_days', new Date())
+  return { isDemo: false, period, campaigns: [], scorecard: buildAdvertisingScorecard([], null, 'GBP'), demoScenarios: [] }
+}
+
 function fallbackAutomationStatus(): AutomationStatus {
   return {
     isDemo: false, settings: DEMO_AUTOMATION_SETTINGS,
@@ -85,12 +91,13 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
   const session = await requireSession()
   const now = new Date().toISOString()
 
-  const [analyticsResult, monitoringResult, automationResult, approvalsResult, complianceResult] = await Promise.allSettled([
+  const [analyticsResult, monitoringResult, automationResult, approvalsResult, complianceResult, advertisingResult] = await Promise.allSettled([
     getAnalyticsDashboard(),
     getMonitoringStatus(),
     getAutomationStatus(),
     getPendingApprovals(),
     getComplianceIssues(),
+    getAdvertisingIntelligence(),
   ])
 
   const dataSourceFailures: string[] = []
@@ -99,15 +106,17 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
   if (automationResult.status === 'rejected') dataSourceFailures.push('automation')
   if (approvalsResult.status === 'rejected') dataSourceFailures.push('approvals')
   if (complianceResult.status === 'rejected') dataSourceFailures.push('compliance')
+  if (advertisingResult.status === 'rejected') dataSourceFailures.push('advertising')
 
   const analytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : fallbackAnalyticsDashboard()
   const monitoring = monitoringResult.status === 'fulfilled' ? monitoringResult.value : fallbackMonitoringStatus()
   const automation = automationResult.status === 'fulfilled' ? automationResult.value : fallbackAutomationStatus()
   const approvals = approvalsResult.status === 'fulfilled' ? approvalsResult.value : []
   const complianceIssues = complianceResult.status === 'fulfilled' ? complianceResult.value : []
+  const advertisingIntelligence = advertisingResult.status === 'fulfilled' ? advertisingResult.value : fallbackAdvertisingIntelligence()
 
-  const priorities = buildPriorities({ analytics, monitoring, automation, approvals, complianceIssues, now })
-  const businessHealth = buildBusinessHealthScorecard({ analytics, monitoring, automation, complianceIssues })
+  const priorities = buildPriorities({ analytics, monitoring, automation, approvals, complianceIssues, advertisingIntelligence, now })
+  const businessHealth = buildBusinessHealthScorecard({ analytics, monitoring, automation, complianceIssues, advertisingIntelligence })
   const executiveSummary = buildExecutiveSummary(analytics)
   const recentActivity = buildRecentActivity(monitoring.recentEvents, automation.recentActions)
 
@@ -124,6 +133,7 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
     automationHealth: automation,
     approvals,
     complianceIssues,
+    advertisingIntelligence,
     dataQuality: analytics.dataQuality,
     recentActivity,
     demoScenarios: session.isDemo ? demoCEOScenarios() : [],

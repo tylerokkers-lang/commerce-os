@@ -41,13 +41,20 @@ function complianceStatusFor(productId: string, channel: string, bundle: Complia
   return issue.verdict === 'fail' ? 'blocked' : 'review_required'
 }
 
+/** Exactly one of the two match pairs on a `RawActionIntent` is ever populated (see `types.ts`'s module comment) — this resolves whichever one it is into the generic target shape every `ProposedAction` carries. */
+function targetOf(intent: RawActionIntent): { type: 'product' | 'advertising_campaign'; id: string; label: string } {
+  if (intent.matchedCampaignKey) return { type: 'advertising_campaign', id: intent.matchedCampaignKey, label: intent.matchedCampaignName ?? intent.matchedCampaignKey }
+  return { type: 'product', id: intent.matchedProductId ?? '', label: intent.matchedProductTitle ?? '' }
+}
+
 function invalid(intent: RawActionIntent, reason: string): ProposedAction {
+  const target = targetOf(intent)
   return {
     id: `invalid:${Date.now()}`,
     actionType: intent.actionType,
-    targetEntityType: 'product',
-    targetEntityId: intent.matchedProductId,
-    targetLabel: intent.matchedProductTitle,
+    targetEntityType: target.type,
+    targetEntityId: target.id,
+    targetLabel: target.label,
     channel: intent.channel,
     currentState: [], proposedState: [],
     reason,
@@ -64,7 +71,10 @@ function invalid(intent: RawActionIntent, reason: string): ProposedAction {
 }
 
 async function validateUpdatePrice(session: SessionContext, intent: RawActionIntent, bundle: ComplianceContext): Promise<ProposedAction> {
-  if (!intent.channel) return invalid(intent, `Which channel? ${intent.matchedProductTitle} is listed on more than one — say "on Amazon UK" or "on Shopify".`)
+  if (!intent.matchedProductId || !intent.matchedProductTitle) return invalid(intent, 'No product was matched for this price change.')
+  const matchedProductId = intent.matchedProductId
+  const matchedProductTitle = intent.matchedProductTitle
+  if (!intent.channel) return invalid(intent, `Which channel? ${matchedProductTitle} is listed on more than one — say "on Amazon UK" or "on Shopify".`)
   if (intent.requestedPriceMinor === null && intent.requestedPricePct === null) {
     return invalid(intent, `A price change needs a specific amount — try "by 10%" or "to £27.49".`)
   }
@@ -80,29 +90,29 @@ async function validateUpdatePrice(session: SessionContext, intent: RawActionInt
   }
 
   const { rows } = await loadProductChannelProfitFacts(session.orgId)
-  const row = rows.find((r) => r.productId === intent.matchedProductId && r.channel === intent.channel)
-  if (!row) return invalid(intent, `${intent.matchedProductTitle} has no live listing/cost data on ${intent.channel} to price against.`)
+  const row = rows.find((r) => r.productId === matchedProductId && r.channel === intent.channel)
+  if (!row) return invalid(intent, `${matchedProductTitle} has no live listing/cost data on ${intent.channel} to price against.`)
 
   const settings = await getAutomationSettings(session)
   const priceCostInput = toPriceCostInput(row, settings.minNetMarginPct)
-  if (priceCostInput.sellingPriceMinor === null) return invalid(intent, `${intent.matchedProductTitle} has no live listing price on ${intent.channel} on file.`)
+  if (priceCostInput.sellingPriceMinor === null) return invalid(intent, `${matchedProductTitle} has no live listing price on ${intent.channel} on file.`)
 
-  const before = buildProductChannelProfitAnalytics(intent.matchedProductId, intent.channel, priceCostInput)
+  const before = buildProductChannelProfitAnalytics(matchedProductId, intent.channel, priceCostInput)
   if (!isKnown(before.projection)) {
-    return invalid(intent, `Cannot assess a price change for ${intent.matchedProductTitle} on ${intent.channel}: ${before.projection.source}.`)
+    return invalid(intent, `Cannot assess a price change for ${matchedProductTitle} on ${intent.channel}: ${before.projection.source}.`)
   }
 
   const oldPriceMinor = priceCostInput.sellingPriceMinor
   const newPriceMinor = intent.requestedPriceMinor ?? Math.round(oldPriceMinor * (1 + intent.requestedPricePct! / 100))
   if (newPriceMinor <= 0) return invalid(intent, 'The requested price is not a valid positive amount.')
 
-  const after = buildProductChannelProfitAnalytics(intent.matchedProductId, intent.channel, { ...priceCostInput, sellingPriceMinor: newPriceMinor })
+  const after = buildProductChannelProfitAnalytics(matchedProductId, intent.channel, { ...priceCostInput, sellingPriceMinor: newPriceMinor })
   if (!isKnown(after.projection)) {
-    return invalid(intent, `Cannot assess the proposed price for ${intent.matchedProductTitle} on ${intent.channel}: ${after.projection.source}.`)
+    return invalid(intent, `Cannot assess the proposed price for ${matchedProductTitle} on ${intent.channel}: ${after.projection.source}.`)
   }
 
   const assessment = assessPriceChangePolicy({
-    productTitle: intent.matchedProductTitle,
+    productTitle: matchedProductTitle,
     before: before.projection.value.profitability,
     after: after.projection.value.profitability,
     oldPriceMinor, newPriceMinor,
@@ -123,17 +133,17 @@ async function validateUpdatePrice(session: SessionContext, intent: RawActionInt
   }))
 
   const outcome = assessment.policy.outcome === 'block' ? 'blocked' : 'requires_approval'
-  const compliance = complianceStatusFor(intent.matchedProductId, intent.channel, bundle)
+  const compliance = complianceStatusFor(matchedProductId, intent.channel, bundle)
 
   return {
-    id: `propose:update_price:${intent.matchedProductId}:${intent.channel}:${Date.now()}`,
+    id: `propose:update_price:${matchedProductId}:${intent.channel}:${Date.now()}`,
     actionType: 'UPDATE_PRICE',
-    targetEntityType: 'product', targetEntityId: intent.matchedProductId, targetLabel: intent.matchedProductTitle, channel: intent.channel,
+    targetEntityType: 'product', targetEntityId: matchedProductId, targetLabel: matchedProductTitle, channel: intent.channel,
     currentState, proposedState,
     reason: assessment.policy.reason,
     supportingFacts,
     risk: compliance === 'blocked'
-      ? `${intent.matchedProductTitle} is currently BLOCKED by compliance on ${intent.channel} for an unrelated reason — a price change here does not resolve that block.`
+      ? `${matchedProductTitle} is currently BLOCKED by compliance on ${intent.channel} for an unrelated reason — a price change here does not resolve that block.`
       : 'A price change may affect conversion and unit sales — not modelled here.',
     complianceStatus: compliance,
     confidence: assessment.before.netMarginPct !== null && assessment.after.netMarginPct !== null ? 'high' : 'low',
@@ -145,22 +155,27 @@ async function validateUpdatePrice(session: SessionContext, intent: RawActionInt
   }
 }
 
+const REVIEW_ONLY_REASONS: Partial<Record<RawActionIntent['actionType'], string>> = {
+  CREATE_LISTING: 'Creating a new listing needs lifecycle stage, supplier capability and a full compliance assessment resolved together — this chat does not yet assemble all three for an arbitrary product on demand. Review on /products and /compliance.',
+  PAUSE_LISTING: 'Pausing a listing runs through the same publication-readiness engine as publishing — not yet wired to an arbitrary chat-initiated target in this milestone. Review on /automation.',
+  ADJUST_INVENTORY_THRESHOLD: 'Inventory thresholds are an organisation-wide setting, not a per-product action — change it on /settings.',
+  REVIEW_ADVERTISING: 'No advertising connector exists in this codebase yet (Milestone 10/11) — there is no live spend data to act on.',
+  REVIEW_SUPPLIER: 'Supplier review is a manual judgement call — see /suppliers for the full scoring detail.',
+  REVIEW_PRODUCT: 'Review this product directly — see /products for full detail.',
+  PAUSE_CAMPAIGN: 'Pausing a campaign would need a live advertising platform connector to actually change — this codebase has none yet (Milestone 14), so pausing here would only update an internal record, not the real campaign. Review on /advertising instead.',
+  INCREASE_BUDGET: 'Changing a campaign budget would need a live advertising platform connector — none exists yet. Review on /advertising instead.',
+  DECREASE_BUDGET: 'Changing a campaign budget would need a live advertising platform connector — none exists yet. Review on /advertising instead.',
+}
+
 function reviewOnly(intent: RawActionIntent, bundle: ComplianceContext): ProposedAction {
-  const compliance = intent.channel ? complianceStatusFor(intent.matchedProductId, intent.channel, bundle) : 'unknown'
-  const reasons: Record<string, string> = {
-    CREATE_LISTING: 'Creating a new listing needs lifecycle stage, supplier capability and a full compliance assessment resolved together — this chat does not yet assemble all three for an arbitrary product on demand. Review on /products and /compliance.',
-    PAUSE_LISTING: 'Pausing a listing runs through the same publication-readiness engine as publishing — not yet wired to an arbitrary chat-initiated target in this milestone. Review on /automation.',
-    ADJUST_INVENTORY_THRESHOLD: 'Inventory thresholds are an organisation-wide setting, not a per-product action — change it on /settings.',
-    REVIEW_ADVERTISING: 'No advertising connector exists in this codebase yet (Milestone 10/11) — there is no live spend data to act on.',
-    REVIEW_SUPPLIER: 'Supplier review is a manual judgement call — see /suppliers for the full scoring detail.',
-    REVIEW_PRODUCT: 'Review this product directly — see /products for full detail.',
-  }
+  const target = targetOf(intent)
+  const compliance = intent.channel && target.type === 'product' ? complianceStatusFor(target.id, intent.channel, bundle) : 'unknown'
   return {
-    id: `review:${intent.actionType}:${intent.matchedProductId}:${Date.now()}`,
+    id: `review:${intent.actionType}:${target.id}:${Date.now()}`,
     actionType: intent.actionType,
-    targetEntityType: 'product', targetEntityId: intent.matchedProductId, targetLabel: intent.matchedProductTitle, channel: intent.channel,
+    targetEntityType: target.type, targetEntityId: target.id, targetLabel: target.label, channel: intent.channel,
     currentState: [], proposedState: [],
-    reason: reasons[intent.actionType] ?? 'Not currently executable through this chat.',
+    reason: REVIEW_ONLY_REASONS[intent.actionType] ?? 'Not currently executable through this chat.',
     supportingFacts: [],
     risk: '',
     complianceStatus: compliance,
@@ -173,19 +188,16 @@ function reviewOnly(intent: RawActionIntent, bundle: ComplianceContext): Propose
   }
 }
 
-export async function validateActionIntent(session: SessionContext, intent: RawActionIntent, bundle: ComplianceContext): Promise<ProposedAction> {
-  if (!EXECUTABLE_ACTION_TYPES.includes(intent.actionType)) return reviewOnly(intent, bundle)
-
-  if (intent.actionType === 'UPDATE_PRICE') return validateUpdatePrice(session, intent, bundle)
-
-  // REQUEST_APPROVAL: a pure escalation, no domain policy to check — always proposable for a real, matched entity.
-  const compliance = intent.channel ? complianceStatusFor(intent.matchedProductId, intent.channel, bundle) : 'unknown'
+/** REQUEST_APPROVAL and REVIEW_CAMPAIGN: pure escalations, no domain policy to check beyond a real, matched entity — both dispatch through the same shape, differing only in which entity was matched. */
+function validateEscalation(intent: RawActionIntent, bundle: ComplianceContext): ProposedAction {
+  const target = targetOf(intent)
+  const compliance = intent.channel && target.type === 'product' ? complianceStatusFor(target.id, intent.channel, bundle) : 'unknown'
   return {
-    id: `propose:request_approval:${intent.matchedProductId}:${Date.now()}`,
-    actionType: 'REQUEST_APPROVAL',
-    targetEntityType: 'product', targetEntityId: intent.matchedProductId, targetLabel: intent.matchedProductTitle, channel: intent.channel,
+    id: `propose:${intent.actionType.toLowerCase()}:${target.id}:${Date.now()}`,
+    actionType: intent.actionType,
+    targetEntityType: target.type, targetEntityId: target.id, targetLabel: target.label, channel: intent.channel,
     currentState: [], proposedState: [],
-    reason: `Flag ${intent.matchedProductTitle} for the owner's attention.`,
+    reason: `Flag ${target.label} for the owner's attention.`,
     supportingFacts: [],
     risk: 'This only raises the item for review — it does not change anything by itself.',
     complianceStatus: compliance,
@@ -196,4 +208,13 @@ export async function validateActionIntent(session: SessionContext, intent: RawA
     executable: true,
     approvalId: null,
   }
+}
+
+export async function validateActionIntent(session: SessionContext, intent: RawActionIntent, bundle: ComplianceContext): Promise<ProposedAction> {
+  if (!EXECUTABLE_ACTION_TYPES.includes(intent.actionType)) return reviewOnly(intent, bundle)
+
+  if (intent.actionType === 'UPDATE_PRICE') return validateUpdatePrice(session, intent, bundle)
+
+  // REQUEST_APPROVAL / REVIEW_CAMPAIGN.
+  return validateEscalation(intent, bundle)
 }

@@ -71,6 +71,9 @@ export async function askCommerceIntelligence(conversation: readonly ChatMessage
     opportunitySummary: summaryResult.status === 'fulfilled' ? summaryResult.value : null,
     suppliers: suppliersResult.status === 'fulfilled' ? suppliersResult.value : [],
     products: productsResult.status === 'fulfilled' ? productsResult.value : [],
+    // Milestone 14 — already composed into CEOCommandCentre (ceo/repository.ts's
+    // own Promise.allSettled), never a second advertising query here.
+    advertisingIntelligence: ceoResult.value.advertisingIntelligence,
     now: new Date().toISOString(),
   })
 
@@ -79,7 +82,7 @@ export async function askCommerceIntelligence(conversation: readonly ChatMessage
   const references = deriveReferences(bundle)
   const question = conversation[conversation.length - 1]?.content ?? ''
   const offlineAnswer = buildOfflineAnswer(bundle, question)
-  const bundleHasSubstance = bundle.priorities.length > 0 || bundle.complianceIssues.length > 0 || bundle.topOpportunities.length > 0 || bundle.supplierRisk.length > 0
+  const bundleHasSubstance = bundle.priorities.length > 0 || bundle.complianceIssues.length > 0 || bundle.topOpportunities.length > 0 || bundle.supplierRisk.length > 0 || bundle.advertisingCampaigns.length > 0
 
   // Milestone 13, Phases 2/3 — entirely deterministic, entirely independent
   // of which provider answers `content` below (or whether it answers at
@@ -91,7 +94,7 @@ export async function askCommerceIntelligence(conversation: readonly ChatMessage
   // `proposeAction` Server Action (`ai/actions/propose.ts`), which
   // re-validates from scratch rather than trusting this preview.
   const recommendations = buildRecommendations(bundle)
-  const intent = extractActionIntent(question, bundle.products)
+  const intent = extractActionIntent(question, bundle.products, bundle.advertisingCampaigns)
   const proposedAction = intent ? await validateActionIntent(session, intent, bundle) : null
 
   if (!isConfigured('anthropic')) {
