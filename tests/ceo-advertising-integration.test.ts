@@ -61,6 +61,7 @@ function baseAutomation(overrides: Partial<AutomationStatus> = {}): AutomationSt
     risk: { failedActions: 0, blockedActions: 0, deadLetterJobs: 0 },
     recentActions: [], pendingJobs: [], demoScenarios: [],
     productionReadiness: { schedulerConfigured: true, jobsByStatus: {}, externalActionsByVerification: {}, connectors: [] },
+    recoveryRequired: [],
     ...overrides,
   }
 }

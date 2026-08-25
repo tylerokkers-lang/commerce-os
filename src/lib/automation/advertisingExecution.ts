@@ -101,6 +101,7 @@ export async function proposeCampaignAction(input: CampaignActionInput, settings
     connectionStatus: input.request.connectionStatus,
     dataAgeHours: input.request.dataAgeHours,
     roas: input.request.roas,
+    metricsSnapshot: input.request.metricsSnapshot ?? null,
     thresholds: thresholdsSnapshot(settings),
   }
 

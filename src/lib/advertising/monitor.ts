@@ -6,7 +6,9 @@ import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
 import { proposeCampaignAction } from '@/lib/automation/advertisingExecution'
 import { loadFreshCampaignFacts, loadConnectionStatus } from '@/lib/automation/handlers/advertisingApprovalExecutor'
+import { MAX_CAMPAIGN_DATA_AGE_HOURS } from '@/lib/automation/advertisingAutomation'
 import { recommendedActionForClassification } from './monitorPlan'
+import { isKnown } from '@/lib/analytics/types'
 import { randomUUID } from 'node:crypto'
 import type { AdvertisingPlatform } from '@/lib/analytics/advertisingAnalytics'
 
@@ -42,6 +44,15 @@ export interface CampaignReviewResult {
   recommendationsCreated: number
   duplicatesAvoided: number
   blocked: number
+  /**
+   * Phase 10 — campaigns skipped specifically because their synced data
+   * exceeded `MAX_CAMPAIGN_DATA_AGE_HOURS`, counted separately from
+   * `blocked` (every other safety gate). `proposeCampaignAction` is never
+   * even called for these — "do not recommend" on stale data is enforced
+   * by not attempting a proposal at all, not by attempting one and
+   * discovering it gets blocked.
+   */
+  blockedByFreshness: number
   errors: string[]
 }
 
@@ -56,7 +67,7 @@ export interface CampaignReviewResult {
  */
 export async function runCampaignReview(orgId: string): Promise<CampaignReviewResult> {
   const result: CampaignReviewResult = {
-    orgId, campaignsEvaluated: 0, campaignsSkipped: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0, errors: [],
+    orgId, campaignsEvaluated: 0, campaignsSkipped: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0, blockedByFreshness: 0, errors: [],
   }
 
   let intelligence: Awaited<ReturnType<typeof getAdvertisingIntelligenceForOrg>>
@@ -97,6 +108,20 @@ export async function runCampaignReview(orgId: string): Promise<CampaignReviewRe
         connectionStatusCache.set(identity.provider, connectionStatus)
       }
       const freshFacts = await loadFreshCampaignFacts(orgId, identity.channel, identity.provider, identity.externalAccountId, identity.externalId)
+      const dataAgeHours = freshFacts?.dataAgeHours ?? null
+
+      if (dataAgeHours === null || dataAgeHours > MAX_CAMPAIGN_DATA_AGE_HOURS) {
+        // Phase 10 — never turn stale data into a recommendation attempt.
+        // The exact same freshness limit `assessCampaignActionPolicy`
+        // itself enforces (`advertisingAutomation.ts`'s `data_fresh` gate)
+        // — checked here only to skip *before* proposing, not to
+        // re-decide anything; a proposal for stale data would still be
+        // correctly blocked downstream, this only makes "why" honestly
+        // countable and avoids creating a decision record for data the
+        // monitor already knows is too old to act on.
+        result.blockedByFreshness++
+        continue
+      }
 
       const proposal = await proposeCampaignAction(
         {
@@ -116,7 +141,22 @@ export async function runCampaignReview(orgId: string): Promise<CampaignReviewRe
             isPaused: freshFacts?.isPaused ?? identity.isPaused,
             connectionStatus,
             dataAgeHours: freshFacts?.dataAgeHours ?? null,
-            roas: null,
+            roas: isKnown(fact.roas) ? fact.roas.value : null,
+            // Phase 9 — the fuller snapshot behind this recommendation,
+            // straight from the same real classification engine's own
+            // `fact`; never re-derived, never guessed for a field that
+            // came back `unavailable`.
+            metricsSnapshot: {
+              spendMinor: isKnown(fact.spend) ? fact.spend.value.minor : null,
+              attributedRevenueMinor: isKnown(fact.attributedRevenue) ? fact.attributedRevenue.value.minor : null,
+              acosPct: isKnown(fact.acosPct) ? fact.acosPct.value : null,
+              cpaMinor: isKnown(fact.cpa) ? fact.cpa.value.minor : null,
+              averageOrderValueMinor: isKnown(fact.averageOrderValue) ? fact.averageOrderValue.value.minor : null,
+              impressions: isKnown(fact.impressions) ? fact.impressions.value : null,
+              clicks: isKnown(fact.clicks) ? fact.clicks.value : null,
+              conversions: isKnown(fact.conversions) ? fact.conversions.value : null,
+              dataAsOf: fact.windowEnd,
+            },
           },
         },
         settings,
@@ -169,9 +209,10 @@ export async function runCampaignReviewForConnectedOrgs(): Promise<MultiOrgCampa
       recommendationsCreated: acc.recommendationsCreated + r.recommendationsCreated,
       duplicatesAvoided: acc.duplicatesAvoided + r.duplicatesAvoided,
       blocked: acc.blocked + r.blocked,
+      blockedByFreshness: acc.blockedByFreshness + r.blockedByFreshness,
       errors: [...acc.errors, ...r.errors],
     }),
-    { orgId: 'all', campaignsEvaluated: 0, campaignsSkipped: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0, errors: [] },
+    { orgId: 'all', campaignsEvaluated: 0, campaignsSkipped: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0, blockedByFreshness: 0, errors: [] },
   )
 
   return { organisationsEvaluated: orgIds.length, providersChecked, totals, perOrg }

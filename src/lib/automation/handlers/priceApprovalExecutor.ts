@@ -44,14 +44,15 @@ export interface ApprovedPriceDecision {
   newPriceMinor: number
 }
 
-interface ResolvedChannelProduct {
+export interface ResolvedChannelProduct {
   channelProductId: string
   productId: string
   channel: ChannelKey
   externalId: string | null
 }
 
-async function resolveChannelProduct(orgId: string, decision: ApprovedPriceDecision): Promise<ResolvedChannelProduct | null> {
+/** Exported for reuse by `automation/recovery.ts` (Milestone 17), which needs the exact same `entityType: 'channel_product' | 'product'` resolution this executor uses — never a second implementation of it. */
+export async function resolveChannelProduct(orgId: string, decision: Pick<ApprovedPriceDecision, 'entityType' | 'entityId' | 'channelHint'>): Promise<ResolvedChannelProduct | null> {
   const supabase = createServiceSupabase()
 
   if (decision.entityType === 'channel_product') {

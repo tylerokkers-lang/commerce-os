@@ -123,6 +123,24 @@ export interface CompleteActionOutcome {
   reconciliationStatus?: ReconciliationStatus
 }
 
+/**
+ * Milestone 17 — the outcome of re-checking one action stuck in
+ * `executing`. Reuses `AutomationActionStatus`'s existing `'retry_pending'`
+ * value (reserved since migration 0019's `SafeFailureState` — never a
+ * value the codebase actually set until now) for the genuinely-unknown
+ * case, rather than a new column or enum value.
+ */
+export interface RecoveryOutcomeInput {
+  status: 'succeeded' | 'failed' | 'retry_pending'
+  error: string | null
+  orgId: string
+  entityType: string
+  entityId: string | null
+  externalRef?: string | null
+  verificationStatus: VerificationStatus
+  reconciliationStatus: ReconciliationStatus
+}
+
 /** A patch to our own record of a channel listing, applied only after a write has been verified — never speculatively. */
 export interface ChannelProductReconciliation {
   orgId: string
@@ -239,4 +257,21 @@ export interface AutomationStore {
   reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void>
   /** The advertising equivalent of `reconcileChannelProduct` (Milestone 15) — same SUBMIT -> VERIFY -> RECONCILE discipline, never called speculatively. */
   reconcileAdvertisingCampaign(input: AdvertisingCampaignReconciliation): Promise<void>
+  /**
+   * Milestone 17 — every `automation_actions` row still `status: 'executing'`
+   * and created before `olderThanIso`, restricted to `actionTypes` (the
+   * domains that actually have a real provider write + verify path;
+   * anything else stuck `executing` is a different subsystem's concern).
+   */
+  findStuckExecutingActions(olderThanIso: string, actionTypes: readonly AutomationActionType[]): Promise<readonly ActionRecord[]>
+  /**
+   * Records what the reaper (`automation/recovery.ts`) learned about one
+   * stuck action, moving it out of `executing` — but only if it is *still*
+   * `executing` at the moment of the write (a compare-and-swap on
+   * `status`, not a blind update). `applied: false` means another
+   * concurrent recovery pass already claimed and resolved this exact row;
+   * the caller must not reconcile or audit a row it did not actually just
+   * transition, which is what makes running the reaper twice at once safe.
+   */
+  recordRecoveryOutcome(actionId: string, input: RecoveryOutcomeInput): Promise<{ applied: boolean }>
 }

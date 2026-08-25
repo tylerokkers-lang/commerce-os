@@ -621,7 +621,32 @@ export default async function AutomationPage() {
         <StatTile label="Blocked actions" value={String(status.risk.blockedActions)} tone={status.risk.blockedActions > 0 ? 'negative' : 'neutral'} />
         <StatTile label="Dead-lettered jobs" value={String(status.risk.deadLetterJobs)} tone={status.risk.deadLetterJobs > 0 ? 'negative' : 'neutral'} />
         <StatTile label="Suppliers switched" value={String(status.today.suppliersSwitched)} sublabel={`${status.today.productsPaused} products paused`} />
+        <StatTile label="Recovery required" value={String(status.recoveryRequired.length)} tone={status.recoveryRequired.length > 0 ? 'negative' : 'neutral'} />
       </div>
+
+      {status.recoveryRequired.length > 0 ? (
+        <Card className="border-negative/30 bg-negative-soft">
+          <CardHeader
+            title="Execution recovery required"
+            description="Actions the reaper could not confirm the outcome of, or has not reached yet. Never assumed successful or failed — a genuinely unknown provider result requires manual review before this product/campaign is touched again."
+          />
+          <ul className="divide-y divide-border border-t border-border">
+            {status.recoveryRequired.map((action) => (
+              <li key={action.id}>
+                <Link href={`/automation/${action.id}`} className="flex items-center justify-between gap-3 px-5 py-3 text-sm hover:bg-surface-muted">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{action.action_type.replace(/_/g, ' ')} — {action.entity_type} {action.entity_id ?? ''}</p>
+                    <p className="truncate text-xs text-ink-muted">{action.error ?? action.reason}</p>
+                  </div>
+                  <Badge tone={action.status === 'executing' ? 'caution' : 'negative'}>
+                    {action.status === 'executing' ? 'Still executing' : 'Unknown provider result — review required'}
+                  </Badge>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       {status.isDemo ? (
         <>

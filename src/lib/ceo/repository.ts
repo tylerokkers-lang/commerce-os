@@ -65,6 +65,7 @@ function fallbackAutomationStatus(): AutomationStatus {
     risk: { failedActions: 0, blockedActions: 0, deadLetterJobs: 0 },
     recentActions: [], pendingJobs: [], demoScenarios: [],
     productionReadiness: { schedulerConfigured: false, jobsByStatus: {}, externalActionsByVerification: {}, connectors: [] },
+    recoveryRequired: [],
   }
 }
 

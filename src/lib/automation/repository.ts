@@ -36,6 +36,16 @@ export interface AutomationStatus {
   pendingJobs: readonly AutomationJob[]
   demoScenarios: readonly AnyDemoScenario[]
   productionReadiness: ProductionReadiness
+  /**
+   * Milestone 17 — actions the execution reaper (`automation/recovery.ts`)
+   * either could not classify (`status: 'retry_pending'`, genuinely
+   * unknown provider result — see that module's own comment) or has not
+   * reached yet (`status: 'executing'`, still within the recovery
+   * threshold, or a genuinely still-in-flight request). Never presented as
+   * a fake "successful" state — this section exists precisely so it is
+   * never silently invisible.
+   */
+  recoveryRequired: readonly AutomationAction[]
 }
 
 /**
@@ -82,6 +92,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
       pendingJobs: [],
       demoScenarios: demoAutomationScenarios(),
       productionReadiness: { schedulerConfigured: false, jobsByStatus: {}, externalActionsByVerification: {}, connectors: connectorSummaries },
+      recoveryRequired: [],
     }
   }
 
@@ -89,12 +100,13 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
   const startOfDay = new Date()
   startOfDay.setUTCHours(0, 0, 0, 0)
 
-  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }] = await Promise.all([
+  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }, { data: recoveryRequired }] = await Promise.all([
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).gte('created_at', startOfDay.toISOString()),
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).order('created_at', { ascending: false }).limit(25),
     supabase.from('automation_jobs').select('*').eq('org_id', session.orgId).in('status', ['pending', 'running']).order('run_at', { ascending: true }).limit(25),
     supabase.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('org_id', session.orgId).eq('status', 'dead_letter'),
     supabase.from('automation_jobs').select('status').eq('org_id', session.orgId),
+    supabase.from('automation_actions').select('*').eq('org_id', session.orgId).in('status', ['retry_pending', 'executing']).order('created_at', { ascending: false }).limit(25),
   ])
 
   const jobsByStatus: Record<string, number> = {}
@@ -132,6 +144,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
     pendingJobs: pendingJobs ?? [],
     demoScenarios: [],
     productionReadiness: { schedulerConfigured, jobsByStatus, externalActionsByVerification, connectors: connectorSummaries },
+    recoveryRequired: recoveryRequired ?? [],
   }
 }
 

@@ -16,6 +16,7 @@ import {
   type JobRecord,
   type NotifyInput,
   type ProposeApprovalInput,
+  type RecoveryOutcomeInput,
 } from './store'
 import type { AutomationActionType } from './types'
 import type { AutomationSettings } from './settingsTypes'
@@ -341,6 +342,46 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
         reason: "Reconciled local record with the advertising platform's verified state after an automated write.",
         occurredAt: new Date().toISOString(),
       })
+    },
+
+    async findStuckExecutingActions(olderThanIso: string, actionTypes: readonly AutomationActionType[]): Promise<readonly ActionRecord[]> {
+      const olderThanMs = Date.parse(olderThanIso)
+      return actions
+        .filter((a) => a.status === 'executing' && Date.parse(a.createdAt) < olderThanMs && actionTypes.includes(a.actionType))
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    },
+
+    async recordRecoveryOutcome(actionId: string, input: RecoveryOutcomeInput): Promise<{ applied: boolean }> {
+      const index = actions.findIndex((a) => a.id === actionId)
+      if (index === -1) return { applied: false }
+      // The compare-and-swap the real store's `.eq('status', 'executing')` performs.
+      if (actions[index].status !== 'executing') return { applied: false }
+
+      const nowIso = new Date().toISOString()
+      actions[index] = {
+        ...actions[index],
+        status: input.status,
+        error: input.error,
+        completedAt: nowIso,
+        externalRef: input.externalRef ?? actions[index].externalRef,
+        verificationStatus: input.verificationStatus,
+        reconciliationStatus: input.reconciliationStatus,
+      }
+
+      auditLog.push({
+        orgId: input.orgId,
+        action: input.status === 'succeeded' ? 'AUTOMATION_ACTION_EXECUTED' : input.status === 'failed' ? 'AUTOMATION_ACTION_FAILED' : 'EXECUTION_RESULT_UNKNOWN',
+        entityType: input.entityType,
+        entityId: input.entityId ?? undefined,
+        actorType: 'system',
+        reason: input.error ?? 'Recovery outcome recorded.',
+        result: input.status === 'succeeded' ? 'success' : input.status === 'failed' ? 'failure' : 'blocked',
+        error: input.error ?? undefined,
+        metadata: { automationActionId: actionId },
+        occurredAt: nowIso,
+      })
+
+      return { applied: true }
     },
 
     setAutomationSettings(orgId: string, settings: AutomationSettings) {

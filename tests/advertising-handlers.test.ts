@@ -132,7 +132,7 @@ describe('handleAdvertisingCampaignReview (Phases 5-7 — the automatic monitor 
     const store = createInMemoryAutomationStore()
     const result = await handleAdvertisingCampaignReview(job({ jobType: 'advertising_campaign_review' }), store, undefined, undefined, undefined, {
       runSync: async () => ({ succeeded: true, error: null }),
-      runCampaignReview: async () => ({ succeeded: true, error: null, campaignsEvaluated: 5, recommendationsCreated: 2, duplicatesAvoided: 0, blocked: 1 }),
+      runCampaignReview: async () => ({ succeeded: true, error: null, campaignsEvaluated: 5, recommendationsCreated: 2, duplicatesAvoided: 0, blocked: 1, blockedByFreshness: 0 }),
     })
     expect(result.succeeded).toBe(true)
   })
@@ -141,7 +141,7 @@ describe('handleAdvertisingCampaignReview (Phases 5-7 — the automatic monitor 
     const store = createInMemoryAutomationStore()
     const result = await handleAdvertisingCampaignReview(job({ jobType: 'advertising_campaign_review' }), store, undefined, undefined, undefined, {
       runSync: async () => ({ succeeded: true, error: null }),
-      runCampaignReview: async () => ({ succeeded: false, error: 'Could not load advertising intelligence: connection timed out.', campaignsEvaluated: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0 }),
+      runCampaignReview: async () => ({ succeeded: false, error: 'Could not load advertising intelligence: connection timed out.', campaignsEvaluated: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0, blockedByFreshness: 0 }),
     })
     expect(result.succeeded).toBe(false)
     expect(result.retryable).toBe(true)

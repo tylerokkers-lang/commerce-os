@@ -28,6 +28,7 @@ export interface CampaignReviewJobResult {
   recommendationsCreated: number
   duplicatesAvoided: number
   blocked: number
+  blockedByFreshness: number
 }
 
 export interface AdvertisingHandlerDeps {

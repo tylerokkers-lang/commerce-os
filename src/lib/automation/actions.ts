@@ -3,7 +3,7 @@ import 'server-only'
 import { recordAudit } from '@/lib/audit'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import type { Enums } from '@/lib/supabase/database.types'
-import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type AdvertisingCampaignReconciliation, type ChannelProductReconciliation, type CompleteActionOutcome, type CreateActionInput } from './store'
+import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type ActionRecord, type AdvertisingCampaignReconciliation, type ChannelProductReconciliation, type CompleteActionOutcome, type CreateActionInput, type RecoveryOutcomeInput } from './store'
 import type { AutomationActionType } from './types'
 
 /**
@@ -254,4 +254,86 @@ export async function reconcileAdvertisingCampaign(input: AdvertisingCampaignRec
     reason: 'Reconciled local record with the advertising platform\'s verified state after an automated write.',
     newValue: patch,
   })
+}
+
+function mapActionRow(row: Record<string, unknown>): ActionRecord {
+  return {
+    id: row.id as string,
+    orgId: row.org_id as string,
+    correlationId: row.correlation_id as string,
+    idempotencyKey: (row.idempotency_key as string | null) ?? null,
+    actionType: row.action_type as ActionRecord['actionType'],
+    entityType: row.entity_type as string,
+    entityId: (row.entity_id as string | null) ?? null,
+    reason: row.reason as string,
+    inputFacts: (row.input_facts as Record<string, unknown>) ?? {},
+    decision: (row.decision as Record<string, unknown>) ?? {},
+    policyResult: row.policy_result as ActionRecord['policyResult'],
+    automationLevel: row.automation_level as ActionRecord['automationLevel'],
+    riskLevel: row.risk_level as ActionRecord['riskLevel'],
+    status: row.status as ActionRecord['status'],
+    error: (row.error as string | null) ?? null,
+    actorType: row.actor_type as ActionRecord['actorType'],
+    aiDecisionId: (row.ai_decision_id as string | null) ?? null,
+    jobId: (row.job_id as string | null) ?? null,
+    createdAt: row.created_at as string,
+    completedAt: (row.completed_at as string | null) ?? null,
+    externalRef: (row.external_ref as string | null) ?? null,
+    verificationStatus: row.verification_status as ActionRecord['verificationStatus'],
+    reconciliationStatus: row.reconciliation_status as ActionRecord['reconciliationStatus'],
+  }
+}
+
+/**
+ * Milestone 17 — every `automation_actions` row the reaper
+ * (`automation/recovery.ts`) should consider: still `executing`, created
+ * before the caller's threshold, and restricted to the action types that
+ * actually have a real provider write + verify path. Global across every
+ * organisation (recovery is an operational/maintenance concern, not a
+ * business action any one org's session triggers), matching
+ * `advertising/monitor.ts`'s `runCampaignReviewForConnectedOrgs`'s own
+ * "iterate every org" shape at the route level rather than here.
+ */
+export async function findStuckExecutingActions(olderThanIso: string, actionTypes: readonly ActionRecord['actionType'][]): Promise<readonly ActionRecord[]> {
+  const supabase = createServiceSupabase()
+  const { data, error } = await supabase
+    .from('automation_actions')
+    .select('*')
+    .eq('status', 'executing')
+    .lt('created_at', olderThanIso)
+    .in('action_type', [...actionTypes])
+    .order('created_at', { ascending: true })
+
+  if (error) throw new Error(`Could not query stuck automation actions: ${error.message}`)
+  return (data ?? []).map(mapActionRow)
+}
+
+/**
+ * Records what the reaper learned about one stuck action. The
+ * `.eq('status', 'executing')` in the `WHERE` clause is a
+ * compare-and-swap: if another concurrent recovery pass already moved this
+ * row out of `executing`, this `UPDATE` matches zero rows and
+ * `applied: false` tells the caller not to reconcile or audit a row it did
+ * not actually just transition — the same "let the constraint decide who
+ * won" principle `createAutomationAction`'s idempotency-key race fix uses.
+ */
+export async function recordRecoveryOutcome(actionId: string, input: RecoveryOutcomeInput): Promise<{ applied: boolean }> {
+  const supabase = createServiceSupabase()
+  const { data, error } = await supabase
+    .from('automation_actions')
+    .update({
+      status: input.status,
+      error: input.error,
+      completed_at: new Date().toISOString(),
+      external_ref: input.externalRef ?? null,
+      verification_status: input.verificationStatus,
+      reconciliation_status: input.reconciliationStatus,
+    })
+    .eq('id', actionId)
+    .eq('status', 'executing')
+    .select('id')
+    .maybeSingle()
+
+  if (error) throw new Error(`Could not record recovery outcome for automation action ${actionId}: ${error.message}`)
+  return { applied: data !== null }
 }

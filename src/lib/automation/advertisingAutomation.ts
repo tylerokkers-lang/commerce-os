@@ -66,6 +66,29 @@ export interface CampaignActionRequest {
   dataAgeHours: number | null
   /** For explanation only — not a gate by itself, folded into `domainReason`. */
   roas: number | null
+  /**
+   * Phase 9 (Milestone 17) — the fuller metrics snapshot behind a
+   * monitor-generated recommendation, persisted into `inputFacts` purely
+   * so a later reader can see exactly what the decision was based on.
+   * Never read by any policy gate in this file — `roas` above (and the
+   * gates that actually check freshness/spend/budget elsewhere in this
+   * function) remain the only figures that affect the decision itself.
+   * Optional because the chat-driven path has no equivalent campaign
+   * metrics source to populate it from (campaign actions have no
+   * chat-driven path at all today — see `ai/actions/validate.ts`'s
+   * `REVIEW_ONLY_REASONS` for `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET`).
+   */
+  metricsSnapshot?: {
+    spendMinor: number | null
+    attributedRevenueMinor: number | null
+    acosPct: number | null
+    cpaMinor: number | null
+    averageOrderValueMinor: number | null
+    impressions: number | null
+    clicks: number | null
+    conversions: number | null
+    dataAsOf: string | null
+  }
 }
 
 export interface CampaignActionAssessment {

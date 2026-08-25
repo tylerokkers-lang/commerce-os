@@ -65,6 +65,7 @@ export async function POST(request: Request) {
         recommendationsCreated: result.recommendationsCreated,
         duplicatesAvoided: result.duplicatesAvoided,
         blocked: result.blocked,
+        blockedByFreshness: result.blockedByFreshness,
       }
     },
   }
