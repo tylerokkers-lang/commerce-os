@@ -144,6 +144,10 @@ export interface Database {
           is_paused: boolean
           is_demo: boolean
           created_at: string
+          provider: string | null
+          external_account_id: string | null
+          currency: string | null
+          synced_at: string | null
         }
         Insert: {
           id?: string
@@ -162,6 +166,10 @@ export interface Database {
           is_paused?: boolean
           is_demo?: boolean
           created_at?: string
+          provider?: string | null
+          external_account_id?: string | null
+          currency?: string | null
+          synced_at?: string | null
         }
         Update: {
           id?: string
@@ -180,6 +188,10 @@ export interface Database {
           is_paused?: boolean
           is_demo?: boolean
           created_at?: string
+          provider?: string | null
+          external_account_id?: string | null
+          currency?: string | null
+          synced_at?: string | null
         }
         Relationships: [
           {
@@ -194,6 +206,68 @@ export interface Database {
             columns: ['product_id']
             isOneToOne: false
             referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      advertising_connections: {
+        Row: {
+          id: string
+          org_id: string
+          provider: string
+          channel: Database['public']['Enums']['channel_key'] | null
+          is_connected: boolean
+          connection_mode: string
+          external_account_id: string | null
+          status: string
+          last_sync_at: string | null
+          last_success_at: string | null
+          last_failure_at: string | null
+          last_error: string | null
+          consecutive_failures: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          provider: string
+          channel?: Database['public']['Enums']['channel_key'] | null
+          is_connected?: boolean
+          connection_mode?: string
+          external_account_id?: string | null
+          status?: string
+          last_sync_at?: string | null
+          last_success_at?: string | null
+          last_failure_at?: string | null
+          last_error?: string | null
+          consecutive_failures?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          provider?: string
+          channel?: Database['public']['Enums']['channel_key'] | null
+          is_connected?: boolean
+          connection_mode?: string
+          external_account_id?: string | null
+          status?: string
+          last_sync_at?: string | null
+          last_success_at?: string | null
+          last_failure_at?: string | null
+          last_error?: string | null
+          consecutive_failures?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'advertising_connections_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
             referencedColumns: ['id']
           },
         ]
@@ -5486,7 +5560,7 @@ export interface Database {
       actor_type: 'user' | 'system' | 'ai' | 'integration'
       approval_status: 'approved' | 'blocked' | 'review_required' | 'not_assessed'
       automation_action_status: 'pending' | 'executing' | 'succeeded' | 'failed' | 'blocked' | 'requires_approval' | 'retry_pending' | 'stale_facts' | 'cancelled'
-      automation_action_type: 'update_inventory' | 'update_price' | 'pause_product' | 'resume_product' | 'publish_product' | 'unpublish_product' | 'switch_supplier' | 'submit_supplier_order' | 'update_fulfilment' | 'update_tracking' | 'process_refund' | 'cancel_order' | 'request_approval' | 'reconcile_marketplace' | 'reconcile_supplier' | 'alert_owner'
+      automation_action_type: 'update_inventory' | 'update_price' | 'pause_product' | 'resume_product' | 'publish_product' | 'unpublish_product' | 'switch_supplier' | 'submit_supplier_order' | 'update_fulfilment' | 'update_tracking' | 'process_refund' | 'cancel_order' | 'request_approval' | 'reconcile_marketplace' | 'reconcile_supplier' | 'alert_owner' | 'pause_campaign' | 'increase_ad_budget' | 'decrease_ad_budget' | 'review_campaign'
       automation_job_status: 'pending' | 'running' | 'succeeded' | 'failed' | 'dead_letter' | 'cancelled'
       automation_level: 'manual' | 'assisted' | 'supervised' | 'autonomous'
       automation_risk_level: 'low' | 'medium' | 'high' | 'unknown'

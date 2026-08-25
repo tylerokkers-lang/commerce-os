@@ -2,10 +2,13 @@ import Link from 'next/link'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatTile, type Tone } from '@/components/ui'
 import { MetricStat } from '@/components/dashboard/MetricStat'
 import { formatMoney } from '@/lib/core/money'
+import { formatRelative } from '@/lib/utils'
 import { isKnown } from '@/lib/analytics/types'
 import { getCEOCommandCentre } from '@/lib/ceo/repository'
+import { getAdvertisingConnectorSummaries } from '@/lib/advertising/repository'
 import type { CampaignIntelligence } from '@/lib/analytics/repository'
 import type { AdvertisingHealthStatus, CampaignClassification, CampaignSeverity } from '@/lib/analytics/advertisingAnalytics'
+import type { AdvertisingConnectorSummary, AdvertisingConnectionStatus } from '@/lib/advertising/connectors/types'
 import type { Priority } from '@/lib/ceo/types'
 
 export const dynamic = 'force-dynamic'
@@ -20,10 +23,15 @@ export const dynamic = 'force-dynamic'
  * already make (never a second advertising fetch).
  *
  * There is deliberately no "Pause" / "Increase budget" button anywhere on
- * this page. `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` have no
- * real execution path in this codebase (no live advertising platform
- * connector exists) — a button that looked like it worked would be a fake
- * one. The only real path from a recommendation to a trackable approval is
+ * this page. Milestone 15 built a real `AdvertisingProvider` connector
+ * architecture and a controlled, approval-gated execution pipeline
+ * (`advertising/connectors/`, `automation/advertisingExecution.ts`), but no
+ * platform is actually connected in this environment (no real API
+ * credentials exist), and — deliberately, this milestone — nothing in that
+ * pipeline can ever auto-execute a spend-changing action even once one is
+ * connected (see `automation/advertisingAutomation.ts`'s module comment).
+ * A button here that looked like it worked would still be a fake one. The
+ * only real path from a recommendation to a trackable approval today is
  * Commerce Intelligence chat (`REVIEW_CAMPAIGN`, a pure escalation) — this
  * page points there and to `/approvals`, rather than pretending to be that
  * path itself.
@@ -43,6 +51,31 @@ const SEVERITY_TONE: Record<CampaignSeverity, Tone> = { critical: 'negative', hi
 const SEVERITY_RANK: Record<CampaignSeverity, number> = { critical: 0, high: 1, medium: 2, opportunity: 3, info: 4 }
 const PRIORITY_TONE: Record<Priority['severity'], Tone> = { critical: 'negative', high: 'caution', medium: 'accent', low: 'neutral' }
 const CHANNEL_LABEL: Record<string, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK' }
+const CONNECTION_TONE: Record<AdvertisingConnectionStatus, Tone> = { connected: 'positive', demo: 'demo', not_configured: 'neutral', degraded: 'caution', error: 'negative' }
+const CONNECTION_LABEL: Record<AdvertisingConnectionStatus, string> = { connected: 'Connected', demo: 'Demo', not_configured: 'Not connected', degraded: 'Degraded', error: 'Error' }
+
+function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary }) {
+  return (
+    <li className="px-5 py-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{connector.label}</p>
+          {!connector.isConfigured && connector.missingCredentials.length > 0 ? (
+            <p className="mt-0.5 text-xs text-ink-subtle">Missing: {connector.missingCredentials.join(', ')}</p>
+          ) : null}
+        </div>
+        <Badge tone={CONNECTION_TONE[connector.status]} className="shrink-0">{CONNECTION_LABEL[connector.status]}</Badge>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-subtle">
+        <span>Read: {connector.capabilities.readCampaigns ? 'yes' : 'no'}</span>
+        <span>Pause: {connector.capabilities.pauseCampaign ? 'yes' : 'no'}</span>
+        <span>Budget: {connector.capabilities.setBudget ? 'yes' : 'no'}</span>
+        {connector.lastSyncAt ? <span>Last sync {formatRelative(connector.lastSyncAt)}</span> : null}
+        {connector.lastError ? <span className="text-negative">{connector.lastError}</span> : null}
+      </div>
+    </li>
+  )
+}
 
 function CampaignRow({ campaign }: { campaign: CampaignIntelligence }) {
   const { fact, classification } = campaign
@@ -128,9 +161,10 @@ function PriorityRow({ priority }: { priority: Priority }) {
 }
 
 export default async function AdvertisingPage() {
-  const ceo = await getCEOCommandCentre()
+  const [ceo, connectors] = await Promise.all([getCEOCommandCentre(), getAdvertisingConnectorSummaries()])
   const { advertisingIntelligence } = ceo
   const { scorecard } = advertisingIntelligence
+  const anyConnected = connectors.some((c) => c.status === 'connected')
 
   const campaigns = [...advertisingIntelligence.campaigns].sort(
     (a, b) => SEVERITY_RANK[a.classification.severity] - SEVERITY_RANK[b.classification.severity],
@@ -153,6 +187,16 @@ export default async function AdvertisingPage() {
           </div>
         </Card>
       ) : null}
+
+      <Card>
+        <CardHeader
+          title="Advertising platform connections"
+          description="Amazon Ads, Meta Ads, Google Ads and TikTok Ads can each be connected here — no platform is connected in this environment, since no real API credentials exist. Connecting one does not, by itself, allow any automatic spend change; see the note below."
+        />
+        <ul className="divide-y divide-border border-t border-border">
+          {connectors.map((c) => <ConnectorRow key={c.key} connector={c} />)}
+        </ul>
+      </Card>
 
       <Card>
         <CardHeader
@@ -218,8 +262,10 @@ export default async function AdvertisingPage() {
         <div className="px-5 py-4">
           <p className="text-sm font-medium text-accent">How a recommendation becomes a decision</p>
           <p className="mt-1 text-sm text-ink">
-            Nothing on this page can pause a campaign or change a budget — no live advertising platform connector
-            exists to actually do that yet. The one real path is: ask <Link href="/chat" className="underline hover:opacity-80">Commerce Intelligence chat</Link> to
+            Nothing on this page can pause a campaign or change a budget directly. {anyConnected
+              ? 'A platform is connected, but every campaign action still always requires your approval before anything is sent to it — no automated spend-changing action executes without that approval, this milestone.'
+              : 'No advertising platform is actually connected in this environment (see above), so there is genuinely nothing to send an action to yet.'} The
+            one real path today is: ask <Link href="/chat" className="underline hover:opacity-80">Commerce Intelligence chat</Link> to
             review a specific campaign by name; if it matches a real campaign, chat raises it as a proposal, which
             appears on <Link href="/approvals" className="underline hover:opacity-80">Approvals</Link> awaiting your decision. Nothing is
             auto-approved or auto-executed.

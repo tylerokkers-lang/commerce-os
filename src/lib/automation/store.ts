@@ -1,6 +1,7 @@
 import type { Enums } from '@/lib/supabase/database.types'
 import type { AutomationActionType, AutomationJobStatus, AutomationActionStatus, AutomationLevel, PolicyResult } from './types'
 import type { AutomationSettings } from './settingsTypes'
+import type { ChannelKey } from '@/lib/core/domain'
 
 /**
  * The `AutomationStore` abstraction (Milestone 6 verification pass).
@@ -131,6 +132,15 @@ export interface ChannelProductReconciliation {
   fulfilmentSupplierId?: string
 }
 
+/** A patch to our own record of an advertising campaign, applied only after a write has been verified — never speculatively. Same discipline as `ChannelProductReconciliation`. */
+export interface AdvertisingCampaignReconciliation {
+  orgId: string
+  channel: ChannelKey
+  externalId: string
+  isPaused?: boolean
+  dailyBudgetMinor?: number
+}
+
 export interface AuditEntryInput {
   orgId: string
   action: string
@@ -216,4 +226,6 @@ export interface AutomationStore {
    * equivalent) has confirmed the external state actually changed.
    */
   reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void>
+  /** The advertising equivalent of `reconcileChannelProduct` (Milestone 15) — same SUBMIT -> VERIFY -> RECONCILE discipline, never called speculatively. */
+  reconcileAdvertisingCampaign(input: AdvertisingCampaignReconciliation): Promise<void>
 }

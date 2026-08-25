@@ -25,6 +25,7 @@ const DEMO_DEFAULTS: Partial<Tables<'business_settings'>> = {
   max_auto_price_change_pct: 5,
   max_daily_ad_spend_minor: 5000,
   min_roas: 3,
+  max_auto_ad_increase_pct: 20,
   max_delivery_days: 7,
   max_return_rate_pct: 5,
 }

@@ -5,6 +5,7 @@ import {
   RUNAWAY_MAX_ACTIONS_PER_WINDOW,
   RUNAWAY_WINDOW_MINUTES,
   type ActionRecord,
+  type AdvertisingCampaignReconciliation,
   type AuditEntryInput,
   type AutomationStore,
   type ChannelProductReconciliation,
@@ -47,6 +48,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
   const settingsByOrg = new Map<string, AutomationSettings>(Object.entries(options?.settingsByOrg ?? {}))
   const approvals: (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[] = []
   const channelProductReconciliations = new Map<string, Partial<ChannelProductReconciliation>>()
+  const advertisingCampaignReconciliations = new Map<string, Partial<AdvertisingCampaignReconciliation>>()
 
   function isAbandoned(job: JobRecord, nowMs: number): boolean {
     return job.status === 'running' && job.lockedAt !== null && nowMs - Date.parse(job.lockedAt) > lockTimeoutMs
@@ -60,6 +62,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       notifications: readonly (NotifyInput & { id: string; createdAt: string })[]
       approvals: readonly (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[]
       channelProductReconciliations: Record<string, Partial<ChannelProductReconciliation>>
+      advertisingCampaignReconciliations: Record<string, Partial<AdvertisingCampaignReconciliation>>
     }
     setAutomationSettings: (orgId: string, settings: AutomationSettings) => void
   } = {
@@ -319,6 +322,22 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       })
     },
 
+    async reconcileAdvertisingCampaign(input: AdvertisingCampaignReconciliation): Promise<void> {
+      const key = `${input.channel}:${input.externalId}`
+      const current = advertisingCampaignReconciliations.get(key) ?? {}
+      const merged = { ...current, ...input }
+      advertisingCampaignReconciliations.set(key, merged)
+      auditLog.push({
+        orgId: input.orgId,
+        action: 'ADVERTISING_CHANGED',
+        entityType: 'advertising_campaign',
+        entityId: key,
+        actorType: 'system',
+        reason: "Reconciled local record with the advertising platform's verified state after an automated write.",
+        occurredAt: new Date().toISOString(),
+      })
+    },
+
     setAutomationSettings(orgId: string, settings: AutomationSettings) {
       settingsByOrg.set(orgId, settings)
     },
@@ -331,6 +350,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
         notifications: [...notifications],
         approvals: [...approvals],
         channelProductReconciliations: Object.fromEntries(channelProductReconciliations),
+        advertisingCampaignReconciliations: Object.fromEntries(advertisingCampaignReconciliations),
       }
     },
   }

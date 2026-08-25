@@ -1952,6 +1952,37 @@ surfaced but that never reached the CEO priority queue. See
 `docs/SECURITY.md`'s Milestone 14 section and `HANDOVER.md` for the full
 story.
 
+## Live Advertising Connector & Controlled Automation ✅ complete (referred to as "Milestone 15" in code/tests/HANDOVER.md — see the numbering note below)
+
+Extends directly from Milestone 14 (Advertising Intelligence &
+Optimisation): a provider-agnostic `AdvertisingProvider` connector
+interface (`src/lib/advertising/connectors/`, all four platforms
+registered — one real-but-not-live-verified Amazon Ads connector, one
+demo connector, three honest not-yet-implemented stubs), a validated sync
+engine writing into the same pre-existing `advertising` table Milestone 14
+already used (four new nullable columns only — `provider`/
+`external_account_id`/`currency`/`synced_at` — never a parallel table), and
+a controlled-automation policy/execution pipeline
+(`src/lib/automation/advertisingAutomation.ts`/`advertisingExecution.ts`)
+that structurally cannot auto-permit a spend-changing campaign action for
+any input, this milestone — a `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
+`DECREASE_BUDGET` action can only ever reach `blocked` or
+`require_approval`. `advertisingAnalytics.ts`'s deterministic
+classification engine (Milestone 14) is completely untouched. No real
+platform credentials exist in this environment, so nothing here has
+executed a real advertising API call; see `HANDOVER.md` §31 and
+`docs/SECURITY.md`'s Milestone 15 section for the full, honest account of
+what is real code versus what remains an honest stub.
+
+**Numbering note**: this is a different piece of work from the
+"Milestone 15 — International expansion" entry immediately below, which
+predates it in this document and was already substantively delivered back
+in Milestone 9. The two share a number only because this advertising work
+was requested as a direct continuation of Milestone 14 without an explicit
+new number; `HANDOVER.md` §31 has the full explanation. The next genuinely
+new initiative after this one should be numbered 16, not a second attempt
+at 15.
+
 ## Milestone 15 — International expansion
 
 Country/marketplace/currency/tax/shipping/documentation modelled explicitly,

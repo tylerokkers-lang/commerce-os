@@ -32,6 +32,18 @@ export interface AutomationSettings {
    */
   maxDailyAdSpendMinor: number
   minRoas: number
+  /**
+   * Milestone 15 — `business_settings.max_auto_ad_increase_pct` has existed
+   * since Milestone 1 (reserved for exactly this) but was never read
+   * anywhere until now. Bounds the *magnitude* of an automatic campaign
+   * budget change symmetrically — the same `Math.abs(actualPct) <=
+   * limitPct` rule `policyEngine.ts`'s `percentageRequirement` already
+   * applies to `maxAutoPriceChangePct`, reused unchanged rather than a
+   * second, decrease-specific column: a budget decrease is the inherently
+   * safer direction, so the one configured magnitude limit is what needs
+   * enforcing on both directions, not a fabricated second threshold.
+   */
+  maxAutoAdIncreasePct: number
 }
 
 /**
@@ -56,6 +68,7 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   minNetMarginPct: 10,
   maxDailyAdSpendMinor: 5000, // Matches business_settings' own column default (£50).
   minRoas: 3,
+  maxAutoAdIncreasePct: 20,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

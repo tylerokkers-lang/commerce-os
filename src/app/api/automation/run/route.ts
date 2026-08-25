@@ -8,6 +8,9 @@ import { getMarketplaceConnector } from '@/lib/marketplaces/connectors/registry'
 import { getSupabaseFxStore } from '@/lib/fx/fxStore'
 import { getSupabaseSupplierMarketFactsLoader } from '@/lib/markets/supplierMarketFactsStore'
 import { getSupabaseMarketRepository } from '@/lib/markets/supabaseMarketRepository'
+import { runAdvertisingSync } from '@/lib/advertising/sync'
+import { advertisingConnectorByKey } from '@/lib/advertising/connectors/registry'
+import type { AdvertisingHandlerDeps } from '@/lib/automation/handlers/advertisingHandlers'
 
 /**
  * The scheduled-automation entry point (brief §5, §30).
@@ -43,7 +46,17 @@ export async function POST(request: Request) {
   }
 
   const marketDeps = { supplierMarketFacts: getSupabaseSupplierMarketFactsLoader(), fxStore: getSupabaseFxStore(), marketRepository: getSupabaseMarketRepository() }
-  const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), 10, marketDeps)
+  // This route only ever reaches here once `isSupabaseConfigured()` is true
+  // (demo mode returns 'skipped' above), so every sync it runs is genuinely live.
+  const advertisingDeps: AdvertisingHandlerDeps = {
+    async runSync(orgId, connectorKey, limit) {
+      const connector = advertisingConnectorByKey(connectorKey)
+      if (!connector) return { succeeded: false, error: `No advertising connector registered for key "${connectorKey}".` }
+      const result = await runAdvertisingSync(orgId, false, connector, limit ?? 500)
+      return { succeeded: !result.blocked && !result.fetchError, error: result.blocked ?? result.fetchError }
+    },
+  }
+  const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), 10, marketDeps, advertisingDeps)
   return Response.json({ status: 'ok', checkedAt: new Date().toISOString(), ...result })
 }
 

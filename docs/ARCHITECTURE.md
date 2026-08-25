@@ -357,6 +357,77 @@ priorities, per-campaign detail, demo scenarios — and deliberately has no
 pause/budget-change control anywhere on it (see `docs/SECURITY.md`'s
 Milestone 14 section for why).
 
+### `src/lib/advertising/` (Milestone 15 — see `HANDOVER.md` §31 for the numbering note)
+
+The live connector + sync layer underneath Milestone 14's intelligence,
+which never itself changes:
+
+```
+connectors/types.ts    AdvertisingProvider — deliberately mirrors
+                       marketplaces/connectors/types.ts: same descriptor/
+                       capabilities/Result<T,E> shape, same env-var-name-
+                       only credential declaration. NormalizedCampaignFact
+                       (Phase 3) is the one shape every platform's API
+                       response gets translated into — the intelligence
+                       engine never sees a provider-specific field
+connectors/registry.ts  All four platforms registered: amazonAdsConnector
+                       (real LWA OAuth exchange + real synchronous pause/
+                       budget writes; fetchCampaigns honestly declines —
+                       see its own module comment), demoAdvertisingConnector
+                       (real SUBMIT->VERIFY via an in-memory Map, the
+                       demo/test-double pair), and UnavailableAdvertisingConnector
+                       stubs for meta_ads/google_ads/tiktok_ads — the same
+                       pattern suppliers/connectors/registry.ts's six
+                       planned connectors already established
+validation.ts           Phase 5. Pure. Re-checks every field of a fetched
+                       fact at runtime regardless of its compile-time
+                       type — a connector's response came from an unsafe
+                       `as T` cast of untrusted JSON, the same risk every
+                       connector in this codebase already carries. A
+                       record that fails is quarantined, never written
+syncPlan.ts             Phase 4's pure decision logic — what to upsert,
+                       what to quarantine, whether the whole sync is
+                       blocked (no sales channel configured for this
+                       platform connection — a real modelling gap between
+                       `channel_key` and "which ad platform," see
+                       docs/SECURITY.md — is a safety gate, never a guess)
+sync.ts                 server-only. The thin writer: fetch -> validate ->
+                       plan -> upsert into the pre-existing `advertising`
+                       table (composite-key upsert, idempotent) -> record
+                       connection state (`advertising_connections`) and
+                       audit trail. Never called directly from worker.ts
+                       or any handler — see the note below
+repository.ts           server-only. getAdvertisingConnectorSummaries():
+                       session-scoped (not service-role) read of
+                       advertising_connections for /advertising's
+                       Connections card — a plain read, the same client
+                       /marketplaces/settings already use for their own
+                       tables
+```
+
+`automation/advertisingAutomation.ts` (domain policy, mirrors
+`priceAutomation.ts`'s split) and `automation/advertisingExecution.ts`
+(`proposeCampaignAction`/`submitCampaignAction`, mirrors
+`priceExecution.ts`'s SUBMIT->VERIFY->RECONCILE) live in `automation/`,
+not `advertising/`, matching where `priceAutomation.ts`/`priceExecution.ts`
+already live relative to `analytics/`. `assessCampaignActionPolicy` has no
+code path that can produce `domainOutcome: 'auto_permitted'`, for any
+input — the brief's "no unrestricted automatic campaign changes"
+requirement enforced as an absent branch, not a runtime flag.
+
+**A structural rule worth stating explicitly, because it was violated
+once and caught by the test suite**: `automation/worker.ts` (and every
+file it imports, including every `automation/handlers/*.ts`) must import
+zero `server-only` modules, so it stays importable into Vitest — the same
+reason `FactsLoader`/`ConnectorLookup` are injected interfaces there
+rather than direct imports of `facts.ts`/the connector registries.
+`advertising/sync.ts` is `server-only`; `automation/handlers/advertisingHandlers.ts`
+never imports it — it receives `runSync` as an injected
+`AdvertisingHandlerDeps` dependency, constructed only inside
+`/api/automation/run/route.ts` (a Route Handler, which is allowed to
+import server-only modules directly, same as every other Route Handler in
+this codebase).
+
 ### `src/lib/ceo/` (Milestone 11)
 
 The CEO Command Centre — a presentation/composition layer, deliberately

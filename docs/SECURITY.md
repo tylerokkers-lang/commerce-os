@@ -173,6 +173,128 @@ separately asserts every non-null mapped job type is a real, registered
 `worker.ts` handler, so this table cannot silently drift into naming a job
 type that does not exist.
 
+## What Milestone 15 changed here (Live Advertising Connector & Controlled Automation)
+
+Referred to as "Milestone 15" throughout this codebase's new comments and
+tests, extending directly from Milestone 14's advertising intelligence —
+see `HANDOVER.md`'s Milestone 15 section for a note on this number's
+collision with `docs/MILESTONES.md`'s pre-existing "Milestone 15 —
+International expansion" roadmap entry. This milestone builds the
+provider-agnostic connector, sync engine and controlled-automation
+pipeline Milestone 14 deliberately left unbuilt. Reviewed against the
+brief's own checklist:
+
+- **OAuth credentials, API tokens, refresh tokens**: `AdvertisingProvider`
+  (`advertising/connectors/types.ts`) follows the exact same convention as
+  every connector before it — `descriptor.requiredCredentials` is a list
+  of environment variable *names*, never values; `isConfigured()` reads
+  them from `process.env` at call time. `amazonAdsConnector`
+  (`advertising/connectors/amazonAds.ts`) does a real LWA OAuth
+  refresh-token exchange, deliberately mirroring `marketplaces/connectors/amazon.ts`'s
+  existing exchange rather than inventing a new one — and, like that
+  connector, never persists the resulting short-lived access token
+  anywhere: it is fetched fresh per request and held only in a local
+  variable for that call's lifetime. **This codebase still has no
+  database-backed OAuth token storage of any kind** — confirmed by
+  inspection before writing any code (Phase 1) and unchanged by this
+  milestone. If a future platform's API requires persisting a token (some
+  do), that is new schema and new code, not a reuse of an existing
+  pattern, and should be flagged as such when it is built.
+- **Organisation isolation**: `advertising/sync.ts`'s `runAdvertisingSync`
+  and `advertising/repository.ts`'s `getAdvertisingConnectorSummaries`
+  both resolve `orgId` from the caller (a job's own `orgId`, or the
+  session inside `requireSession()`) — never from a client-suppliable
+  parameter. Every `advertising_connections`/`advertising` query is scoped
+  by `org_id`, the same rule every other live loader in this codebase
+  follows. `tests/advertising-execution-e2e.test.ts` has a dedicated test
+  proving two organisations proposing the identical campaign action never
+  collide (same pattern as `automation-engine-e2e.test.ts`'s existing
+  cross-org proof for price/supplier actions).
+- **RLS**: `advertising_connections` (migration `0027_rls_advertising_connections.sql`)
+  follows the exact read-only-through-RLS pattern `0025_rls_global_markets.sql`
+  already established for four other tables — every org member can read
+  connection status, only the service role writes, from `advertising/sync.ts`
+  and the job handlers. `advertising`'s four new columns
+  (`provider`/`external_account_id`/`currency`/`synced_at`) inherit the
+  table's existing RLS policy from `0009_rls.sql` unchanged — adding
+  columns to an already-RLS-enabled table needs no new policy.
+- **Server-only secrets**: `advertising/sync.ts`, `advertising/repository.ts`
+  and `advertising/connectors/amazonAds.ts` (wherever a real credential is
+  read) all carry `import 'server-only'`. A genuine bug was caught and
+  fixed during this milestone, not by inspection but by the test suite
+  itself failing: `automation/handlers/advertisingHandlers.ts` initially
+  imported `runAdvertisingSync` directly from the `server-only`
+  `advertising/sync.ts` — since `worker.ts` imports every handler file,
+  and `worker.ts` must stay importable into Vitest with zero `server-only`
+  modules anywhere in its dependency graph (the same reason
+  `FactsLoader`/`ConnectorLookup` are injected interfaces rather than
+  direct imports), this broke 6 test files at once the moment it was
+  added. Fixed by injecting `runSync` as a dependency
+  (`AdvertisingHandlerDeps`), constructed only inside
+  `/api/automation/run/route.ts` — the same Route-Handler-only pattern
+  `getSupabaseFactsLoader()`/`getSupabaseAutomationStore()` already use.
+  This is exactly the kind of structural mistake automated tests exist to
+  catch immediately rather than ship silently.
+- **Authorization / admin / approval permissions**: no new permission
+  model — `canWrite`/`canApprove`/`requireSession` are reused completely
+  unchanged. `getAdvertisingConnectorSummaries` uses `createServerSupabase()`
+  (session-scoped, RLS-respecting), not the service role, for exactly the
+  same reason `/marketplaces`/`/settings` already read their own
+  org-scoped tables that way — a plain read needs no elevated access.
+- **Never allow a user to approve an action for an organisation they do
+  not belong to**: unchanged, inherited structurally. A campaign action's
+  `ai_decisions`/`automation_actions` row is created via
+  `store.proposeApproval()`/`store.createAutomationAction()` — the exact
+  same functions, the exact same `.eq('org_id', session.orgId)`
+  enforcement in `approvalWorkflow.ts`'s `approveDecision`, documented
+  above under "Approval permissions." Nothing in this milestone adds a
+  second approval surface.
+- **No unrestricted automatic campaign changes (the brief's central
+  safety requirement)**: structural, not a runtime flag.
+  `automation/advertisingAutomation.ts`'s `assessCampaignActionPolicy` has
+  *no code path* that can produce `domainOutcome: 'auto_permitted'`, for
+  any `AutomationSettings`, any `automationLevel`, any input — unlike
+  `priceAutomation.ts`'s `assessPriceChangePolicy`, which does have one
+  (gated by automation level). This is deliberately stronger than a
+  dry-run flag that could be misconfigured: there is nothing to
+  misconfigure. Proven directly and exhaustively —
+  `tests/advertising-automation-policy.test.ts`'s first test parametrizes
+  over all three campaign action types with every safety gate deliberately
+  satisfied and `automationLevel: 'autonomous'`, and still asserts
+  `policy.outcome !== 'allow_automatic'`.
+- **Audit integrity**: no new audit table, no new mutation path on
+  `audit_logs` — every advertising action reuses `recordAudit`/
+  `store.recordAudit`, inheriting the existing append-only trigger
+  documented above unchanged. Three new `AuditAction` members
+  (`ADVERTISING_SYNC_STARTED`/`FINISHED`/`FAILED`) were added to the
+  existing closed TypeScript union (`audit_logs.action` is a plain `text`
+  column, not a Postgres enum, so this needed no migration); the existing
+  `ADVERTISING_CHANGED`/`ADVERTISING_PAUSED` members (reserved since
+  Milestone 10, unused until now) are reused for the reconciliation step,
+  exactly as intended.
+- **A genuine schema-design finding, not a vulnerability**: the
+  pre-existing `advertising` table's `channel` column
+  (`channel_key`, `'shopify' | 'amazon_uk'`) cannot represent which *ad
+  platform* a campaign runs on — a TikTok Ads campaign can drive traffic
+  to the Shopify sales channel, so the two are genuinely different axes.
+  Rather than overload `channel` or guess, `advertising_connections`
+  gained its own `channel` column (nullable) recording which sales
+  channel a given platform connection is attributed to, and the sync
+  engine (`advertising/syncPlan.ts`) refuses to write any row for a
+  connection with no channel configured — a missing-configuration safety
+  gate (Phase 9), not a default assumption, proven directly
+  (`tests/advertising-sync-plan.test.ts`).
+- **Not verified**: real OAuth behaviour against a live Amazon Ads (or
+  any other platform's) account — no credentials exist in this
+  environment for any of the four platforms, confirmed exhaustively
+  (`tests/advertising-connectors.test.ts` proves every connector reports
+  `isConfigured() === false` and fails every call honestly without them).
+  `advertising/sync.ts`/`advertising/repository.ts` are `server-only` and
+  cannot be imported into Vitest at all in this project — exercised only
+  by their pure sub-functions (`syncPlan.ts`, fully tested) and code
+  inspection, the same established limitation as every other server-only
+  repository function in this codebase.
+
 ## What Milestone 14 changed here (Advertising Intelligence & Optimisation)
 
 Milestone 14 extends Commerce Intelligence to advertising campaigns without

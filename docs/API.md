@@ -37,8 +37,9 @@ Each call claims up to 10 due jobs (`automation_jobs`, across every
 organisation) and runs them through the registered job-handler for their
 `job_type` (`src/lib/automation/worker.ts`). See `docs/MILESTONES.md`'s
 Milestone 7 section for the full list of 14 handler types — Milestone 9
-added two more, `market_recheck` and `fx_recheck` (see below), for a total
-of 16.
+added two more, `market_recheck` and `fx_recheck` (see below), and
+Milestone 15 added `advertising_sync`/`advertising_campaign_action`, for a
+total of 18.
 
 **Authentication**: a shared secret, not a user session — required once
 Supabase is configured.

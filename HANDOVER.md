@@ -5,20 +5,23 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 25 August 2026 (Milestone 14, Advertising Intelligence &
-Optimisation — see §30 before trusting any claim about campaign
-classifications, advertising priorities/health, or campaign
-recommendations/proposals, and note the `REVIEW_CAMPAIGN` proposal path
-has not been verified against a real Supabase project, same as Milestone
-13's price-change path; §29 for Milestone 13, Commerce Intelligence —
-Analyse, Recommend & Propose, and note neither it nor Milestone 12's
-live-model path has been verified against a real `ANTHROPIC_API_KEY` or a
-real Supabase project; §28 for Milestone 12's chat grounding/security
-model, §27 for Milestone 11's audit & hardening pass, §26 for the rest of
-Milestone 11, §22 before trusting any claim about monitor subject
-discovery, real sales data, or supplier operational facts; §21 for the
-rest of Milestone 8, §19 for Milestone 7's execution work, and §18 for
-Milestone 6's engine-level verification).
+Last updated: 25 August 2026 (Milestone 15, Live Advertising Connector &
+Controlled Automation — see §31 first, including its numbering note
+before assuming this is the same "Milestone 15" `docs/MILESTONES.md`'s
+roadmap uses for international expansion; no real OAuth/API credentials
+exist for any of the four ad platforms in this environment, and no
+campaign action can execute outside a direct test call, by design; §30
+for Milestone 14, Advertising Intelligence & Optimisation, before trusting
+any claim about campaign classifications or advertising priorities/health;
+§29 for Milestone 13, Commerce Intelligence — Analyse, Recommend &
+Propose, and note neither it nor Milestone 12's live-model path has been
+verified against a real `ANTHROPIC_API_KEY` or a real Supabase project;
+§28 for Milestone 12's chat grounding/security model, §27 for Milestone
+11's audit & hardening pass, §26 for the rest of Milestone 11, §22 before
+trusting any claim about monitor subject discovery, real sales data, or
+supplier operational facts; §21 for the rest of Milestone 8, §19 for
+Milestone 7's execution work, and §18 for Milestone 6's engine-level
+verification).
 
 ## 1. What this is
 
@@ -1730,49 +1733,229 @@ account/daily/per-product spend limits, cooldowns and rollback logic
 to a future milestone that has a real connector and a real
 automated-execution path to apply them to.
 
-## 31. Next step
+## 31. Milestone 15 (Live Advertising Connector & Controlled Automation) — what was built
 
-Per `docs/MILESTONES.md`, the two real options are: (1) **a genuine
-advertising platform connector** (Amazon Ads first, matching the existing
-Amazon UK marketplace connector's priority) — this is what would let
-`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` graduate from
-`not_executable` to real, approval-gated actions, following the identical
-pattern Milestone 13 established for `UPDATE_PRICE` (re-resolve fresh,
-run through policy at `automationLevel: 'assisted'`, never bypass
-approval); or (2) **finishing the wiring for Milestone 13's still-review-only
-product action types** (`CREATE_LISTING`/`PAUSE_LISTING` specifically —
-closest to a real domain engine already,
-`marketplaces/publicationGate.ts`'s `assessPublicationReadiness`, but
-needing lifecycle stage/supplier capability/compliance assembled together
-for an arbitrary chat-named product first). `ai/actions/validate.ts`'s
-`ProposedAction` shape and the `EXECUTABLE_ACTION_TYPES` closed list are
-exactly where a newly-wired action type gets added, for either — never a
-parallel proposal mechanism.
+**A numbering note first, so this is never confusing later**: `docs/MILESTONES.md`
+already has an unrelated "Milestone 15 — International expansion" roadmap
+entry (substantively delivered back in Milestone 9 — see that section's
+own note). This work — a live advertising platform connector layer on top
+of Milestone 14's intelligence — is what every comment and test file in
+this pass calls "Milestone 15," because that is the number the user's own
+prompt implied by continuing directly from "Milestone 14." The two are
+genuinely different pieces of work that happen to share a number. Read
+`docs/MILESTONES.md`'s own note on this before assigning a number to
+whatever comes next — the honest fix is to number the *next* new
+initiative 16, not to rename everything already built and tested under
+"15" across ~15 files for a label collision that causes no functional
+confusion once it is written down once, here.
+
+Continues directly from Milestone 14 (§30) without rewriting or
+duplicating any of it — `advertisingAnalytics.ts`'s classification engine
+is untouched, `AnalyticsDashboard.advertising`/`AdvertisingIntelligence`
+are unchanged in shape, the existing `advertising` table remains the one
+source of truth (extended with four nullable columns, never replaced).
+Full detail in `docs/ARCHITECTURE.md`'s `advertising/` section and
+`docs/SECURITY.md`'s Milestone 15 section (reviewed against a 12-point
+checklist covering OAuth/tokens, org isolation, RLS, server-only secrets,
+authorization, and audit integrity) — this is the short version.
+
+- **`src/lib/advertising/connectors/`** (new): a provider-agnostic
+  `AdvertisingProvider` interface (`types.ts`) deliberately mirroring
+  `marketplaces/connectors/types.ts` — same descriptor/capabilities/
+  `Result<T,E>` shape, same "define once, satisfy multiple ways" pattern.
+  `registry.ts` registers all four platforms (`amazon_ads`/`meta_ads`/
+  `google_ads`/`tiktok_ads`) — one real-but-not-live-verified connector
+  (`amazonAds.ts`, real LWA OAuth exchange, real synchronous write calls
+  for pause/budget; `fetchCampaigns` honestly fails rather than return
+  fabricated metrics, because Amazon Ads' Reporting API is asynchronous
+  and that flow is not implemented — see the file's own module comment
+  for exactly why), one demo connector (`demo.ts`, real SUBMIT->VERIFY
+  behaviour via an in-memory Map, used both for demo-mode illustration and
+  to drive the real execution pipeline in tests), and three honest
+  `UnavailableAdvertisingConnector` stubs for the unimplemented platforms
+  — the exact same pattern `suppliers/connectors/registry.ts`'s six
+  planned connectors already established, applied to advertising.
+- **`src/lib/advertising/validation.ts`** (new, Phase 5): pure, re-checks
+  every field of a fetched `NormalizedCampaignFact` at runtime regardless
+  of its compile-time type — campaign/account id, provider, status,
+  currency, date (rejecting future dates), and every metric (non-negative
+  integer, clicks <= impressions, conversions <= clicks). A record that
+  fails is quarantined, never written — a previously-good row for that
+  campaign/day is never overwritten with a worse one.
+- **`src/lib/advertising/syncPlan.ts`** (new, pure) / **`sync.ts`** (new,
+  `server-only`): the sync engine, split the same "pure planner, separate
+  server-only writer" way every other database-touching module in this
+  codebase already is. `planAdvertisingSync` refuses to write anything at
+  all when `advertising_connections` has no `channel` configured for that
+  platform (a genuine schema-design finding — see `docs/SECURITY.md`) —
+  a missing-configuration safety gate, not a guess. Writes go through a
+  composite-key upsert (`org_id, channel, external_id, period_date`,
+  matching the table's own existing unique constraint), so a repeat sync
+  updates in place, never duplicates.
+- **`src/lib/automation/advertisingAutomation.ts`** (new): the
+  safety-critical domain policy, mirroring `priceAutomation.ts`'s split
+  but with one deliberate structural difference — `assessCampaignActionPolicy`
+  has **no code path that can ever produce `domainOutcome: 'auto_permitted'`**,
+  for any settings, any automation level, any input. This is the brief's
+  central safety requirement ("no unrestricted automatic campaign
+  changes") enforced as an absent code path rather than a runtime flag
+  that could be misconfigured. Every named safety gate (connection live,
+  data fresh — a documented, reasoned 48-hour constant, since no existing
+  setting captures this — campaign not already in the target state,
+  budget known, proposed spend within the configured daily cap) is a
+  machine-readable `PolicyRequirement`, proven exhaustively in
+  `tests/advertising-automation-policy.test.ts`.
+- **`src/lib/automation/advertisingExecution.ts`** (new): split into
+  `proposeCampaignAction` (the event-driven entry point — can only ever
+  end in `blocked` or `require_approval`, never touches the connector) and
+  `submitCampaignAction` (SUBMIT -> VERIFY -> RECONCILE for an
+  already-approved action, mirroring `priceExecution.ts` exactly).
+  `submitCampaignAction` is deliberately **not** wired into
+  `automation/approvalWorkflow.ts::approveDecision` — that function has no
+  per-decision-type dispatch for *any* action type today, price changes
+  included (it always reports "no live executor configured yet"; see
+  `docs/SECURITY.md`). Wiring advertising alone would make it more
+  connected than every other decision type, which would be inconsistent,
+  not an improvement. `submitCampaignAction` is fully built and tested
+  directly instead, exactly the same unconnected-but-real state
+  `priceExecution.ts`'s own `executePriceChange` has always been in.
+- **`AutomationStore` gained `reconcileAdvertisingCampaign`** (both
+  `supabaseStore.ts` and `inMemoryStore.ts`), the advertising equivalent
+  of `reconcileChannelProduct` — a partial patch to the most recent
+  existing `advertising` row for a campaign, applied only after a verified
+  write, never inserting a new row with fabricated metrics.
+- **`worker.ts`** gained two job types (`advertising_sync`,
+  `advertising_campaign_action`) and a 6th optional handler parameter,
+  `advertisingDeps` — the same "smaller-arity function is still assignable"
+  pattern `marketDeps` already established. **A genuine bug found by the
+  test suite itself, not by inspection**: the handler file initially
+  imported `runAdvertisingSync` directly from the `server-only`
+  `advertising/sync.ts`, which broke 6 existing test files the moment it
+  was added (`worker.ts` must stay importable into Vitest with zero
+  `server-only` modules in its dependency graph). Fixed by injecting
+  `runSync` as a dependency, constructed only inside
+  `/api/automation/run/route.ts` — see `docs/SECURITY.md` for the full
+  story.
+- **`business_settings.max_auto_ad_increase_pct`** — reserved since
+  Milestone 1, never read by any code until now — is wired into
+  `AutomationSettings` end to end (settings.ts, the Settings page form,
+  its Zod schema, demo defaults) and used to bound a campaign budget
+  change's magnitude symmetrically (the same `Math.abs(actualPct) <=
+  limitPct` rule `maxAutoPriceChangePct` already uses for price changes) —
+  no new column needed for "maximum budget decrease," since a decrease is
+  the inherently safer direction and one configured magnitude limit
+  governs both.
+- **Chat (`ai/actions/validate.ts`)**: `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
+  `DECREASE_BUDGET` remain `not_executable` through chat, deliberately —
+  wiring them for real would mean threading which ad platform a campaign
+  runs on through `advertisingAnalytics.ts`'s `CampaignIdentity` into the
+  chat `FactBundle`, which this milestone did not do, to keep the chat
+  intent-matching surface unchanged while the new execution pipeline is
+  still unverified against a live platform. `REVIEW_CAMPAIGN` (already
+  executable since Milestone 14) is unaffected.
+- **UI**: `/advertising` gained a "Connections" card showing all four
+  platforms' real status (never fabricated — `getAdvertisingConnectorSummaries`
+  reads `advertising_connections` through the session-scoped, RLS-respecting
+  client, the same way `/marketplaces`/`/settings` already read their own
+  tables), each with real capability flags and missing-credential lists.
+  Still no "Pause"/"Increase budget" button anywhere — see that page's own
+  module comment for why one would still be fake even now.
+- **Schema** (migrations `0026`/`0027`): `advertising` gained four nullable
+  columns (`provider`, `external_account_id`, `currency`, `synced_at`) —
+  purely additive, no existing row or query affected. New table
+  `advertising_connections` (one row per org per platform, connection
+  state only — no spend/revenue column at all, so it is not a second
+  `advertising` table). Four new values added to the `automation_action_type`
+  Postgres enum (`pause_campaign`/`increase_ad_budget`/`decrease_ad_budget`/
+  `review_campaign`) via `alter type ... add value`, then `npm run db:types`
+  regenerated `database.types.ts` from the migrations themselves (PGlite,
+  fully offline — no live Supabase project needed, `scripts/generate-db-types.mjs`'s
+  own documented approach).
+
+**Verified:** 1054 tests (up from 942 at the start of this session — +112
+across `tests/advertising-validation.test.ts` (24), `tests/advertising-sync-plan.test.ts`
+(10), `tests/advertising-connectors.test.ts` (20), `tests/advertising-automation-policy.test.ts`
+(22), `tests/advertising-execution-e2e.test.ts` (13), `tests/advertising-handlers.test.ts`
+(7), plus assorted others along the way); `npx tsc --noEmit`, `npm run
+lint`, `npm run build` and `npm run db:verify` all clean (27 migrations,
+73 tables, up from 72 — the two additive migrations above). Confirmed live
+in the browser, demo mode: `/advertising`'s new Connections card renders
+all four platforms honestly as "Not connected" with their real missing
+credentials and capability flags, no console errors; `/settings` renders
+the new "Maximum automatic ad budget change" field; `/`, `/approvals`
+re-confirmed unaffected; asking chat "Should I pause the wasteful
+campaign?" still returns `200` with the same honest "No advertising
+campaign data for this period" answer as before, confirming the chat path
+is genuinely unaffected. `informax-site` confirmed untouched throughout.
+
+**Implemented but not live-verified:** real OAuth/API behaviour against
+any of the four platforms — no credentials exist for any of them in this
+environment (`tests/advertising-connectors.test.ts` proves the honest
+`isConfigured() === false` path for all four instead). `advertising/sync.ts`/
+`advertising/repository.ts` are `server-only` and cannot be imported into
+Vitest at all in this project (the established limitation every other
+server-only repository function in this codebase already has) — exercised
+only by their pure sub-functions and code inspection.
+
+**Not implemented (deliberately, this milestone's scope):** a working
+`fetchCampaigns` for Amazon Ads specifically (needs the async Reporting
+API's create-report/poll/download flow — see `amazonAds.ts`'s module
+comment); Meta/Google/TikTok Ads integrations at all (honest stubs only);
+any code path that lets `submitCampaignAction` actually run outside a
+direct test call (see `advertisingExecution.ts`'s module comment — this is
+the explicit "no unrestricted automatic campaign changes" boundary,
+working as intended, not a bug); an automatic monitor that detects a
+`wasted_spend`/etc. classification and enqueues a campaign action by
+itself — every campaign action proposal in this milestone originates from
+an explicit call (chat's existing `REVIEW_CAMPAIGN`, or a manually
+enqueued `advertising_campaign_action` job), never a background process,
+the same "no autonomous proposal generation" boundary Milestone 13 already
+drew for product actions.
+
+## 32. Next step
+
+The two real options, per `docs/MILESTONES.md`: (1) **finish the Amazon
+Ads Reporting API integration** (the async create-report/poll/download
+flow `amazonAds.ts`'s `fetchCampaigns` currently declines rather than
+fake), which would let real Amazon Ads spend data start flowing through
+`advertising/sync.ts` into the existing intelligence engine unchanged —
+this is now the highest-value single piece of remaining wiring, since
+every other layer (validation, policy, execution, approval routing) is
+already built and tested end-to-end against the demo connector; or (2)
+**an automatic monitor** that watches real campaign classifications
+(`advertisingAnalytics.ts`'s `classifyCampaign`, already computed) and
+enqueues an `advertising_campaign_action` job when one crosses a
+threshold, following `profitabilityMonitor.ts`'s exact shape — deliberately
+not built this milestone (see §31) so that the first automatic proposal a
+real business ever sees is deliberately chosen, not accidental scope
+creep. `ai/actions/validate.ts`'s `EXECUTABLE_ACTION_TYPES` and
+`REVIEW_ONLY_REASONS` are exactly where `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
+`DECREASE_BUDGET` would graduate to chat-executable, once `CampaignIdentity`'s
+`provider` is threaded through `FactBundle` (see §31's chat note) — never
+a parallel proposal mechanism.
 
 Five smaller, genuine loose ends worth picking up opportunistically rather
 than as their own milestone: (1) a live-Supabase-backed test harness does
 not exist anywhere in this codebase — every `discover*`/`server-only`
-repository function, including `ai/repository.ts`/`ai/anthropicProvider.ts`
-and `ai/actions/validate.ts`/`propose.ts` (product and, now, campaign
-paths alike), is verified only by code inspection, its pure sub-functions,
-and manual browser checks, never automated; (2) `analytics/repository.ts`'s
-`getCashflow()` still returns a hardcoded-empty result in live mode
-(pre-existing, documented, deliberately unsurfaced in the UI); (3) a real
-`ANTHROPIC_API_KEY` should be exercised against the live chat before it is
-presented to an actual CEO — the structural safety guarantees
-(§28/§29/§30) hold either way, but whether the model's live answers are
-actually good, correctly cite sources, and never drift from the
-fact-first system prompt in practice is unverified in this environment;
-(4) a real Supabase project should be exercised end-to-end for
-`requestActionApproval` -> `/approvals` -> `approveDecision`, both for a
-product proposal and a `REVIEW_CAMPAIGN` proposal, before relying on
-either for a real business; (5) `ai/actions/recommend.ts`'s
-`campaignRecommendations` deliberately never generates a `scale_opportunity`
-recommendation — if a future change threads `productId` through
-`FactBundle.advertisingCampaigns`, that exclusion should be revisited so
-scaling recommendations can appear in chat too, with the same
-compliance-block override `ceo/priorities.ts` already applies. When
-international expansion is eventually revisited as Milestone 15, read
-Milestone 9's section first — the market model, FX intelligence,
-country-aware compliance delegation and expansion engine it built are
-designed to extend without a schema redesign, not be rebuilt.
+repository function, including `ai/repository.ts`/`ai/anthropicProvider.ts`,
+`ai/actions/validate.ts`/`propose.ts`, and now `advertising/sync.ts`/
+`repository.ts`, is verified only by code inspection, its pure
+sub-functions, and manual browser checks, never automated; (2)
+`analytics/repository.ts`'s `getCashflow()` still returns a
+hardcoded-empty result in live mode (pre-existing, documented,
+deliberately unsurfaced in the UI); (3) a real `ANTHROPIC_API_KEY` should
+be exercised against the live chat before it is presented to an actual
+CEO — the structural safety guarantees (§28/§29/§30/§31) hold either way,
+but whether the model's live answers are actually good in practice is
+unverified in this environment; (4) a real Supabase project should be
+exercised end-to-end for `requestActionApproval` -> `/approvals` ->
+`approveDecision`, for product, `REVIEW_CAMPAIGN`, and (once wired)
+budget/pause proposals alike, before relying on any of them for a real
+business; (5) `ai/actions/recommend.ts`'s `campaignRecommendations`
+deliberately never generates a `scale_opportunity` recommendation — the
+same `CampaignIdentity`-through-`FactBundle` threading this section's
+option (2) would need also unblocks that. When international expansion is
+eventually revisited (the *other* "Milestone 15" — see §31's numbering
+note), read Milestone 9's section first — the market model, FX
+intelligence, country-aware compliance delegation and expansion engine it
+built are designed to extend without a schema redesign, not be rebuilt.

@@ -162,9 +162,21 @@ const REVIEW_ONLY_REASONS: Partial<Record<RawActionIntent['actionType'], string>
   REVIEW_ADVERTISING: 'No advertising connector exists in this codebase yet (Milestone 10/11) — there is no live spend data to act on.',
   REVIEW_SUPPLIER: 'Supplier review is a manual judgement call — see /suppliers for the full scoring detail.',
   REVIEW_PRODUCT: 'Review this product directly — see /products for full detail.',
-  PAUSE_CAMPAIGN: 'Pausing a campaign would need a live advertising platform connector to actually change — this codebase has none yet (Milestone 14), so pausing here would only update an internal record, not the real campaign. Review on /advertising instead.',
-  INCREASE_BUDGET: 'Changing a campaign budget would need a live advertising platform connector — none exists yet. Review on /advertising instead.',
-  DECREASE_BUDGET: 'Changing a campaign budget would need a live advertising platform connector — none exists yet. Review on /advertising instead.',
+  // Milestone 15 built a real AdvertisingProvider connector architecture
+  // (sync + a controlled, approval-gated execution pipeline —
+  // `advertising/connectors/`, `automation/advertisingExecution.ts`) and no
+  // platform is actually connected/configured in this environment — the
+  // same "architecture exists, nothing is live yet" state every marketplace
+  // connector is already in. These three remain chat-`not_executable`
+  // deliberately, for a narrower reason than "no connector exists": routing
+  // them for real would mean threading which ad platform a campaign came
+  // from through `advertisingAnalytics.ts`'s `CampaignIdentity` into the
+  // chat `FactBundle`, which this milestone did not do, to keep the
+  // chat-intent surface unchanged while the new execution pipeline is
+  // still unverified against a live platform. See HANDOVER.md.
+  PAUSE_CAMPAIGN: 'Pausing a campaign through chat is not wired up yet — even though a real advertising connector architecture now exists, no platform is connected in this environment, and chat does not yet know which platform a given campaign runs on. Review on /advertising instead.',
+  INCREASE_BUDGET: 'Changing a campaign budget through chat is not wired up yet, for the same reason pausing is not — review on /advertising instead.',
+  DECREASE_BUDGET: 'Changing a campaign budget through chat is not wired up yet, for the same reason pausing is not — review on /advertising instead.',
 }
 
 function reviewOnly(intent: RawActionIntent, bundle: ComplianceContext): ProposedAction {

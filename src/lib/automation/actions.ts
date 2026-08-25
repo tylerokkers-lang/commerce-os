@@ -3,7 +3,7 @@ import 'server-only'
 import { recordAudit } from '@/lib/audit'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import type { Enums } from '@/lib/supabase/database.types'
-import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type ChannelProductReconciliation, type CompleteActionOutcome, type CreateActionInput } from './store'
+import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type AdvertisingCampaignReconciliation, type ChannelProductReconciliation, type CompleteActionOutcome, type CreateActionInput } from './store'
 import type { AutomationActionType } from './types'
 
 /**
@@ -191,6 +191,47 @@ export async function reconcileChannelProduct(input: ChannelProductReconciliatio
     entityId: input.channelProductId,
     actorType: 'system',
     reason: 'Reconciled local record with the marketplace\'s verified state after an automated write.',
+    newValue: patch,
+  })
+}
+
+/**
+ * The advertising equivalent of `reconcileChannelProduct` (Milestone 15) —
+ * same discipline: a partial patch applied only after a verified external
+ * write, never speculatively, never inserting a new row with fabricated
+ * metrics. Reconciles the most recent existing `advertising` row for this
+ * campaign; if none exists, there is nothing real to reconcile against
+ * (the safety gates in `advertisingAutomation.ts` never propose an action
+ * against a campaign with no synced data in the first place).
+ */
+export async function reconcileAdvertisingCampaign(input: AdvertisingCampaignReconciliation): Promise<void> {
+  const supabase = createServiceSupabase()
+  const patch: Record<string, unknown> = { synced_at: new Date().toISOString() }
+  if (input.isPaused !== undefined) patch.is_paused = input.isPaused
+  if (input.dailyBudgetMinor !== undefined) patch.daily_budget_minor = input.dailyBudgetMinor
+
+  const { data: latest } = await supabase
+    .from('advertising')
+    .select('id')
+    .eq('org_id', input.orgId).eq('channel', input.channel).eq('external_id', input.externalId)
+    .order('period_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!latest) {
+    throw new Error(`No advertising row found to reconcile for campaign ${input.externalId} on ${input.channel} — a real synced row must exist before an action can be reconciled against it.`)
+  }
+
+  const { error } = await supabase.from('advertising').update(patch as never).eq('id', latest.id)
+  if (error) throw new Error(`Could not reconcile advertising campaign ${input.externalId}: ${error.message}`)
+
+  await recordAudit({
+    orgId: input.orgId,
+    action: 'ADVERTISING_CHANGED',
+    entityType: 'advertising_campaign',
+    entityId: `${input.channel}:${input.externalId}`,
+    actorType: 'system',
+    reason: 'Reconciled local record with the advertising platform\'s verified state after an automated write.',
     newValue: patch,
   })
 }

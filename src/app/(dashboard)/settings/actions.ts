@@ -39,6 +39,7 @@ export async function saveBusinessSettings(
     max_auto_price_change_pct: formData.get('max_auto_price_change_pct'),
     max_daily_ad_spend_minor: Math.round(Number(formData.get('max_daily_ad_spend_major') ?? 0) * 100),
     min_roas: formData.get('min_roas'),
+    max_auto_ad_increase_pct: formData.get('max_auto_ad_increase_pct'),
     max_delivery_days: formData.get('max_delivery_days'),
     max_return_rate_pct: formData.get('max_return_rate_pct'),
   })

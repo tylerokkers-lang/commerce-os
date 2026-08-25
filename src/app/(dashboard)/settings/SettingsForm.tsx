@@ -134,6 +134,7 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
           <Field label="Maximum automatic price change (%)" name="max_auto_price_change_pct" type="number" step="0.1" min="0" max="50" defaultValue={settings.max_auto_price_change_pct} error={errors.max_auto_price_change_pct} />
           <Field label="Maximum daily advertising spend (£)" name="max_daily_ad_spend_major" type="number" step="0.01" min="0" defaultValue={settings.max_daily_ad_spend_minor ? settings.max_daily_ad_spend_minor / 100 : 50} error={errors.max_daily_ad_spend_minor} />
           <Field label="Minimum ROAS" name="min_roas" type="number" step="0.1" min="0" max="50" defaultValue={settings.min_roas} hint="Advertising below this is reduced or paused" error={errors.min_roas} />
+          <Field label="Maximum automatic ad budget change (%)" name="max_auto_ad_increase_pct" type="number" step="1" min="0" max="200" defaultValue={settings.max_auto_ad_increase_pct} hint="Caps how large an automatically-proposed campaign budget change can be, either direction" error={errors.max_auto_ad_increase_pct} />
           <Field label="Maximum delivery time (days)" name="max_delivery_days" type="number" min="1" max="60" defaultValue={settings.max_delivery_days} error={errors.max_delivery_days} />
           <Field label="Maximum return rate (%)" name="max_return_rate_pct" type="number" step="0.1" min="0" max="100" defaultValue={settings.max_return_rate_pct} hint="Above this, a product is paused and reviewed" error={errors.max_return_rate_pct} />
         </div>

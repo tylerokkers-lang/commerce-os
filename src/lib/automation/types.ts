@@ -15,7 +15,7 @@ export type AutomationActionStatus = Enums<'automation_action_status'>
 export type AutomationRiskLevel = Enums<'automation_risk_level'>
 export type AutomationJobStatus = Enums<'automation_job_status'>
 
-/** One of the six pausable categories from the brief's §14. */
+/** One of the pausable categories from the brief's §14 (extended in Milestone 15 with 'advertising'). */
 export type AutomationCategory =
   | 'publishing'
   | 'pricing'
@@ -23,9 +23,10 @@ export type AutomationCategory =
   | 'supplier_ordering'
   | 'refunds'
   | 'fulfilment'
+  | 'advertising'
 
 export const AUTOMATION_CATEGORIES: readonly AutomationCategory[] = [
-  'publishing', 'pricing', 'supplier_switching', 'supplier_ordering', 'refunds', 'fulfilment',
+  'publishing', 'pricing', 'supplier_switching', 'supplier_ordering', 'refunds', 'fulfilment', 'advertising',
 ]
 
 /** Which category an action type belongs to, for kill-switch enforcement. */
@@ -46,6 +47,11 @@ export const ACTION_CATEGORY: Record<AutomationActionType, AutomationCategory | 
   reconcile_marketplace: null,
   reconcile_supplier: null,
   alert_owner: null,
+  // Milestone 15 — advertising platform connector + controlled automation.
+  pause_campaign: 'advertising',
+  increase_ad_budget: 'advertising',
+  decrease_ad_budget: 'advertising',
+  review_campaign: null, // A pure escalation, the same as request_approval — nothing to pause.
 }
 
 /**

@@ -3,7 +3,7 @@ import 'server-only'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { createNotification } from '@/lib/notifications/create'
 import { enqueueJob, claimNextJob, completeJob, cancelJob } from './jobs'
-import { createAutomationAction, completeAutomationAction, countRecentActionsForEntity, reconcileChannelProduct } from './actions'
+import { createAutomationAction, completeAutomationAction, countRecentActionsForEntity, reconcileAdvertisingCampaign, reconcileChannelProduct } from './actions'
 import { getAutomationSettingsForOrg } from './settings'
 import { proposeApproval } from './proposeApproval'
 import type { AutomationStore } from './store'
@@ -26,6 +26,7 @@ export function getSupabaseAutomationStore(): AutomationStore {
     countRecentActionsForEntity,
     proposeApproval,
     reconcileChannelProduct,
+    reconcileAdvertisingCampaign,
     getAutomationSettings: getAutomationSettingsForOrg,
     async recordAudit(entry) {
       await recordAudit({

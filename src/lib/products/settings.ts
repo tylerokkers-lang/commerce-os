@@ -30,6 +30,7 @@ export const businessSettingsSchema = z.object({
   max_auto_price_change_pct: z.coerce.number().min(0).max(50),
   max_daily_ad_spend_minor: z.coerce.number().int().min(0),
   min_roas: z.coerce.number().min(0).max(50),
+  max_auto_ad_increase_pct: z.coerce.number().min(0).max(200),
   max_delivery_days: z.coerce.number().int().min(1).max(60),
   max_return_rate_pct: z.coerce.number().min(0).max(100),
 })
