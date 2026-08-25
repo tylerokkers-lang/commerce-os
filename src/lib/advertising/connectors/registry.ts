@@ -72,6 +72,7 @@ const PLANNED: readonly { descriptor: AdvertisingConnectorDescriptor; reason: st
     descriptor: {
       key: 'meta_ads', label: 'Meta Ads', platform: 'meta_ads',
       capabilities: UNAVAILABLE_CAPABILITIES,
+      implementationStatus: 'stub',
       requiredCredentials: ['META_ADS_ACCESS_TOKEN', 'META_ADS_AD_ACCOUNT_ID', 'META_ADS_APP_SECRET'],
       rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
     },
@@ -81,6 +82,7 @@ const PLANNED: readonly { descriptor: AdvertisingConnectorDescriptor; reason: st
     descriptor: {
       key: 'google_ads', label: 'Google Ads', platform: 'google_ads',
       capabilities: UNAVAILABLE_CAPABILITIES,
+      implementationStatus: 'stub',
       requiredCredentials: ['GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN', 'GOOGLE_ADS_DEVELOPER_TOKEN', 'GOOGLE_ADS_CUSTOMER_ID'],
       rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
     },
@@ -90,6 +92,7 @@ const PLANNED: readonly { descriptor: AdvertisingConnectorDescriptor; reason: st
     descriptor: {
       key: 'tiktok_ads', label: 'TikTok Ads', platform: 'tiktok_ads',
       capabilities: UNAVAILABLE_CAPABILITIES,
+      implementationStatus: 'stub',
       requiredCredentials: ['TIKTOK_ADS_ACCESS_TOKEN', 'TIKTOK_ADS_ADVERTISER_ID'],
       rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
     },
@@ -124,7 +127,7 @@ export function advertisingConnectorByKey(key: string): AdvertisingProvider | nu
 export function connectorForPlatform(platform: AdvertisingPlatform, isDemo: boolean): AdvertisingProvider {
   if (isDemo) return demoAdvertisingConnector
   return advertisingConnectorByKey(platform) ?? new UnavailableAdvertisingConnector(
-    { key: platform, label: platform, platform, capabilities: UNAVAILABLE_CAPABILITIES, requiredCredentials: [], rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 } },
+    { key: platform, label: platform, platform, capabilities: UNAVAILABLE_CAPABILITIES, implementationStatus: 'stub', requiredCredentials: [], rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 } },
     'No connector is registered for this platform.',
   )
 }
@@ -146,6 +149,9 @@ export interface AdvertisingConnectionRecord {
   verificationStatus: AdvertisingConnectorSummary['verificationStatus']
   verifiedAt: string | null
   verificationDetail: string | null
+  writeVerificationStatus: AdvertisingConnectorSummary['writeVerificationStatus']
+  writeVerifiedAt: string | null
+  writeVerificationDetail: string | null
 }
 
 /** Runtime summary for every registered platform — what `/advertising`'s connections section renders, never a second source of "is this connected." */
@@ -157,9 +163,11 @@ export function advertisingConnectorSummaries(connections: ReadonlyMap<string, A
       label: connector.descriptor.label,
       platform: connector.descriptor.platform,
       capabilities: connector.descriptor.capabilities,
+      implementationStatus: connector.descriptor.implementationStatus,
       status: state?.status ?? (connector.isConfigured() ? 'connected' : 'not_configured'),
       isConfigured: connector.isConfigured(),
       missingCredentials: missingCredentials(connector.descriptor),
+      requiredCredentials: connector.descriptor.requiredCredentials,
       rateLimit: connector.descriptor.rateLimit,
       lastSyncAt: state?.lastSyncAt ?? null,
       lastSuccessAt: state?.lastSuccessAt ?? null,
@@ -169,6 +177,9 @@ export function advertisingConnectorSummaries(connections: ReadonlyMap<string, A
       verificationStatus: state?.verificationStatus ?? 'not_tested',
       verifiedAt: state?.verifiedAt ?? null,
       verificationDetail: state?.verificationDetail ?? null,
+      writeVerificationStatus: state?.writeVerificationStatus ?? 'not_tested',
+      writeVerifiedAt: state?.writeVerifiedAt ?? null,
+      writeVerificationDetail: state?.writeVerificationDetail ?? null,
     }
   })
 }

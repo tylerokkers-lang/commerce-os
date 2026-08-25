@@ -49,6 +49,17 @@ export const automationCronSecret = () => read('AUTOMATION_CRON_SECRET')
 /** Server-only callers (`ai/anthropicProvider.ts`) read the key through this accessor rather than `process.env` directly, matching every other credential in this file — `undefined` (never a thrown error) when absent, since demo mode must still boot with zero credentials. */
 export const anthropicApiKey = () => read('ANTHROPIC_API_KEY')
 
+/**
+ * Milestone 19, Phase 8 — the explicit, deliberate opt-in a write
+ * verification run (`advertising/writeVerification.ts`) refuses to proceed
+ * without, on top of every other gate that function already enforces
+ * (explicit target campaign, explicit action, a genuinely configured real
+ * connector). Absent or anything other than the literal string `'true'`
+ * means write verification is disabled — never inferred from credentials
+ * merely being present, and never set by anything in this codebase itself.
+ */
+export const advertisingWriteVerificationEnabled = (): boolean => read('ADVERTISING_WRITE_VERIFICATION_ENABLED') === 'true'
+
 export interface IntegrationCredentials {
   readonly key: string
   readonly label: string

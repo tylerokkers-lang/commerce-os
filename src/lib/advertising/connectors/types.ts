@@ -40,12 +40,24 @@ export interface AdvertisingCapabilities {
   verifyWrites: boolean
 }
 
+/**
+ * Milestone 19 — whether real, working code exists for this connector at
+ * all, independent of whether it is configured or has ever been verified.
+ * Previously this fact lived only as a hardcoded `key -> label` map inside
+ * `/advertising`'s page component (`IMPLEMENTATION_LABEL`); moved onto the
+ * descriptor itself so the UI, the capability registry, and any future
+ * reader all derive it from one real source rather than a second,
+ * potentially-drifting copy.
+ */
+export type AdvertisingImplementationStatus = 'implemented' | 'stub'
+
 export interface AdvertisingConnectorDescriptor {
   /** Unique registry key — `<platform>` for the real connector, `<platform>_demo` for its demo pair. */
   key: string
   label: string
   platform: AdvertisingPlatform
   capabilities: AdvertisingCapabilities
+  implementationStatus: AdvertisingImplementationStatus
   /** Environment variable names. Never values. */
   requiredCredentials: readonly string[]
   rateLimit: AdvertisingRateLimit
@@ -158,9 +170,12 @@ export interface AdvertisingConnectorSummary {
   label: string
   platform: AdvertisingPlatform
   capabilities: AdvertisingCapabilities
+  implementationStatus: AdvertisingImplementationStatus
   status: AdvertisingConnectionStatus
   isConfigured: boolean
   missingCredentials: readonly string[]
+  /** Every credential this connector needs, regardless of which are currently present — `missingCredentials` is a subset of this. */
+  requiredCredentials: readonly string[]
   rateLimit: AdvertisingRateLimit
   lastSyncAt: string | null
   lastSuccessAt: string | null
@@ -177,4 +192,15 @@ export interface AdvertisingConnectorSummary {
   verificationStatus: 'not_tested' | 'authentication_verified' | 'read_access_verified' | 'data_retrieval_verified' | 'end_to_end_sync_verified' | 'failed'
   verifiedAt: string | null
   verificationDetail: string | null
+  /**
+   * Milestone 19 (Phase 3) — a genuinely separate dimension from
+   * `verificationStatus` above: read verification (the field above) never
+   * implies write verification, and this field is never advanced by
+   * anything except an explicit, isolated write-verification run
+   * (`advertising/writeVerification.ts`) — never inferred from a
+   * successful read, never automatic. See that module's own comment.
+   */
+  writeVerificationStatus: 'not_tested' | 'verified' | 'failed'
+  writeVerifiedAt: string | null
+  writeVerificationDetail: string | null
 }

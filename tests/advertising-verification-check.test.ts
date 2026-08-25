@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { err, ok, type Result } from '@/lib/core/result'
 import { demoAdvertisingConnector } from '@/lib/advertising/connectors/demo'
 import { amazonAdsConnector } from '@/lib/advertising/connectors/amazonAds'
-import { verifyProviderReadOnly } from '@/lib/advertising/verificationCheck'
+import { verifyProviderReadOnly, runAdvertisingVerificationHarness } from '@/lib/advertising/verificationCheck'
 import type {
   AdvertisingConnectionHealth,
   AdvertisingConnectorDescriptor,
@@ -30,6 +30,7 @@ import type {
 const DESCRIPTOR: AdvertisingConnectorDescriptor = {
   key: 'fake_ads', label: 'Fake Ads', platform: 'meta_ads',
   capabilities: { readCampaigns: true, pauseCampaign: false, setBudget: false, verifyWrites: false },
+  implementationStatus: 'implemented',
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
 }
@@ -122,5 +123,76 @@ describe('verifyProviderReadOnly: honest, staged verification states', () => {
       const result = await verifyProviderReadOnly(connector)
       expect(result.status).not.toBe('end_to_end_sync_verified')
     }
+  })
+})
+
+describe('runAdvertisingVerificationHarness: named, incremental steps (Phase 7)', () => {
+  it('an unconfigured connector fails at step 1, never attempting authentication', async () => {
+    const result = await runAdvertisingVerificationHarness(amazonAdsConnector)
+    expect(result.steps).toHaveLength(1)
+    expect(result.steps[0].step).toBe('Validate credentials exist')
+    expect(result.steps[0].outcome).toBe('failed')
+    expect(result.overallStatus).toBe('not_tested')
+  })
+
+  it('a real, fully-working connector (demo) passes every step in order', async () => {
+    const result = await runAdvertisingVerificationHarness(demoAdvertisingConnector)
+    expect(result.steps.map((s) => s.step)).toEqual([
+      'Validate credentials exist',
+      'Authenticate and identify accessible account/profile',
+      'Perform a safe read: fetch campaign metadata and metrics',
+      'Verify campaign state',
+    ])
+    expect(result.steps.every((s) => s.outcome === 'passed')).toBe(true)
+    expect(result.overallStatus).toBe('data_retrieval_verified')
+  })
+
+  it('a connection-health failure stops the harness at step 2, never attempting a read', async () => {
+    const connector = new FakeConnector(true, err('token expired'), ok({ records: [], requestsMade: 0, warnings: [] }))
+    const result = await runAdvertisingVerificationHarness(connector)
+    expect(result.steps).toHaveLength(2)
+    expect(result.steps[1].outcome).toBe('failed')
+    expect(result.overallStatus).toBe('failed')
+  })
+
+  it('a read failure after successful auth stops before verify campaign state', async () => {
+    const connector = new FakeConnector(
+      true,
+      ok({ status: 'connected', checkedAt: new Date().toISOString(), detail: null }),
+      err('rate limited'),
+    )
+    const result = await runAdvertisingVerificationHarness(connector)
+    expect(result.steps.map((s) => s.step)).toEqual(['Validate credentials exist', 'Authenticate and identify accessible account/profile', 'Perform a safe read: fetch campaign metadata and metrics'])
+    expect(result.steps[2].outcome).toBe('failed')
+    expect(result.overallStatus).toBe('authentication_verified')
+  })
+
+  it('zero campaigns returned -> verify campaign state is explicitly skipped, not silently omitted', async () => {
+    const connector = new FakeConnector(
+      true,
+      ok({ status: 'connected', checkedAt: new Date().toISOString(), detail: null }),
+      ok({ records: [], requestsMade: 1, warnings: [] }),
+    )
+    const result = await runAdvertisingVerificationHarness(connector)
+    const verifyStep = result.steps.find((s) => s.step === 'Verify campaign state')
+    expect(verifyStep?.outcome).toBe('skipped')
+    expect(result.overallStatus).toBe('read_access_verified')
+  })
+
+  it('never calls a connector write method — every step is read-only', async () => {
+    let wroteAnything = false
+    class WriteTrackingConnector extends FakeConnector {
+      async pauseCampaign(): Promise<Result<{ accepted: boolean; externalRef: string | null }, AdvertisingWriteFailure>> {
+        wroteAnything = true
+        return ok({ accepted: true, externalRef: null })
+      }
+      async setCampaignBudget(): Promise<Result<{ accepted: boolean; externalRef: string | null }, AdvertisingWriteFailure>> {
+        wroteAnything = true
+        return ok({ accepted: true, externalRef: null })
+      }
+    }
+    const connector = new WriteTrackingConnector(true, ok({ status: 'connected', checkedAt: new Date().toISOString(), detail: null }), ok({ records: [], requestsMade: 1, warnings: [] }))
+    await runAdvertisingVerificationHarness(connector)
+    expect(wroteAnything).toBe(false)
   })
 })

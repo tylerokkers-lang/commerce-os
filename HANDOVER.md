@@ -2164,19 +2164,124 @@ documented ≠ configured ≠ live and scheduled** — see §6/§35 (Phase 6
 "needs the owner" list) for what remains an operator action, not a code
 gap.
 
-## 35. Next step
+## 35. Milestone 19 (Connector Verification, Capability Registry & Production Integration Readiness) — what was built
+
+Built a truthful, capability-level verification model on top of the
+existing advertising connector architecture (Milestones 15/16) — extending
+it, not duplicating it. No second connector registry, no second
+verification store.
+
+**Capability registry (Phases 1-4):** `advertising/capabilityRegistry.ts`
+(pure, no `server-only` import) answers, per `(provider, capability)` pair,
+the question this milestone exists to keep separate: "is this implemented"
+vs. "is this verified." Eight states (`NOT_IMPLEMENTED`/`STUB`/
+`MISCONFIGURED`/`UNAVAILABLE`/`IMPLEMENTED_UNVERIFIED`/`CREDENTIALS_CONFIGURED`/
+`READ_VERIFIED`/`WRITE_VERIFIED`), derived in a fixed priority order from
+facts the connector registry already computes — never a second source of
+truth. `AdvertisingConnectorDescriptor` gained a real
+`implementationStatus: 'implemented' | 'stub'` field (previously this
+lived only as a hardcoded `key -> label` map inside `/advertising`'s page
+component; moved onto the descriptor itself).
+
+**A genuine, honest correction to this milestone's own brief:** the brief's
+worked example claims Amazon Ads' `readCampaigns`/`verifyCampaignState`
+are `IMPLEMENTED_UNVERIFIED`. The real, current `amazonAds.ts` descriptor
+honestly declares `readCampaigns: false` and `verifyWrites: false` (the
+Reporting API gap this codebase has documented since Milestone 15 — see
+that file's own module comment) — so those two capabilities correctly
+derive to `NOT_IMPLEMENTED`, not `IMPLEMENTED_UNVERIFIED`. Only
+`pauseCampaign`/`setBudget` (real code against an unconfirmed API
+contract, per the same module comment) are `IMPLEMENTED_UNVERIFIED` in
+this environment (zero credentials configured). The capability registry
+follows the actual repository state, not the brief's illustrative example,
+per the brief's own instruction ("do not change these labels unless the
+repository and actual verification evidence justify doing so").
+
+**Read vs. write verification (Phases 3/6):** migration 0030 adds
+`write_verification_status`/`write_verified_at`/`write_verification_detail`
+to `advertising_connections` — a genuinely separate column set from
+migration 0028's read-verification columns, so a passing read check can
+never be mistaken for (or silently imply) a passing write check.
+`advertising/writeVerification.ts`'s `runWriteVerification` is the *only*
+code path in this codebase that can cause a real write-capability
+verification to touch a live provider, gated by all four of Phase 8's
+explicit requirements (`ADVERTISING_WRITE_VERIFICATION_ENABLED=true`,
+an explicit target campaign, an explicit action, the connector genuinely
+configured) — checked by the pure, directly-tested
+`writeVerificationGates.ts`. Deliberately never wired to any HTTP route,
+scheduled job, or UI control; the only way to invoke it is a direct
+function call from trusted server code. It has never executed against a
+live provider in this environment.
+
+**Execution-time capability gate (Phases 5/6/13/14):**
+`advertisingApprovalExecutor.ts`'s `executeApprovedCampaignAction` now
+calls `checkExecutionCapabilityGate` immediately before `submitCampaignAction`
+— an approved decision whose exact write capability is not `WRITE_VERIFIED`
+(or whose connection is not the sanctioned `demo` test path) is blocked
+with a structured `revalidation_blocked` outcome, the same shape every
+other execution-time revalidation check in this file already uses, and
+audited (`ADVERTISING_EXECUTION_BLOCKED_CAPABILITY`). Approval was never,
+and is still never, sufficient authorization on its own.
+
+**Demo connector preservation (Phase 15):** `deriveCapabilityStatus`
+treats a `demo` connection status as inherently `READ_VERIFIED`/
+`WRITE_VERIFIED` for every implemented capability — the demo connector
+needs no real write-verification record to keep exercising the full
+execution pipeline end-to-end, exactly as it already does in
+`tests/advertising-execution-e2e.test.ts`.
+
+**Stub providers (Phase 16):** Meta/Google/TikTok were already honestly
+represented as `UnavailableAdvertisingConnector` instances with every
+capability `false`; now their descriptors also carry
+`implementationStatus: 'stub'` explicitly, and every one of their four
+capabilities correctly derives to `STUB` in the registry and the UI —
+verified live in the browser.
+
+**Verification history (Phase 12):** no new audit/history table — the
+existing `advertising_connections` verification columns (read, and now
+write) already are the persistent record `getAdvertisingConnectorSummaries`
+reads, and every verification attempt (read or write) is additionally
+recorded through the existing `audit_logs` architecture
+(`ADVERTISING_PROVIDER_VERIFIED`, `ADVERTISING_WRITE_VERIFICATION_RUN`) —
+reused, not duplicated.
+
+**UI (Phase 11):** `/advertising`'s connector cards gained a fourth,
+genuinely distinct badge (write verification) and a per-capability
+breakdown line (one badge per `readCampaigns`/`verifyCampaignState`/
+`pauseCampaign`/`setBudget`, each showing its own derived status) — never
+collapsed into the existing implementation/connection/read-verification
+badges.
+
+**Verified again after this milestone:** 1219 tests (up from 1173),
+`npx tsc --noEmit`, `npm run lint`, `npm run build` and `npm run
+db:verify` all clean (74 tables, one additive migration this pass). Live
+in the browser: `/advertising` renders the real, honest per-capability
+breakdown for Amazon Ads (mixed `NOT_IMPLEMENTED`/`IMPLEMENTED_UNVERIFIED`)
+and for Meta/Google/TikTok (all four `STUB`), no console errors.
+
+Amazon Ads remains, truthfully: **Implemented. NOT live-verified.**
+Nothing in this milestone changes that — no real Amazon Ads credentials or
+account exist in this environment, and `runWriteVerification` has never
+been invoked against a live provider.
+
+## 36. Next step
 
 The two real options remaining, per `docs/MILESTONES.md`: (1) **finish
 the Amazon Ads Reporting API integration** (the async create-report/poll/
 download flow `amazonAds.ts`'s `fetchCampaigns` currently declines rather
 than fake) — still the highest-value single piece of remaining wiring,
 since every other layer (validation, policy, execution, approval routing,
-monitoring, recovery, scheduling) is now built and tested end-to-end
-against the demo connector; or (2) **deploy for real** — a live Supabase
-project, a chosen host, `AUTOMATION_CRON_SECRET` set, and (if that host is
-Vercel) `CRON_SECRET` set to the same value so `vercel.json`'s cron entry
-actually authenticates — the one thing no amount of further code can
-substitute for. `ai/actions/validate.ts`'s `EXECUTABLE_ACTION_TYPES` and
+monitoring, recovery, scheduling, capability verification) is now built
+and tested end-to-end against the demo connector; or (2) **deploy for
+real** — a live Supabase project, a chosen host, `AUTOMATION_CRON_SECRET`
+set, and (if that host is Vercel) `CRON_SECRET` set to the same value so
+`vercel.json`'s cron entry actually authenticates — the one thing no
+amount of further code can substitute for. Once real Amazon Ads
+credentials exist, run `verificationCheck.ts`'s `runAdvertisingVerificationHarness`
+first (read-only, safe) before ever considering
+`writeVerification.ts`'s `runWriteVerification` against a genuine
+sandbox/test campaign — never against a real, live-spending one.
+`ai/actions/validate.ts`'s `EXECUTABLE_ACTION_TYPES` and
 `REVIEW_ONLY_REASONS` are exactly where `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
 `DECREASE_BUDGET` would graduate to chat-executable, once `CampaignIdentity`'s
 `provider` is threaded through `FactBundle` — never a parallel proposal

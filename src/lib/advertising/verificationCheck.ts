@@ -60,3 +60,71 @@ export async function verifyProviderReadOnly(connector: AdvertisingProvider): Pr
 
   return { status: 'data_retrieval_verified', detail: `Successfully retrieved ${fetchResult.value.records.length} real campaign record(s).` }
 }
+
+/**
+ * Milestone 19, Phase 7 — the same read-only check above, broken into the
+ * brief's suggested incremental steps, each with its own named, structured
+ * outcome. Never calls a connector method `verifyProviderReadOnly` does
+ * not already call (no new API surface, no duplicated logic) — this is a
+ * more legible *view* over identical calls, not a second implementation.
+ * Genuinely finer granularity than the underlying connector supports is
+ * not invented: Amazon Ads' `fetchCampaigns` is one monolithic call (the
+ * Reporting API's create/poll/download flow is not implemented — see
+ * `connectors/amazonAds.ts`), so "fetch campaign metadata" and "fetch
+ * metrics" collapse into one step here rather than two that would only
+ * differ in name.
+ */
+export interface VerificationHarnessStep {
+  step: string
+  outcome: 'passed' | 'failed' | 'skipped'
+  detail: string
+}
+
+export interface VerificationHarnessResult {
+  steps: readonly VerificationHarnessStep[]
+  overallStatus: AdvertisingVerificationStatus
+}
+
+export async function runAdvertisingVerificationHarness(connector: AdvertisingProvider): Promise<VerificationHarnessResult> {
+  const steps: VerificationHarnessStep[] = []
+
+  if (!connector.isConfigured()) {
+    steps.push({ step: 'Validate credentials exist', outcome: 'failed', detail: `${connector.descriptor.label} is not configured.` })
+    return { steps, overallStatus: 'not_tested' }
+  }
+  steps.push({ step: 'Validate credentials exist', outcome: 'passed', detail: 'All required credentials are present.' })
+
+  const health = await connector.getConnectionHealth()
+  if (!health.ok || health.value.status === 'error' || health.value.status === 'not_configured') {
+    steps.push({
+      step: 'Authenticate and identify accessible account/profile',
+      outcome: 'failed',
+      detail: health.ok ? (health.value.detail ?? 'Connection health check failed.') : health.error,
+    })
+    return { steps, overallStatus: 'failed' }
+  }
+  steps.push({ step: 'Authenticate and identify accessible account/profile', outcome: 'passed', detail: `Connection status: ${health.value.status}.` })
+
+  const fetchResult = await connector.fetchCampaigns({ limit: 1 })
+  if (!fetchResult.ok) {
+    steps.push({ step: 'Perform a safe read: fetch campaign metadata and metrics', outcome: 'failed', detail: fetchResult.error })
+    return { steps, overallStatus: 'authentication_verified' }
+  }
+
+  if (fetchResult.value.records.length === 0) {
+    steps.push({ step: 'Perform a safe read: fetch campaign metadata and metrics', outcome: 'passed', detail: 'The read call succeeded, but returned no campaigns.' })
+    steps.push({ step: 'Verify campaign state', outcome: 'skipped', detail: 'No campaign was returned to verify against.' })
+    return { steps, overallStatus: 'read_access_verified' }
+  }
+  steps.push({ step: 'Perform a safe read: fetch campaign metadata and metrics', outcome: 'passed', detail: `Retrieved ${fetchResult.value.records.length} real campaign record(s).` })
+
+  const target = fetchResult.value.records[0]
+  const verifyResult = await connector.verifyCampaignState(target.externalCampaignId)
+  if (!verifyResult.ok) {
+    steps.push({ step: 'Verify campaign state', outcome: 'failed', detail: verifyResult.error })
+    return { steps, overallStatus: 'data_retrieval_verified' }
+  }
+  steps.push({ step: 'Verify campaign state', outcome: 'passed', detail: `Read back campaign ${target.externalCampaignId}'s own state directly.` })
+
+  return { steps, overallStatus: 'data_retrieval_verified' }
+}

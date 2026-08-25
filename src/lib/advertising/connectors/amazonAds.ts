@@ -79,6 +79,7 @@ const DESCRIPTOR: AdvertisingConnectorDescriptor = {
   label: 'Amazon Ads',
   platform: 'amazon_ads',
   capabilities: { readCampaigns: false, pauseCampaign: true, setBudget: true, verifyWrites: false },
+  implementationStatus: 'implemented',
   requiredCredentials: [
     'AMAZON_ADS_CLIENT_ID',
     'AMAZON_ADS_CLIENT_SECRET',

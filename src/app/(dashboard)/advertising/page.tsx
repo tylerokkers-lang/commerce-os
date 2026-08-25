@@ -9,6 +9,8 @@ import { getAdvertisingConnectorSummaries } from '@/lib/advertising/repository'
 import type { CampaignIntelligence } from '@/lib/analytics/repository'
 import type { AdvertisingHealthStatus, CampaignClassification, CampaignSeverity } from '@/lib/analytics/advertisingAnalytics'
 import type { AdvertisingConnectorSummary, AdvertisingConnectionStatus } from '@/lib/advertising/connectors/types'
+import { getAllCapabilityStatuses } from '@/lib/advertising/capabilityRegistry'
+import type { AdvertisingCapabilityName, AdvertisingCapabilityStatusLabel } from '@/lib/advertising/capabilityRegistry'
 import type { Priority } from '@/lib/ceo/types'
 import { verifyProviderConnection } from './actions'
 
@@ -56,21 +58,34 @@ const CONNECTION_TONE: Record<AdvertisingConnectionStatus, Tone> = { connected: 
 const CONNECTION_LABEL: Record<AdvertisingConnectionStatus, string> = { connected: 'Connected', demo: 'Demo', not_configured: 'Not connected', degraded: 'Degraded', error: 'Error' }
 
 /**
- * Phase 13 — honest implementation status, a genuinely different axis
- * from `status`/`CONNECTION_LABEL` above: a platform can be "Not
- * connected" simply because nobody has entered credentials yet even
- * though the integration is real and working (never true for any
- * platform in this environment, but the distinction still matters), or
- * "Not connected" because the integration itself is a stub regardless of
- * credentials. Keyed by the registry key so it can never silently drift
- * from which connector class is actually registered.
+ * Phase 13 (Milestone 15) / Phase 1 (Milestone 19) — honest implementation
+ * status, a genuinely different axis from `status`/`CONNECTION_LABEL`
+ * above: a platform can be "Not connected" simply because nobody has
+ * entered credentials yet even though the integration is real and working
+ * (never true for any platform in this environment, but the distinction
+ * still matters), or "Not connected" because the integration itself is a
+ * stub regardless of credentials. Read from `connector.implementationStatus`
+ * (the connector descriptor's own field, Milestone 19) rather than a
+ * second, key-keyed map that could silently drift from the registry.
  */
-const IMPLEMENTATION_TONE: Record<string, Tone> = { amazon_ads: 'caution', meta_ads: 'neutral', google_ads: 'neutral', tiktok_ads: 'neutral' }
-const IMPLEMENTATION_LABEL: Record<string, string> = {
-  amazon_ads: 'Implemented — requires live verification',
-  meta_ads: 'Stub — not implemented',
-  google_ads: 'Stub — not implemented',
-  tiktok_ads: 'Stub — not implemented',
+const IMPLEMENTATION_TONE: Record<AdvertisingConnectorSummary['implementationStatus'], Tone> = { implemented: 'caution', stub: 'neutral' }
+const IMPLEMENTATION_LABEL: Record<AdvertisingConnectorSummary['implementationStatus'], string> = {
+  implemented: 'Implemented — requires live verification',
+  stub: 'Stub — not implemented',
+}
+
+/**
+ * Milestone 19, Phase 2/3/11 — per-capability status, never collapsed
+ * into the single implementation/connection/verification badges above.
+ * `deriveCapabilityStatus`'s own comment documents the full priority
+ * order these eight labels are derived in.
+ */
+const CAPABILITY_STATUS_TONE: Record<AdvertisingCapabilityStatusLabel, Tone> = {
+  NOT_IMPLEMENTED: 'neutral', STUB: 'neutral', MISCONFIGURED: 'negative', UNAVAILABLE: 'negative',
+  IMPLEMENTED_UNVERIFIED: 'caution', CREDENTIALS_CONFIGURED: 'accent', READ_VERIFIED: 'positive', WRITE_VERIFIED: 'positive',
+}
+const CAPABILITY_LABEL: Record<AdvertisingCapabilityName, string> = {
+  readCampaigns: 'Read campaigns', verifyCampaignState: 'Verify campaign state', pauseCampaign: 'Pause campaign', setBudget: 'Set budget',
 }
 
 /**
@@ -102,18 +117,28 @@ function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary })
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <Badge tone={CONNECTION_TONE[connector.status]}>{CONNECTION_LABEL[connector.status]}</Badge>
-          <Badge tone={IMPLEMENTATION_TONE[connector.key] ?? 'neutral'}>{IMPLEMENTATION_LABEL[connector.key] ?? 'Unknown'}</Badge>
+          <Badge tone={IMPLEMENTATION_TONE[connector.implementationStatus]}>{IMPLEMENTATION_LABEL[connector.implementationStatus]}</Badge>
           <Badge tone={VERIFICATION_TONE[connector.verificationStatus]}>{VERIFICATION_LABEL[connector.verificationStatus]}</Badge>
+          <Badge tone={connector.writeVerificationStatus === 'verified' ? 'positive' : connector.writeVerificationStatus === 'failed' ? 'negative' : 'neutral'}>
+            Write: {connector.writeVerificationStatus === 'verified' ? 'Verified' : connector.writeVerificationStatus === 'failed' ? 'Failed' : 'Not tested'}
+          </Badge>
         </div>
       </div>
+      <ul className="mt-2 flex flex-wrap gap-1.5">
+        {getAllCapabilityStatuses(connector).map((capability) => (
+          <li key={capability.capability}>
+            <Badge tone={CAPABILITY_STATUS_TONE[capability.status]} className="text-[11px]">
+              {CAPABILITY_LABEL[capability.capability]}: {capability.status.replace(/_/g, ' ').toLowerCase()}
+            </Badge>
+          </li>
+        ))}
+      </ul>
       <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-subtle">
-        <span>Read: {connector.capabilities.readCampaigns ? 'yes' : 'no'}</span>
-        <span>Pause: {connector.capabilities.pauseCampaign ? 'yes' : 'no'}</span>
-        <span>Budget: {connector.capabilities.setBudget ? 'yes' : 'no'}</span>
         {connector.lastSyncAt ? <span>Last sync {formatRelative(connector.lastSyncAt)}</span> : null}
         {connector.lastError ? <span className="text-negative">{connector.lastError}</span> : null}
       </div>
-      {connector.verificationDetail ? <p className="mt-1.5 text-xs text-ink-subtle">{connector.verificationDetail}</p> : null}
+      {connector.verificationDetail ? <p className="mt-1.5 text-xs text-ink-subtle">Read verification: {connector.verificationDetail}</p> : null}
+      {connector.writeVerificationDetail ? <p className="mt-1 text-xs text-ink-subtle">Write verification: {connector.writeVerificationDetail}</p> : null}
       {connector.isConfigured ? (
         <form action={verifyProviderConnection} className="mt-2">
           <input type="hidden" name="connectorKey" value={connector.key} />

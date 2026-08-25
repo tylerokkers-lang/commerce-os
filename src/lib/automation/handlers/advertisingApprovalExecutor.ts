@@ -4,6 +4,7 @@ import { createServiceSupabase } from '@/lib/supabase/server'
 import { assessCampaignActionPolicy, type CampaignActionRequest } from '../advertisingAutomation'
 import { submitCampaignAction } from '../advertisingExecution'
 import { connectorForPlatform } from '@/lib/advertising/connectors/registry'
+import { checkExecutionCapabilityGate, type AdvertisingCapabilityName } from '@/lib/advertising/capabilityRegistry'
 import type { DecisionExecutionOutcome } from '../executionDispatch'
 import type { AutomationStore } from '../store'
 import type { AutomationSettings } from '../settingsTypes'
@@ -91,6 +92,13 @@ export async function loadConnectionStatus(orgId: string, platform: string): Pro
   return (data?.status as never) ?? 'not_configured'
 }
 
+/** Milestone 19 — the write-verification half of the execution capability gate below. A genuinely separate read from `loadConnectionStatus`, never conflated with it. */
+async function loadWriteVerificationStatus(orgId: string, platform: string): Promise<'not_tested' | 'verified' | 'failed'> {
+  const supabase = createServiceSupabase()
+  const { data } = await supabase.from('advertising_connections').select('write_verification_status').eq('org_id', orgId).eq('provider', platform).maybeSingle()
+  return (data?.write_verification_status as never) ?? 'not_tested'
+}
+
 export async function executeApprovedCampaignAction(decision: ApprovedCampaignDecision, settings: AutomationSettings, store: AutomationStore): Promise<DecisionExecutionOutcome> {
   const fresh = await loadFreshCampaignFacts(decision.orgId, decision.channel, decision.provider, decision.externalAccountId, decision.externalCampaignId)
   const connectionStatus = await loadConnectionStatus(decision.orgId, decision.provider)
@@ -133,6 +141,47 @@ export async function executeApprovedCampaignAction(decision: ApprovedCampaignDe
   }
 
   const connector = connectorForPlatform(decision.provider, decision.isDemo)
+
+  // Milestone 19, Phase 5/6/13/14 — approval alone is never sufficient
+  // authorization to touch the provider; the exact write capability this
+  // action needs must itself be verified (or the connection genuinely be
+  // `demo`, the sanctioned end-to-end test path — see
+  // `capabilityRegistry.ts`'s own comment). This never depends on the
+  // read-verification half of `advertising_connections` — a passing read
+  // check can never substitute for a missing write verification.
+  const capability: AdvertisingCapabilityName = decision.actionType === 'pause_campaign' ? 'pauseCampaign' : 'setBudget'
+  const writeVerificationStatus = await loadWriteVerificationStatus(decision.orgId, decision.provider)
+  const capabilityGate = checkExecutionCapabilityGate({
+    provider: connector.descriptor.label,
+    capability,
+    implementationStatus: connector.descriptor.implementationStatus,
+    capabilityFlag: connector.descriptor.capabilities[capability],
+    isConfigured: connector.isConfigured(),
+    connectionStatus,
+    writeVerificationStatus,
+  })
+  if (!capabilityGate.allowed) {
+    await store.completeAutomationAction(decision.automationActionId, {
+      succeeded: false,
+      error: `Blocked on revalidation: ${capabilityGate.reason}`,
+      orgId: decision.orgId,
+      entityType: 'advertising_campaign',
+      entityId: `${decision.channel}:${decision.externalCampaignId}`,
+      verificationStatus: 'not_applicable',
+      reconciliationStatus: 'not_applicable',
+    })
+    await store.recordAudit({
+      orgId: decision.orgId,
+      action: 'ADVERTISING_EXECUTION_BLOCKED_CAPABILITY',
+      entityType: 'advertising_campaign',
+      entityId: `${decision.channel}:${decision.externalCampaignId}`,
+      actorType: 'system',
+      result: 'blocked',
+      reason: capabilityGate.reason,
+    })
+    return { kind: 'revalidation_blocked', automationActionId: decision.automationActionId, reason: capabilityGate.reason }
+  }
+
   const result = await submitCampaignAction(
     {
       orgId: decision.orgId,

@@ -230,6 +230,9 @@ export interface Database {
           verification_status: string
           verified_at: string | null
           verification_detail: string | null
+          write_verification_status: string
+          write_verified_at: string | null
+          write_verification_detail: string | null
         }
         Insert: {
           id?: string
@@ -250,6 +253,9 @@ export interface Database {
           verification_status?: string
           verified_at?: string | null
           verification_detail?: string | null
+          write_verification_status?: string
+          write_verified_at?: string | null
+          write_verification_detail?: string | null
         }
         Update: {
           id?: string
@@ -270,6 +276,9 @@ export interface Database {
           verification_status?: string
           verified_at?: string | null
           verification_detail?: string | null
+          write_verification_status?: string
+          write_verified_at?: string | null
+          write_verification_detail?: string | null
         }
         Relationships: [
           {

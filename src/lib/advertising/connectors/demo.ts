@@ -29,6 +29,7 @@ const DESCRIPTOR: AdvertisingConnectorDescriptor = {
   label: 'Demo Ads',
   platform: 'amazon_ads',
   capabilities: { readCampaigns: true, pauseCampaign: true, setBudget: true, verifyWrites: true },
+  implementationStatus: 'implemented',
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
 }
