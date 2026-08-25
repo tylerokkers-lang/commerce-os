@@ -6,6 +6,7 @@ import type { SessionContext } from '@/lib/security/session'
 import { createAutomationAction } from './actions'
 import { factsHaveMaterializedChanged } from './factsComparison'
 import { classifyDecisionType, type DecisionExecutionOutcome } from './executionDispatch'
+import { evaluateApprovalEligibility } from './approvalEligibility'
 import { executeApprovedPriceChange } from './handlers/priceApprovalExecutor'
 import { executeApprovedCampaignAction } from './handlers/advertisingApprovalExecutor'
 import { getAutomationSettingsForOrg } from './settings'
@@ -82,22 +83,24 @@ export async function approveDecision(
 
   if (loadError) return { status: 'error', message: loadError.message }
   if (!decision) return { status: 'error', message: 'Decision not found.' }
-  if (decision.status !== 'awaiting_approval') {
-    return { status: 'error', message: `Decision is "${decision.status}", not awaiting approval.` }
-  }
-  if (decision.expires_at && new Date(decision.expires_at) < new Date()) {
-    await supabase.from('ai_decisions').update({ status: 'expired' }).eq('id', decisionId)
-    await recordAudit({
-      orgId: session.orgId,
-      action: 'APPROVAL_EXPIRED',
-      entityType: decision.entity_type,
-      entityId: decision.entity_id ?? undefined,
-      actorType: 'system',
-      actorLabel: 'Approval expiry check',
-      reason: `Expired at ${decision.expires_at}, before anyone approved or rejected it.`,
-      aiDecisionId: decisionId,
-    })
-    return { status: 'invalidated', reason: 'This approval request has expired.' }
+
+  const eligibility = evaluateApprovalEligibility(decision.status, decision.expires_at, new Date())
+  if (!eligibility.eligible) {
+    if (eligibility.expire) {
+      await supabase.from('ai_decisions').update({ status: 'expired' }).eq('id', decisionId)
+      await recordAudit({
+        orgId: session.orgId,
+        action: 'APPROVAL_EXPIRED',
+        entityType: decision.entity_type,
+        entityId: decision.entity_id ?? undefined,
+        actorType: 'system',
+        actorLabel: 'Approval expiry check',
+        reason: `Expired at ${decision.expires_at}, before anyone approved or rejected it.`,
+        aiDecisionId: decisionId,
+      })
+      return { status: 'invalidated', reason: eligibility.reason }
+    }
+    return { status: 'error', message: eligibility.reason }
   }
 
   const proposedFacts = (decision.inputs ?? {}) as Record<string, unknown>
@@ -170,6 +173,21 @@ export async function approveDecision(
   // so a retry can genuinely make progress rather than being stuck forever
   // on one bad attempt.
   if (created.alreadyExisted && created.status === 'succeeded') {
+    return { status: 'approved', automationActionId: created.id }
+  }
+
+  // Phase 5 — the genuine double-click/two-tabs race: `created.alreadyExisted`
+  // means *this* call did not create the row, another concurrent (or still
+  // in-flight) call did. If that other call's execution is still
+  // `executing`, this call must never dispatch a second, concurrent
+  // execution attempt against the same real-world action — only the call
+  // that actually created the row is allowed to execute it. A row still
+  // `executing` from a call that is *not* concurrent but genuinely crashed
+  // (server restarted mid-flight) is a separate, out-of-scope recovery
+  // concern; this only guarantees no second connector call ever starts
+  // while the first might still be running.
+  if (created.alreadyExisted && created.status === 'executing') {
+    await applyExecutionOutcome(supabase, session.orgId, decisionId, { kind: 'already_in_progress', automationActionId: created.id })
     return { status: 'approved', automationActionId: created.id }
   }
 
@@ -295,10 +313,15 @@ async function applyExecutionOutcome(
     await recordAudit({ orgId, action: 'AUTOMATION_ACTION_FAILED', entityType: 'ai_decision', entityId: decisionId, actorType: 'system', result: 'failure', error: outcome.reason, aiDecisionId: decisionId })
     return
   }
-  // 'already_in_progress' is reserved for a future concurrent-claim
-  // mechanism — not reachable via any path in this milestone (the
-  // idempotency-key short-circuit above handles the "already succeeded"
-  // case before this function is ever called).
+  if (outcome.kind === 'already_in_progress') {
+    // Phase 5 — the losing side of a genuine concurrent race (double-click,
+    // two tabs): another call already created and is executing the
+    // underlying `automation_actions` row. `ai_decisions.status` is left
+    // exactly as the winning call set it — never overwritten here — this
+    // is only an audit record that a second attempt was correctly turned
+    // away rather than silently dropped.
+    await recordAudit({ orgId, action: 'AUTOMATION_ACTION_ALREADY_IN_PROGRESS', entityType: 'ai_decision', entityId: decisionId, actorType: 'system', result: 'success', reason: 'A concurrent approval attempt was already executing this exact action; this attempt was not dispatched a second time.', aiDecisionId: decisionId })
+  }
 }
 
 export async function rejectDecision(session: SessionContext, decisionId: string, reason: string): Promise<ApprovalOutcome> {

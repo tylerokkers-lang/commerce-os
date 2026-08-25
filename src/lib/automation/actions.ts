@@ -115,7 +115,27 @@ export async function createAutomationAction(
     .select('*')
     .single()
 
-  if (error) throw new Error(`Could not record automation action: ${error.message}`)
+  if (error) {
+    // Phase 5 — a genuine concurrent-request race: two callers (a
+    // double-click, two open tabs) can both pass the `SELECT` check above
+    // before either `INSERT` commits. The `unique(org_id, idempotency_key)`
+    // constraint (migration 0019) is what actually prevents two rows for
+    // the same real-world action from ever existing; this branch is only
+    // what turns the loser's Postgres error into the same graceful
+    // "already exists" result the winner's own SELECT-first check would
+    // have returned, rather than an unhandled 500. No second idempotency
+    // mechanism — this reads back the exact row the constraint protected.
+    if (error.code === '23505' && input.idempotencyKey) {
+      const { data: raced } = await supabase
+        .from('automation_actions')
+        .select('id, status')
+        .eq('org_id', input.orgId)
+        .eq('idempotency_key', input.idempotencyKey)
+        .maybeSingle()
+      if (raced) return { id: raced.id, status: raced.status, alreadyExisted: true }
+    }
+    throw new Error(`Could not record automation action: ${error.message}`)
+  }
 
   await recordAudit({
     orgId: input.orgId,

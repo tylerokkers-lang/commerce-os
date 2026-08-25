@@ -96,7 +96,7 @@ export async function runCampaignReview(orgId: string): Promise<CampaignReviewRe
         connectionStatus = await loadConnectionStatus(orgId, identity.provider)
         connectionStatusCache.set(identity.provider, connectionStatus)
       }
-      const freshFacts = await loadFreshCampaignFacts(orgId, identity.channel, identity.externalId)
+      const freshFacts = await loadFreshCampaignFacts(orgId, identity.channel, identity.provider, identity.externalAccountId, identity.externalId)
 
       const proposal = await proposeCampaignAction(
         {

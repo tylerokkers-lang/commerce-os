@@ -53,9 +53,23 @@ export async function proposeAction(session: SessionContext, userMessage: string
   const validated = await validateActionIntent(session, intent, bundle)
   if (validated.outcome !== 'requires_approval') return validated
 
+  // Milestone 16 — the real `automation_action_type` this decision is
+  // recorded and later dispatched under. Kept a real per-type mapping
+  // rather than collapsing every non-price escalation into
+  // `request_approval`: `REVIEW_CAMPAIGN` must stay `review_campaign` so
+  // it is indistinguishable neither from a generic escalation in the audit
+  // trail nor from `advertising/monitor.ts`'s own campaign reviews, even
+  // though both decision types dispatch identically today (both are pure
+  // escalations — see `executionDispatch.ts`'s `ESCALATION_DECISION_TYPES`).
+  const decisionType = validated.actionType === 'UPDATE_PRICE'
+    ? 'update_price'
+    : validated.actionType === 'REVIEW_CAMPAIGN'
+      ? 'review_campaign'
+      : 'request_approval'
+
   const { id } = await proposeApproval({
     orgId: session.orgId,
-    decisionType: validated.actionType === 'UPDATE_PRICE' ? 'update_price' : 'request_approval',
+    decisionType,
     entityType: validated.targetEntityType,
     entityId: validated.targetEntityId,
     title: validated.actionType === 'UPDATE_PRICE'
@@ -71,7 +85,7 @@ export async function proposeAction(session: SessionContext, userMessage: string
     riskLevel: 'medium',
     inputs: { currentState: validated.currentState, proposedState: validated.proposedState },
     actionPayload: {
-      actionType: validated.actionType === 'UPDATE_PRICE' ? 'update_price' : 'request_approval',
+      actionType: decisionType,
       entityType: validated.targetEntityType,
       entityId: validated.targetEntityId,
       reason: validated.reason,

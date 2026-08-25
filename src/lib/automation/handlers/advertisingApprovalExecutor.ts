@@ -48,14 +48,32 @@ export interface FreshCampaignFacts {
   dataAgeHours: number | null
 }
 
-/** Exported for reuse by `advertising/monitor.ts` (Milestone 16), which needs the exact same "how old is this campaign's synced data" computation the revalidation gate here uses — never a second implementation of it. */
-export async function loadFreshCampaignFacts(orgId: string, channel: ChannelKey, externalCampaignId: string): Promise<FreshCampaignFacts | null> {
+/**
+ * Exported for reuse by `advertising/monitor.ts` (Milestone 16), which
+ * needs the exact same "how old is this campaign's synced data"
+ * computation the revalidation gate here uses — never a second
+ * implementation of it.
+ *
+ * Filters on `provider`/`external_account_id` as well as `channel`/
+ * `external_id`: the `advertising` table's own uniqueness constraint
+ * (migration 0008: `unique(org_id, channel, external_id, period_date)`)
+ * predates advertising connectors and does not include the account —
+ * campaign ids are only guaranteed unique per platform in practice, not
+ * enforced as such by this schema. Matching on all four keeps this
+ * revalidation from ever reading a different advertising account's
+ * same-numbered campaign as if it were the one just approved (the
+ * provider/account/campaign identity distinction this milestone's
+ * `CampaignActionRequest` was built to preserve).
+ */
+export async function loadFreshCampaignFacts(orgId: string, channel: ChannelKey, provider: string, externalAccountId: string, externalCampaignId: string): Promise<FreshCampaignFacts | null> {
   const supabase = createServiceSupabase()
   const { data } = await supabase
     .from('advertising')
     .select('is_paused, daily_budget_minor, synced_at')
     .eq('org_id', orgId)
     .eq('channel', channel)
+    .eq('provider', provider)
+    .eq('external_account_id', externalAccountId)
     .eq('external_id', externalCampaignId)
     .order('period_date', { ascending: false })
     .limit(1)
@@ -74,7 +92,7 @@ export async function loadConnectionStatus(orgId: string, platform: string): Pro
 }
 
 export async function executeApprovedCampaignAction(decision: ApprovedCampaignDecision, settings: AutomationSettings, store: AutomationStore): Promise<DecisionExecutionOutcome> {
-  const fresh = await loadFreshCampaignFacts(decision.orgId, decision.channel, decision.externalCampaignId)
+  const fresh = await loadFreshCampaignFacts(decision.orgId, decision.channel, decision.provider, decision.externalAccountId, decision.externalCampaignId)
   const connectionStatus = await loadConnectionStatus(decision.orgId, decision.provider)
 
   const request: CampaignActionRequest = {
