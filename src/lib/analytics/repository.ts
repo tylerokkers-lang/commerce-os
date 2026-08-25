@@ -90,7 +90,7 @@ export async function getCashflow(): Promise<CashflowProjection> {
 // =============================================================================
 
 import { getMonitoringStatus } from '@/lib/monitoring/repository'
-import { getAutomationSettings } from '@/lib/automation/settings'
+import { getAutomationSettings, getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { resolvePeriod, previousEquivalentPeriod, type Period, type PeriodKey } from '@/lib/orders/salesAggregation'
 import { emptySalesAnalytics, resolveSalesAnalyticsSafely, type SalesAnalytics } from './salesAnalytics'
 import { buildProductChannelProfitAnalytics, type ProductChannelProfitAnalytics } from './profitAnalytics'
@@ -362,6 +362,40 @@ export async function getAdvertisingIntelligence(periodKey: PeriodKey = 'last_30
   const campaigns = buildCampaignIntelligence(adFacts.rows, profitByProductChannel, settings, period, previousPeriod, adFacts.currency)
 
   // TACOS needs the org's total sales revenue for the same window — never used if sales itself is currency-unsafe (Milestone 11 §5/§8's rule extended here).
+  const orgRevenueMinor = salesFacts.mixedCurrencies.length === 0 && salesFacts.currency === adFacts.currency ? salesFacts.current.grossRevenueMinor : null
+  const scorecard = buildAdvertisingScorecard(campaigns, orgRevenueMinor, adFacts.currency)
+
+  return { isDemo: false, period, campaigns, scorecard, demoScenarios: [] }
+}
+
+/**
+ * The job-context equivalent of `getAdvertisingIntelligence()` above —
+ * identical logic, `orgId` taken directly rather than resolved from
+ * `requireSession()`, for the one caller that genuinely has no session:
+ * `advertising/monitor.ts` (Milestone 16), evaluating one org at a time
+ * from a background job. Never a second classification engine — this
+ * calls the exact same `buildCampaignIntelligence`/`buildAdvertisingScorecard`
+ * the session-gated version does.
+ */
+export async function getAdvertisingIntelligenceForOrg(orgId: string, periodKey: PeriodKey = 'last_30_days'): Promise<AdvertisingIntelligence> {
+  const period = resolvePeriod(periodKey, new Date())
+  const previousPeriod = previousEquivalentPeriod(period)
+
+  const settings = await getAutomationSettingsForOrg(orgId)
+  const { loadAdvertisingFacts } = await liveAdFacts()
+  const { loadProductChannelProfitFacts, toPriceCostInput, loadOrgSalesFacts } = await liveFacts()
+
+  const [adFacts, profitFacts, salesFacts] = await Promise.all([
+    loadAdvertisingFacts(orgId, period, previousPeriod),
+    loadProductChannelProfitFacts(orgId),
+    loadOrgSalesFacts(orgId, period, previousPeriod),
+  ])
+
+  const profitByProductChannel = new Map(
+    profitFacts.rows.map((r) => [`${r.productId}:${r.channel}`, buildProductChannelProfitAnalytics(r.productId, r.channel, toPriceCostInput(r, settings.minNetMarginPct))]),
+  )
+
+  const campaigns = buildCampaignIntelligence(adFacts.rows, profitByProductChannel, settings, period, previousPeriod, adFacts.currency)
   const orgRevenueMinor = salesFacts.mixedCurrencies.length === 0 && salesFacts.currency === adFacts.currency ? salesFacts.current.grossRevenueMinor : null
   const scorecard = buildAdvertisingScorecard(campaigns, orgRevenueMinor, adFacts.currency)
 

@@ -86,7 +86,12 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
         entityType: 'channel_product',
         entityId: input.channelProductId,
         reason: assessment.policy.reason,
-        inputFacts: { externalId: input.externalId, newPriceMinor: input.request.newSellingPrice.minor },
+        // `productTitle` (Milestone 16) is the structured value
+        // `automation/handlers/priceApprovalExecutor.ts` needs at
+        // execution time — this path's `entityType: 'channel_product'`
+        // already resolves `channel`/`externalId` fresh from
+        // `channel_products` itself, so neither is needed here.
+        inputFacts: { externalId: input.externalId, newPriceMinor: input.request.newSellingPrice.minor, productTitle: input.request.productTitle },
       },
       expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
     })
@@ -94,9 +99,59 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
     return { actionId: created.id, policyOutcome: 'require_approval', executed: false }
   }
 
-  // Permitted automatically. SUBMIT.
+  // Permitted automatically. SUBMIT -> VERIFY -> RECONCILE, extracted into
+  // `submitPriceChangeAction` below so the approval-execution dispatcher
+  // (Milestone 16) can call the identical tail for a price change that was
+  // approved rather than auto-permitted, against an existing
+  // `automationActionId`, without duplicating this logic.
+  const result = await submitPriceChangeAction(
+    {
+      orgId: input.orgId,
+      channelProductId: input.channelProductId,
+      externalId: input.externalId,
+      productTitle: input.request.productTitle,
+      newPriceMinor: input.request.newSellingPrice.minor,
+      pctChange: assessment.pctChange,
+      connector: input.connector,
+      automationActionId: created.id,
+      idempotencyKey: input.idempotencyKey,
+    },
+    store,
+  )
+
+  return { actionId: created.id, policyOutcome: 'allow_automatic', executed: result.executed }
+}
+
+export interface PriceSubmitInput {
+  orgId: string
+  channelProductId: string
+  externalId: string
+  productTitle: string
+  newPriceMinor: number
+  /** For the success notification's wording only — computed once by the caller (`assessPriceChange`/`assessPriceChangePolicy`), never re-derived here. */
+  pctChange: number
+  connector: MarketplaceConnector
+  automationActionId: string
+  idempotencyKey: string
+}
+
+export interface PriceSubmitResult {
+  executed: boolean
+}
+
+/**
+ * SUBMIT -> VERIFY -> RECONCILE for one already-decided price change —
+ * "already decided" meaning either `executePriceChange` above (policy just
+ * returned `allow_automatic`) or the approval-execution dispatcher
+ * (`automation/executionDispatch.ts`, Milestone 16) calling this against an
+ * `automation_actions` row an owner has just approved. Identical mechanics
+ * either way: this function does not know or care which caller it is.
+ */
+export async function submitPriceChangeAction(input: PriceSubmitInput, store: AutomationStore): Promise<PriceSubmitResult> {
+  const notifyBase = { orgId: input.orgId, entityType: 'channel_product', entityId: input.channelProductId, dedupeKey: `action:${input.automationActionId}` }
+
   if (!input.connector.descriptor.capabilities.writeListings) {
-    await store.completeAutomationAction(created.id, {
+    await store.completeAutomationAction(input.automationActionId, {
       succeeded: false,
       error: 'This connector does not support listing price writes.',
       orgId: input.orgId,
@@ -106,17 +161,17 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
       reconciliationStatus: 'not_applicable',
     })
     await store.notify({ ...notifyBase, severity: 'critical', category: 'pricing', title: `Price change could not be submitted for ${input.channelProductId}`, body: 'The connector does not support this write.' })
-    return { actionId: created.id, policyOutcome: 'allow_automatic', executed: false }
+    return { executed: false }
   }
 
   const writeResult = await input.connector.updateListingPrice({
     externalId: input.externalId,
-    priceMinor: input.request.newSellingPrice.minor,
+    priceMinor: input.newPriceMinor,
     idempotencyKey: input.idempotencyKey,
   })
 
   if (!writeResult.ok) {
-    await store.completeAutomationAction(created.id, {
+    await store.completeAutomationAction(input.automationActionId, {
       succeeded: false,
       error: `${writeResult.error.reason}: ${writeResult.error.detail}`,
       orgId: input.orgId,
@@ -126,7 +181,7 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
       reconciliationStatus: 'not_applicable',
     })
     await store.notify({ ...notifyBase, severity: 'warning', category: 'pricing', title: `Price update rejected for ${input.channelProductId}`, body: writeResult.error.detail })
-    return { actionId: created.id, policyOutcome: 'allow_automatic', executed: false }
+    return { executed: false }
   }
 
   // VERIFY — never assume the write call's own "accepted" response is proof; read it back.
@@ -134,7 +189,7 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
   let verificationStatus: 'verified' | 'failed' | 'uncertain' = 'uncertain'
   if (input.connector.descriptor.capabilities.verifyWrites) {
     const verifyResult = await input.connector.verifyListingState(input.externalId)
-    if (verifyResult.ok && verifyResult.value.priceMinor === input.request.newSellingPrice.minor) {
+    if (verifyResult.ok && verifyResult.value.priceMinor === input.newPriceMinor) {
       verified = true
       verificationStatus = 'verified'
     } else if (verifyResult.ok) {
@@ -144,10 +199,10 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
 
   // RECONCILE — only ever applies a change we have actually confirmed.
   if (verified) {
-    await store.reconcileChannelProduct({ orgId: input.orgId, channelProductId: input.channelProductId, priceMinor: input.request.newSellingPrice.minor })
+    await store.reconcileChannelProduct({ orgId: input.orgId, channelProductId: input.channelProductId, priceMinor: input.newPriceMinor })
   }
 
-  await store.completeAutomationAction(created.id, {
+  await store.completeAutomationAction(input.automationActionId, {
     succeeded: verified,
     error: verified ? null : 'The write was submitted, but the marketplace could not be confirmed to reflect it.',
     orgId: input.orgId,
@@ -164,9 +219,9 @@ export async function executePriceChange(input: PriceExecutionInput, settings: A
     category: 'pricing',
     title: verified ? `Price updated for ${input.channelProductId}` : `Price update unverified for ${input.channelProductId}`,
     body: verified
-      ? `${input.request.productTitle}: ${assessment.pctChange >= 0 ? '+' : ''}${assessment.pctChange.toFixed(1)}%.`
+      ? `${input.productTitle}: ${input.pctChange >= 0 ? '+' : ''}${input.pctChange.toFixed(1)}%.`
       : 'Submitted to the marketplace, but its own reported state could not be confirmed to match. Treated as unverified, not as failed or succeeded.',
   })
 
-  return { actionId: created.id, policyOutcome: 'allow_automatic', executed: verified }
+  return { executed: verified }
 }

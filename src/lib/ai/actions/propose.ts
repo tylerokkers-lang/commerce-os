@@ -75,7 +75,14 @@ export async function proposeAction(session: SessionContext, userMessage: string
       entityType: validated.targetEntityType,
       entityId: validated.targetEntityId,
       reason: validated.reason,
-      inputFacts: { channel: validated.channel, currentState: validated.currentState, proposedState: validated.proposedState },
+      // `productTitle`/`newPriceMinor` (Milestone 16) are the structured
+      // values `automation/handlers/priceApprovalExecutor.ts` needs at
+      // execution time — `currentState`/`proposedState` are formatted
+      // display strings for the chat UI only, never re-parsed for this.
+      inputFacts: {
+        channel: validated.channel, productTitle: validated.targetLabel, newPriceMinor: validated.newPriceMinor,
+        currentState: validated.currentState, proposedState: validated.proposedState,
+      },
     },
     expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
   })

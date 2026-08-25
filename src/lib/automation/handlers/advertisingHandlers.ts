@@ -21,8 +21,19 @@ import type { AdvertisingPlatform, CampaignClassification } from '@/lib/analytic
  * `/api/automation/run/route.ts`, which — like every Route Handler in this
  * codebase — is allowed to import server-only modules directly.
  */
+export interface CampaignReviewJobResult {
+  succeeded: boolean
+  error: string | null
+  campaignsEvaluated: number
+  recommendationsCreated: number
+  duplicatesAvoided: number
+  blocked: number
+}
+
 export interface AdvertisingHandlerDeps {
   runSync: (orgId: string, connectorKey: string, limit?: number) => Promise<{ succeeded: boolean; error: string | null }>
+  /** Milestone 16 — same injection reasoning as `runSync`: `advertising/monitor.ts` is `server-only`. */
+  runCampaignReview?: (orgId: string) => Promise<CampaignReviewJobResult>
 }
 
 function isAdvertisingSyncPayload(p: Record<string, unknown>): p is { connectorKey: string; limit?: number } {
@@ -92,4 +103,23 @@ export async function handleAdvertisingCampaignAction(job: JobRecord, store: Aut
 
   const result = await proposeCampaignAction(input, settings, store)
   return { succeeded: result.policyOutcome !== 'block' }
+}
+
+/**
+ * Phases 5-7 — one org's automatic campaign review
+ * (`advertising/monitor.ts`'s `runCampaignReview`). Observes real,
+ * already-classified campaigns and proposes where appropriate; never
+ * executes. Structured observability (Phase 7) is threaded straight
+ * through into the job outcome via `error`, which carries a human-readable
+ * summary even on "success" so a run with zero recommendations is never
+ * indistinguishable from one that quietly found nothing to check.
+ */
+export async function handleAdvertisingCampaignReview(job: JobRecord, _store: AutomationStore, _facts: unknown, _connectors: unknown, _marketDeps?: unknown, advertisingDeps?: AdvertisingHandlerDeps): Promise<JobHandlerResult> {
+  if (!advertisingDeps?.runCampaignReview) {
+    return { succeeded: false, error: 'advertising_campaign_review requires advertisingDeps (runCampaignReview), which was not provided.', retryable: false }
+  }
+
+  const result = await advertisingDeps.runCampaignReview(job.orgId)
+  if (!result.succeeded) return { succeeded: false, error: result.error ?? 'Advertising campaign review failed.', retryable: true }
+  return { succeeded: true }
 }

@@ -10,6 +10,7 @@ import type { CampaignIntelligence } from '@/lib/analytics/repository'
 import type { AdvertisingHealthStatus, CampaignClassification, CampaignSeverity } from '@/lib/analytics/advertisingAnalytics'
 import type { AdvertisingConnectorSummary, AdvertisingConnectionStatus } from '@/lib/advertising/connectors/types'
 import type { Priority } from '@/lib/ceo/types'
+import { verifyProviderConnection } from './actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,6 +73,23 @@ const IMPLEMENTATION_LABEL: Record<string, string> = {
   tiktok_ads: 'Stub — not implemented',
 }
 
+/**
+ * Phase 10/11 — verification is a third, genuinely separate axis from both
+ * `status` (connection) and the implementation badges above: it only ever
+ * advances when `advertising/verification.ts`'s deliberate read-only check
+ * has actually run and actually passed. Never inferred from `status`
+ * reading "connected".
+ */
+const VERIFICATION_TONE: Record<AdvertisingConnectorSummary['verificationStatus'], Tone> = {
+  not_tested: 'neutral', authentication_verified: 'accent', read_access_verified: 'accent',
+  data_retrieval_verified: 'positive', end_to_end_sync_verified: 'positive', failed: 'negative',
+}
+const VERIFICATION_LABEL: Record<AdvertisingConnectorSummary['verificationStatus'], string> = {
+  not_tested: 'Verification: not tested', authentication_verified: 'Verification: authenticated only',
+  read_access_verified: 'Verification: read access confirmed, no data yet', data_retrieval_verified: 'Verification: live data confirmed',
+  end_to_end_sync_verified: 'Verification: end-to-end sync confirmed', failed: 'Verification: failed',
+}
+
 function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary }) {
   return (
     <li className="px-5 py-3.5">
@@ -85,6 +103,7 @@ function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary })
         <div className="flex shrink-0 flex-col items-end gap-1">
           <Badge tone={CONNECTION_TONE[connector.status]}>{CONNECTION_LABEL[connector.status]}</Badge>
           <Badge tone={IMPLEMENTATION_TONE[connector.key] ?? 'neutral'}>{IMPLEMENTATION_LABEL[connector.key] ?? 'Unknown'}</Badge>
+          <Badge tone={VERIFICATION_TONE[connector.verificationStatus]}>{VERIFICATION_LABEL[connector.verificationStatus]}</Badge>
         </div>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-subtle">
@@ -94,6 +113,15 @@ function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary })
         {connector.lastSyncAt ? <span>Last sync {formatRelative(connector.lastSyncAt)}</span> : null}
         {connector.lastError ? <span className="text-negative">{connector.lastError}</span> : null}
       </div>
+      {connector.verificationDetail ? <p className="mt-1.5 text-xs text-ink-subtle">{connector.verificationDetail}</p> : null}
+      {connector.isConfigured ? (
+        <form action={verifyProviderConnection} className="mt-2">
+          <input type="hidden" name="connectorKey" value={connector.key} />
+          <button type="submit" className="text-xs font-medium text-accent underline hover:opacity-80">
+            Run read-only verification check
+          </button>
+        </form>
+      ) : null}
     </li>
   )
 }

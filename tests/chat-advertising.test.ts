@@ -27,7 +27,7 @@ function row(overrides: Partial<AdvertisingRow> = {}): AdvertisingRow {
   return {
     channel: 'amazon_uk', productId: 'p1', campaignName: 'Wasteful Campaign', externalId: 'camp-1',
     periodDate: '2026-08-01', spendMinor: 0, revenueMinor: 0, clicks: 0, impressions: 0, conversions: 0,
-    dailyBudgetMinor: null, isPaused: false,
+    dailyBudgetMinor: null, isPaused: false, provider: 'amazon_ads', externalAccountId: 'acct-1',
     ...overrides,
   }
 }

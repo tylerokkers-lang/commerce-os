@@ -143,6 +143,15 @@ export interface ProposedAction {
   targetEntityId: string
   targetLabel: string
   channel: ChannelKey | null
+  /**
+   * Milestone 16 — the raw target price in minor units, present only for
+   * `UPDATE_PRICE` (null for every other type). `currentState`/`proposedState`
+   * carry the same information as formatted display strings for the chat
+   * UI; this is the structured value `automation/handlers/priceApprovalExecutor.ts`
+   * needs at execution time and must never re-parse out of a formatted
+   * string.
+   */
+  newPriceMinor: number | null
   currentState: readonly LabelledFact[]
   proposedState: readonly LabelledFact[]
   reason: string

@@ -227,6 +227,9 @@ export interface Database {
           consecutive_failures: number
           created_at: string
           updated_at: string
+          verification_status: string
+          verified_at: string | null
+          verification_detail: string | null
         }
         Insert: {
           id?: string
@@ -244,6 +247,9 @@ export interface Database {
           consecutive_failures?: number
           created_at?: string
           updated_at?: string
+          verification_status?: string
+          verified_at?: string | null
+          verification_detail?: string | null
         }
         Update: {
           id?: string
@@ -261,6 +267,9 @@ export interface Database {
           consecutive_failures?: number
           created_at?: string
           updated_at?: string
+          verification_status?: string
+          verified_at?: string | null
+          verification_detail?: string | null
         }
         Relationships: [
           {

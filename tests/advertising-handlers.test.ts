@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { handleAdvertisingSync, handleAdvertisingCampaignAction } from '@/lib/automation/handlers/advertisingHandlers'
+import { handleAdvertisingSync, handleAdvertisingCampaignAction, handleAdvertisingCampaignReview } from '@/lib/automation/handlers/advertisingHandlers'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import type { JobRecord } from '@/lib/automation/store'
@@ -115,5 +115,36 @@ describe('handleAdvertisingCampaignAction', () => {
     await handleAdvertisingCampaignAction(job({ jobType: 'advertising_campaign_action', payload: { ...payload, idempotencyKey: 'job-4' } }), store)
 
     expect(store.getState().approvals).toHaveLength(1)
+  })
+})
+
+describe('handleAdvertisingCampaignReview (Phases 5-7 — the automatic monitor job)', () => {
+  it('missing advertisingDeps.runCampaignReview fails non-retryably, never silently succeeding having done nothing', async () => {
+    const store = createInMemoryAutomationStore()
+    const result = await handleAdvertisingCampaignReview(job({ jobType: 'advertising_campaign_review' }), store, undefined, undefined, undefined, {
+      runSync: async () => ({ succeeded: true, error: null }),
+    })
+    expect(result.succeeded).toBe(false)
+    expect(result.retryable).toBe(false)
+  })
+
+  it('a successful review reports success', async () => {
+    const store = createInMemoryAutomationStore()
+    const result = await handleAdvertisingCampaignReview(job({ jobType: 'advertising_campaign_review' }), store, undefined, undefined, undefined, {
+      runSync: async () => ({ succeeded: true, error: null }),
+      runCampaignReview: async () => ({ succeeded: true, error: null, campaignsEvaluated: 5, recommendationsCreated: 2, duplicatesAvoided: 0, blocked: 1 }),
+    })
+    expect(result.succeeded).toBe(true)
+  })
+
+  it('a review with errors reports failure as retryable — transient, not a config problem', async () => {
+    const store = createInMemoryAutomationStore()
+    const result = await handleAdvertisingCampaignReview(job({ jobType: 'advertising_campaign_review' }), store, undefined, undefined, undefined, {
+      runSync: async () => ({ succeeded: true, error: null }),
+      runCampaignReview: async () => ({ succeeded: false, error: 'Could not load advertising intelligence: connection timed out.', campaignsEvaluated: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0 }),
+    })
+    expect(result.succeeded).toBe(false)
+    expect(result.retryable).toBe(true)
+    expect(result.error).toContain('timed out')
   })
 })

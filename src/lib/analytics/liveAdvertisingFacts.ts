@@ -48,6 +48,17 @@ export interface AdvertisingRow {
   conversions: number
   dailyBudgetMinor: number | null
   isPaused: boolean
+  /**
+   * Milestone 16 — reads back the `provider`/`external_account_id`
+   * columns Milestone 15's sync engine writes (migration `0026`). Null
+   * for hand-entered/demo/pre-Milestone-15 rows of unknown provenance,
+   * never guessed. Not previously read here even though the columns
+   * existed — a real gap found while wiring the automatic monitor
+   * (`advertising/monitor.ts`), which needs a campaign's platform to
+   * build a real `CampaignActionRequest`.
+   */
+  provider: string | null
+  externalAccountId: string | null
 }
 
 export interface AdvertisingFacts {
@@ -70,10 +81,11 @@ export async function loadAdvertisingFacts(orgId: string, period: Period, previo
     channel: ChannelKey; product_id: string | null; campaign_name: string | null; external_id: string | null
     period_date: string; spend_minor: number; revenue_minor: number; clicks: number; impressions: number
     conversions: number; daily_budget_minor: number | null; is_paused: boolean
+    provider: string | null; external_account_id: string | null
   }>((from, to) =>
     supabase
       .from('advertising')
-      .select('channel, product_id, campaign_name, external_id, period_date, spend_minor, revenue_minor, clicks, impressions, conversions, daily_budget_minor, is_paused')
+      .select('channel, product_id, campaign_name, external_id, period_date, spend_minor, revenue_minor, clicks, impressions, conversions, daily_budget_minor, is_paused, provider, external_account_id')
       .eq('org_id', orgId)
       .gte('period_date', earliestBound.slice(0, 10))
       .lte('period_date', period.end.slice(0, 10))
@@ -85,6 +97,7 @@ export async function loadAdvertisingFacts(orgId: string, period: Period, previo
     channel: r.channel, productId: r.product_id, campaignName: r.campaign_name, externalId: r.external_id,
     periodDate: r.period_date, spendMinor: r.spend_minor, revenueMinor: r.revenue_minor, clicks: r.clicks,
     impressions: r.impressions, conversions: r.conversions, dailyBudgetMinor: r.daily_budget_minor, isPaused: r.is_paused,
+    provider: r.provider, externalAccountId: r.external_account_id,
   }))
 
   return { rows, currency }

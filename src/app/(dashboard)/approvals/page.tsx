@@ -1,21 +1,58 @@
-import { Badge, Card, CardHeader, EmptyState, PageHeader } from '@/components/ui'
+import { Badge, Card, CardHeader, EmptyState, PageHeader, type Tone } from '@/components/ui'
 import { formatMoney } from '@/lib/core/money'
 import { formatRelative } from '@/lib/utils'
-import { getPendingApprovals } from '@/lib/automation/approvals'
+import { getPendingApprovals, getRecentDecisions, type RecentDecision } from '@/lib/automation/approvals'
 import { getSession } from '@/lib/security/session'
 import { approveApproval, rejectApproval } from './actions'
 
 export const dynamic = 'force-dynamic'
 
+/**
+ * Phase 11 — outcome labels for the "Recent decisions" section below.
+ * Deliberately distinct from "Awaiting approval" above: approving a
+ * decision is not itself proof the provider action happened, so the badge
+ * that appears here after approval is the actual execution result, not a
+ * restatement of "approved".
+ */
+const OUTCOME_TONE: Record<string, Tone> = {
+  executed: 'positive', failed: 'negative', blocked: 'caution', rejected: 'neutral', expired: 'neutral', superseded: 'neutral',
+}
+const OUTCOME_LABEL: Record<string, string> = {
+  executed: 'Executed', failed: 'Failed', blocked: 'Blocked on revalidation', rejected: 'Rejected', expired: 'Expired', superseded: 'Superseded',
+}
+
+function outcomeKey(decision: RecentDecision): string {
+  if (decision.isBlocked) return 'blocked'
+  return decision.status
+}
+
+function RecentDecisionRow({ decision }: { decision: RecentDecision }) {
+  const key = outcomeKey(decision)
+  return (
+    <li className="px-5 py-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="text-sm font-medium">{decision.title}</p>
+        <Badge tone={OUTCOME_TONE[key] ?? 'neutral'}>{OUTCOME_LABEL[key] ?? decision.status}</Badge>
+      </div>
+      {decision.executionError && !decision.isBlocked ? (
+        <p className="mt-1 text-xs text-negative">{decision.executionError}</p>
+      ) : decision.isBlocked ? (
+        <p className="mt-1 text-xs text-caution">{decision.executionError?.replace('Blocked on revalidation: ', '')}</p>
+      ) : null}
+      {decision.resolvedAt ? <p className="mt-1 text-xs text-ink-subtle">{formatRelative(decision.resolvedAt)}</p> : null}
+    </li>
+  )
+}
+
 export default async function ApprovalsPage() {
-  const [approvals, session] = await Promise.all([getPendingApprovals(), getSession()])
+  const [approvals, recentDecisions, session] = await Promise.all([getPendingApprovals(), getRecentDecisions(), getSession()])
   const canApprove = session?.role === 'owner'
 
   return (
     <>
       <PageHeader
         title="Approvals"
-        description="Decisions that exceed the configured automatic limits. Each one shows the reasoning and the data behind it, so you are approving a case rather than a button."
+        description="Decisions that exceed the configured automatic limits. Each one shows the reasoning and the data behind it, so you are approving a case rather than a button. Approving submits the action immediately, but approval is not proof it succeeded — every fact is re-checked at that moment, and a genuinely changed situation can still block it. The actual outcome appears under Recent decisions below."
       />
 
       {approvals.length === 0 ? (
@@ -70,7 +107,7 @@ export default async function ApprovalsPage() {
                     <form action={approveApproval}>
                       <input type="hidden" name="decisionId" value={item.id} />
                       <button type="submit" className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90">
-                        Approve
+                        Approve &amp; submit
                       </button>
                     </form>
                   </div>
@@ -82,6 +119,20 @@ export default async function ApprovalsPage() {
           ))}
         </div>
       )}
+
+      <Card>
+        <CardHeader
+          title="Recent decisions"
+          description="What actually happened after approval or rejection — the real execution outcome, never inferred from the approval itself."
+        />
+        {recentDecisions.length === 0 ? (
+          <EmptyState title="Nothing resolved yet" description="Approved, rejected and expired decisions appear here with their real outcome." />
+        ) : (
+          <ul className="divide-y divide-border border-t border-border">
+            {recentDecisions.map((decision) => <RecentDecisionRow key={decision.id} decision={decision} />)}
+          </ul>
+        )}
+      </Card>
     </>
   )
 }

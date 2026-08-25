@@ -14,7 +14,7 @@ import {
 } from './handlers/marketplaceHandlers'
 import { handleOrderProcessing } from './handlers/orderHandlers'
 import { handleMarketRecheck, handleFxRecheck, type MarketHandlerDeps } from './handlers/marketHandlers'
-import { handleAdvertisingSync, handleAdvertisingCampaignAction, type AdvertisingHandlerDeps } from './handlers/advertisingHandlers'
+import { handleAdvertisingSync, handleAdvertisingCampaignAction, handleAdvertisingCampaignReview, type AdvertisingHandlerDeps } from './handlers/advertisingHandlers'
 import type { AutomationStore, JobRecord } from './store'
 import type { FactsLoader } from './factsTypes'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
@@ -92,6 +92,7 @@ export const HANDLERS: Record<string, JobHandler> = {
   fx_recheck: handleFxRecheck,
   advertising_sync: handleAdvertisingSync,
   advertising_campaign_action: handleAdvertisingCampaignAction,
+  advertising_campaign_review: handleAdvertisingCampaignReview,
 }
 
 export interface WorkerBatchResult {

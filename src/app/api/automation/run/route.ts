@@ -10,6 +10,7 @@ import { getSupabaseSupplierMarketFactsLoader } from '@/lib/markets/supplierMark
 import { getSupabaseMarketRepository } from '@/lib/markets/supabaseMarketRepository'
 import { runAdvertisingSync } from '@/lib/advertising/sync'
 import { advertisingConnectorByKey } from '@/lib/advertising/connectors/registry'
+import { runCampaignReview } from '@/lib/advertising/monitor'
 import type { AdvertisingHandlerDeps } from '@/lib/automation/handlers/advertisingHandlers'
 
 /**
@@ -54,6 +55,17 @@ export async function POST(request: Request) {
       if (!connector) return { succeeded: false, error: `No advertising connector registered for key "${connectorKey}".` }
       const result = await runAdvertisingSync(orgId, false, connector, limit ?? 500)
       return { succeeded: !result.blocked && !result.fetchError, error: result.blocked ?? result.fetchError }
+    },
+    async runCampaignReview(orgId) {
+      const result = await runCampaignReview(orgId)
+      return {
+        succeeded: result.errors.length === 0,
+        error: result.errors.length > 0 ? result.errors.join(' ') : null,
+        campaignsEvaluated: result.campaignsEvaluated,
+        recommendationsCreated: result.recommendationsCreated,
+        duplicatesAvoided: result.duplicatesAvoided,
+        blocked: result.blocked,
+      }
     },
   }
   const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), 10, marketDeps, advertisingDeps)

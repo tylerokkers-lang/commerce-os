@@ -136,8 +136,20 @@ function missingCredentials(descriptor: AdvertisingConnectorDescriptor): readonl
   })
 }
 
+export interface AdvertisingConnectionRecord {
+  status: AdvertisingConnectorSummary['status']
+  lastSyncAt: string | null
+  lastSuccessAt: string | null
+  lastFailureAt: string | null
+  lastError: string | null
+  consecutiveFailures: number
+  verificationStatus: AdvertisingConnectorSummary['verificationStatus']
+  verifiedAt: string | null
+  verificationDetail: string | null
+}
+
 /** Runtime summary for every registered platform — what `/advertising`'s connections section renders, never a second source of "is this connected." */
-export function advertisingConnectorSummaries(connections: ReadonlyMap<string, { status: AdvertisingConnectorSummary['status']; lastSyncAt: string | null; lastSuccessAt: string | null; lastFailureAt: string | null; lastError: string | null; consecutiveFailures: number }>): readonly AdvertisingConnectorSummary[] {
+export function advertisingConnectorSummaries(connections: ReadonlyMap<string, AdvertisingConnectionRecord>): readonly AdvertisingConnectorSummary[] {
   return [amazonAdsConnector, ...PLANNED.map(({ descriptor, reason }) => new UnavailableAdvertisingConnector(descriptor, reason))].map((connector) => {
     const state = connections.get(connector.descriptor.platform)
     return {
@@ -154,6 +166,9 @@ export function advertisingConnectorSummaries(connections: ReadonlyMap<string, {
       lastFailureAt: state?.lastFailureAt ?? null,
       lastError: state?.lastError ?? null,
       consecutiveFailures: state?.consecutiveFailures ?? 0,
+      verificationStatus: state?.verificationStatus ?? 'not_tested',
+      verifiedAt: state?.verifiedAt ?? null,
+      verificationDetail: state?.verificationDetail ?? null,
     }
   })
 }

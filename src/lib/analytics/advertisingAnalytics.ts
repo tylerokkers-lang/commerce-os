@@ -92,6 +92,9 @@ export interface CampaignIdentity {
   productId: string | null
   isPaused: boolean
   dailyBudgetMinor: number | null
+  /** Milestone 16 — which ad platform ran this campaign, and its account on that platform. Null for hand-entered/demo/pre-Milestone-15 rows, never guessed. Distinct from `channel` — see `advertising/connectors/types.ts`'s `NormalizedCampaignFact` comment for why the two are never conflated. */
+  provider: string | null
+  externalAccountId: string | null
 }
 
 export interface CampaignRawTotals {
@@ -126,6 +129,8 @@ export function latestCampaignIdentity(campaignKey: string, rows: readonly Adver
     productId: latest.productId,
     isPaused: latest.isPaused,
     dailyBudgetMinor: latest.dailyBudgetMinor,
+    provider: latest.provider,
+    externalAccountId: latest.externalAccountId,
   }
 }
 

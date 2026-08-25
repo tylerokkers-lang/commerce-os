@@ -167,4 +167,14 @@ export interface AdvertisingConnectorSummary {
   lastFailureAt: string | null
   lastError: string | null
   consecutiveFailures: number
+  /**
+   * Phase 10 — a genuinely separate dimension from `status` above: only
+   * ever advances when `advertising/verification.ts`'s deliberate,
+   * read-only check has actually run and actually passed. See that
+   * module's own comment for the full state list and why
+   * `end_to_end_sync_verified` is never set by it.
+   */
+  verificationStatus: 'not_tested' | 'authentication_verified' | 'read_access_verified' | 'data_retrieval_verified' | 'end_to_end_sync_verified' | 'failed'
+  verifiedAt: string | null
+  verificationDetail: string | null
 }

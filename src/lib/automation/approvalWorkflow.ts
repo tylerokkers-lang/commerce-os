@@ -3,39 +3,50 @@ import 'server-only'
 import { recordAudit } from '@/lib/audit'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import type { SessionContext } from '@/lib/security/session'
-import { createAutomationAction, completeAutomationAction } from './actions'
+import { createAutomationAction } from './actions'
 import { factsHaveMaterializedChanged } from './factsComparison'
+import { classifyDecisionType, type DecisionExecutionOutcome } from './executionDispatch'
+import { executeApprovedPriceChange } from './handlers/priceApprovalExecutor'
+import { executeApprovedCampaignAction } from './handlers/advertisingApprovalExecutor'
+import { getAutomationSettingsForOrg } from './settings'
+import { getSupabaseAutomationStore } from './supabaseStore'
 import type { AutomationActionType } from './types'
 
 export { factsHaveMaterializedChanged } from './factsComparison'
 
 /**
- * The formal approval action pipeline (brief §18).
+ * The formal approval action pipeline (brief §18; execution dispatch added
+ * Milestone 16).
  *
  * Milestone 5 deliberately left the Approvals page read-only, noting that
- * approve/reject belonged here. Two rules from the brief shape everything
- * below:
+ * approve/reject belonged here. Three rules shape everything below:
  *
  *   1. Approving executes the *exact* action that was proposed — never a
  *      silently recalculated one. `ai_decisions.action_payload` (added in
- *      migration 0019) is captured at proposal time and is what gets
- *      dispatched; this module never re-derives the action from scratch.
+ *      migration 0019) is captured at proposal time and is what identifies
+ *      *what* to execute; this module never re-derives the action type or
+ *      target from scratch.
  *   2. If the underlying facts materially changed before execution, the
- *      approval is invalidated rather than executed against stale data.
- *      "Materially changed" is judged by comparing the `inputs` snapshot
- *      stored on the decision against the caller-supplied current facts for
- *      the same keys — an exact, auditable comparison, not a guess.
+ *      approval is invalidated rather than executed against stale data —
+ *      the same check as before, at approval time (`factsHaveMaterializedChanged`).
+ *   3. (Milestone 16) Approval is not itself proof execution is still safe.
+ *      Immediately before any connector is touched, the relevant domain
+ *      executor (`priceApprovalExecutor.ts`/`advertisingApprovalExecutor.ts`)
+ *      re-derives every safety-relevant fact fresh and re-runs the real
+ *      policy gate a second time — a genuinely changed fact between
+ *      approval and execution (campaign paused in the meantime, connection
+ *      dropped, margin no longer clears the minimum) blocks execution at
+ *      this second gate even though the decision was already approved.
  *
- * What "execute" means here is deliberately honest about a real limitation:
- * no live connector in this codebase yet performs the external write side
- * of switching a supplier, publishing a listing, or processing a refund
- * (Milestone 4 already documented listing writes as "declared but not
- * called anywhere"; Milestone 5 documented the same for refunds needing a
- * payment provider). So approval genuinely changes the decision's status,
- * is genuinely audited, and genuinely creates the `automation_actions`
- * record — but that record's own execution outcome honestly reports that no
- * live executor exists yet, rather than claiming a marketplace or supplier
- * was actually contacted.
+ * `classifyDecisionType` (`executionDispatch.ts`) is the one routing table:
+ * `pricing` -> `priceApprovalExecutor.ts`, `advertising` ->
+ * `advertisingApprovalExecutor.ts`, `escalation` (`request_approval`/
+ * `review_campaign` — pure "flag for the owner" decisions with nothing
+ * external to do) -> marked succeeded directly, nothing dispatched,
+ * `unknown` -> an honest "no handler registered" failure, never silently
+ * treated as either of the other two. A future domain registers itself in
+ * that one table and gets its own executor file — never a special case
+ * bolted onto this function.
  */
 
 export interface ApprovalActionPayload {
@@ -126,8 +137,15 @@ export async function approveDecision(
     aiDecisionId: decisionId,
   })
 
+  // Phase 3 — idempotency: a deterministic key tied to the decision itself
+  // means a double-click, two open tabs, or a retried request after a
+  // network timeout all resolve to the exact same `automation_actions` row
+  // rather than each creating (and potentially each executing) their own.
+  const executionIdempotencyKey = `approval:${decisionId}`
+
   const created = await createAutomationAction({
     orgId: session.orgId,
+    idempotencyKey: executionIdempotencyKey,
     actionType: payload.actionType ?? (decision.decision_type as AutomationActionType),
     entityType: payload.entityType ?? decision.entity_type,
     entityId: payload.entityId ?? decision.entity_id,
@@ -145,29 +163,142 @@ export async function approveDecision(
     aiDecisionId: decisionId,
   })
 
+  // A previous call already ran this exact execution to completion —
+  // return the cached result rather than re-executing (idempotent replay,
+  // Phase 3). A previous call that left it `blocked`/`failed` (network
+  // timeout mid-flight, a transient provider error) falls through instead,
+  // so a retry can genuinely make progress rather than being stuck forever
+  // on one bad attempt.
+  if (created.alreadyExisted && created.status === 'succeeded') {
+    return { status: 'approved', automationActionId: created.id }
+  }
+
   // `createAutomationAction` can still override the synthetic "allow_automatic"
   // policy above — the runaway-automation safeguard forces `blocked`
-  // regardless of what the caller asked for — so this only marks completion
+  // regardless of what the caller asked for — so dispatch only proceeds
   // when the action is genuinely `executing`, never blindly.
-  if (created.status === 'executing') {
-    // Honest limitation: no live connector in this codebase yet performs the
-    // external write side of these actions (see the module comment above).
-    await completeAutomationAction(created.id, {
-      succeeded: false,
-      error: 'Approved, but no live connector or supplier/marketplace writer is configured to execute this action automatically in this environment yet.',
-      orgId: session.orgId,
-      entityType: payload.entityType ?? decision.entity_type,
-      entityId: payload.entityId ?? decision.entity_id,
-    })
-    await supabase.from('ai_decisions').update({ status: 'failed', execution_error: 'No live executor configured yet.' }).eq('id', decisionId)
-  } else {
+  if (created.status !== 'executing') {
     await supabase
       .from('ai_decisions')
       .update({ status: 'failed', execution_error: `Blocked at execution time: ${created.status}.` })
       .eq('id', decisionId)
+    return { status: 'approved', automationActionId: created.id }
   }
 
+  const outcome = await dispatchApprovedExecution(session, decision, payload, created.id, executionIdempotencyKey)
+  await applyExecutionOutcome(supabase, session.orgId, decisionId, outcome)
+
   return { status: 'approved', automationActionId: created.id }
+}
+
+/**
+ * Phase 2 — the approval execution dispatcher. Classifies the decision
+ * type (`executionDispatch.ts`), then calls the one domain executor that
+ * owns it — never the browser, never this function itself deciding *how*
+ * to execute, only *which* registered handler is allowed to. Every
+ * handler independently re-validates organisation scope (every query
+ * inside it is `.eq('org_id', session.orgId)`), so this dispatcher itself
+ * never has to.
+ */
+async function dispatchApprovedExecution(
+  session: SessionContext,
+  decision: { org_id: string; entity_type: string; entity_id: string | null },
+  payload: ApprovalActionPayload,
+  automationActionId: string,
+  idempotencyKey: string,
+): Promise<DecisionExecutionOutcome> {
+  const decisionType = payload.actionType ?? ''
+  const classification = classifyDecisionType(decisionType)
+  const facts = (payload.inputFacts ?? {}) as Record<string, unknown>
+
+  if (classification.domain === 'escalation') {
+    return { kind: 'no_execution_needed' }
+  }
+
+  const settings = await getAutomationSettingsForOrg(session.orgId)
+  const store = getSupabaseAutomationStore()
+
+  if (classification.domain === 'pricing') {
+    return executeApprovedPriceChange(
+      {
+        orgId: session.orgId,
+        isDemo: session.isDemo,
+        automationActionId,
+        idempotencyKey,
+        entityType: payload.entityType ?? decision.entity_type,
+        entityId: payload.entityId ?? decision.entity_id ?? '',
+        channelHint: typeof facts.channel === 'string' ? (facts.channel as never) : null,
+        productTitle: typeof facts.productTitle === 'string' ? facts.productTitle : 'this product',
+        newPriceMinor: typeof facts.newPriceMinor === 'number' ? facts.newPriceMinor : 0,
+      },
+      settings,
+      store,
+    )
+  }
+
+  if (classification.domain === 'advertising') {
+    if (typeof facts.channel !== 'string' || typeof facts.provider !== 'string' || typeof facts.externalCampaignId !== 'string' || typeof facts.externalAccountId !== 'string') {
+      return { kind: 'no_handler', reason: 'This campaign decision is missing required identity facts and cannot be dispatched.' }
+    }
+    return executeApprovedCampaignAction(
+      {
+        orgId: session.orgId,
+        isDemo: session.isDemo,
+        automationActionId,
+        idempotencyKey,
+        actionType: decisionType as 'pause_campaign' | 'increase_ad_budget' | 'decrease_ad_budget',
+        channel: facts.channel as never,
+        provider: facts.provider as never,
+        externalAccountId: facts.externalAccountId,
+        externalCampaignId: facts.externalCampaignId,
+        campaignName: typeof facts.campaignName === 'string' ? facts.campaignName : 'this campaign',
+        classification: typeof facts.classification === 'string' ? (facts.classification as never) : null,
+        proposedDailyBudgetMinor: typeof facts.proposedDailyBudgetMinor === 'number' ? facts.proposedDailyBudgetMinor : null,
+      },
+      settings,
+      store,
+    )
+  }
+
+  return { kind: 'no_handler', reason: `No execution handler is registered for decision type "${decisionType}".` }
+}
+
+async function applyExecutionOutcome(
+  supabase: ReturnType<typeof createServiceSupabase>,
+  orgId: string,
+  decisionId: string,
+  outcome: DecisionExecutionOutcome,
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  if (outcome.kind === 'no_execution_needed') {
+    await supabase.from('ai_decisions').update({ status: 'executed', executed_at: now }).eq('id', decisionId)
+    await recordAudit({ orgId, action: 'AI_DECISION_EXECUTED', entityType: 'ai_decision', entityId: decisionId, actorType: 'system', result: 'success', reason: 'Pure escalation — approval itself is the action; nothing further to execute.', aiDecisionId: decisionId })
+    return
+  }
+  if (outcome.kind === 'executed') {
+    await supabase.from('ai_decisions').update({ status: outcome.succeeded ? 'executed' : 'failed', executed_at: now, execution_error: outcome.succeeded ? null : outcome.error }).eq('id', decisionId)
+    await recordAudit({ orgId, action: outcome.succeeded ? 'AI_DECISION_EXECUTED' : 'AUTOMATION_ACTION_FAILED', entityType: 'ai_decision', entityId: decisionId, actorType: 'system', result: outcome.succeeded ? 'success' : 'failure', error: outcome.error ?? undefined, aiDecisionId: decisionId })
+    return
+  }
+  if (outcome.kind === 'revalidation_blocked') {
+    // Stored under 'failed' — `decision_status` (migration 0008) has no
+    // distinct 'blocked' value, and adding one is not justified by this
+    // alone (Phase 14). The UI recovers the distinction from this exact
+    // "Blocked on revalidation:" prefix rather than a new column.
+    await supabase.from('ai_decisions').update({ status: 'failed', executed_at: now, execution_error: `Blocked on revalidation: ${outcome.reason}` }).eq('id', decisionId)
+    await recordAudit({ orgId, action: 'AUTOMATION_ACTION_BLOCKED', entityType: 'ai_decision', entityId: decisionId, actorType: 'system', result: 'blocked', reason: outcome.reason, aiDecisionId: decisionId })
+    return
+  }
+  if (outcome.kind === 'no_handler') {
+    await supabase.from('ai_decisions').update({ status: 'failed', executed_at: now, execution_error: outcome.reason }).eq('id', decisionId)
+    await recordAudit({ orgId, action: 'AUTOMATION_ACTION_FAILED', entityType: 'ai_decision', entityId: decisionId, actorType: 'system', result: 'failure', error: outcome.reason, aiDecisionId: decisionId })
+    return
+  }
+  // 'already_in_progress' is reserved for a future concurrent-claim
+  // mechanism — not reachable via any path in this milestone (the
+  // idempotency-key short-circuit above handles the "already succeeded"
+  // case before this function is ever called).
 }
 
 export async function rejectDecision(session: SessionContext, decisionId: string, reason: string): Promise<ApprovalOutcome> {

@@ -38,7 +38,7 @@ function row(overrides: Partial<AdvertisingRow> & { daysAgo: number }): Advertis
   return {
     channel: 'amazon_uk', productId: null, campaignName: 'Demo Campaign', externalId: 'demo-campaign',
     periodDate: dayOffset(daysAgo), spendMinor: 0, revenueMinor: 0, clicks: 0, impressions: 0, conversions: 0,
-    dailyBudgetMinor: null, isPaused: false,
+    dailyBudgetMinor: null, isPaused: false, provider: 'amazon_ads', externalAccountId: 'demo-account-1',
     ...rest,
   }
 }
