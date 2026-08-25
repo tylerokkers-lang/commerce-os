@@ -160,6 +160,11 @@ export default async function AutomationPage() {
   const [status, monitoring, analytics, session] = await Promise.all([getAutomationStatus(), getMonitoringStatus(), getAnalyticsDashboard(), getSession()])
   const isOwner = session?.role === 'owner'
   const asMoney = (m: Money) => formatMoney(m)
+  // `AdvertisingAnalytics`'s money fields (Milestone 10's shape) are bare minor-unit
+  // numbers with no attached currency — this codebase's existing convention for that
+  // shape (see `status.today.spentAutomaticallyMinor`/`refundsProcessedMinor` below)
+  // is to assume the org's GBP base currency, unchanged here.
+  const asAdSpendMoney = (v: number) => formatMoney(money(v, 'GBP'))
   const asPct = (v: number) => `${v}%`
   const asDays = (v: number) => `${v} day(s)`
 
@@ -587,12 +592,15 @@ export default async function AutomationPage() {
       </div>
 
       <Card>
-        <CardHeader title="Advertising" description="No advertising connector exists in this codebase yet (Amazon Ads, Meta, Google, TikTok) — every figure below is honestly unavailable, never a fabricated £0." />
+        <CardHeader
+          title="Advertising"
+          description="No advertising platform connector exists in this codebase yet (Amazon Ads, Meta, Google, TikTok) — but real spend/revenue rows in the advertising table are read and classified deterministically. A figure below is real when known; otherwise it is honestly unavailable, never a fabricated £0. Full per-campaign detail lives on /advertising."
+        />
         <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-4">
-          <MetricStat label="Spend" metric={analytics.advertising.spend} format={String as never} />
-          <MetricStat label="ROAS" metric={analytics.advertising.roas} format={String as never} />
+          <MetricStat label="Spend" metric={analytics.advertising.spend} format={asAdSpendMoney as never} />
+          <MetricStat label="ROAS" metric={analytics.advertising.roas} format={((v: number) => v.toFixed(2)) as never} />
           <MetricStat label="ACOS" metric={analytics.advertising.acosPct} format={asPct as never} />
-          <MetricStat label="Profit impact" metric={analytics.advertising.profitImpact} format={String as never} />
+          <MetricStat label="Profit impact" metric={analytics.advertising.profitImpact} format={asAdSpendMoney as never} />
         </div>
       </Card>
 

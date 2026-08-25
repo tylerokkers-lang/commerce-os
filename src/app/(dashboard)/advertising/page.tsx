@@ -81,6 +81,18 @@ function CampaignRow({ campaign }: { campaign: CampaignIntelligence }) {
           <p className="text-xs text-ink-subtle">ACOS</p>
           <p className="tabular text-sm font-medium">{isKnown(fact.acosPct) ? `${fact.acosPct.value.toFixed(1)}%` : <Badge tone="neutral">{fact.acosPct.status.toUpperCase()}</Badge>}</p>
         </div>
+        <div>
+          <p className="text-xs text-ink-subtle">CPC</p>
+          <p className="tabular text-sm font-medium">{isKnown(fact.cpc) ? formatMoney(fact.cpc.value) : <Badge tone="neutral">{fact.cpc.status.toUpperCase()}</Badge>}</p>
+        </div>
+        <div>
+          <p className="text-xs text-ink-subtle">CPA</p>
+          <p className="tabular text-sm font-medium">{isKnown(fact.cpa) ? formatMoney(fact.cpa.value) : <Badge tone="neutral">{fact.cpa.status.toUpperCase()}</Badge>}</p>
+        </div>
+        <div>
+          <p className="text-xs text-ink-subtle">Avg. order value</p>
+          <p className="tabular text-sm font-medium">{isKnown(fact.averageOrderValue) ? formatMoney(fact.averageOrderValue.value) : <Badge tone="neutral">{fact.averageOrderValue.status.toUpperCase()}</Badge>}</p>
+        </div>
       </div>
 
       {classification.reasons.length > 0 ? (
@@ -157,6 +169,8 @@ export default async function AdvertisingPage() {
           <MetricStat label="Impressions" metric={scorecard.totalImpressions} format={((v: number) => v.toLocaleString('en-GB')) as never} />
           <MetricStat label="Clicks" metric={scorecard.totalClicks} format={((v: number) => v.toLocaleString('en-GB')) as never} />
           <MetricStat label="Conversions" metric={scorecard.totalConversions} format={((v: number) => v.toLocaleString('en-GB')) as never} />
+          <MetricStat label="Overall CPA" metric={scorecard.overallCpa} format={formatMoney as never} />
+          <MetricStat label="Overall avg. order value" metric={scorecard.overallAverageOrderValue} format={formatMoney as never} />
         </div>
         {scorecard.totalCampaigns > 0 ? (
           <div className="flex flex-wrap gap-1.5 border-t border-border px-5 py-3">

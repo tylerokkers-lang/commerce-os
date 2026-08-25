@@ -100,7 +100,7 @@ import { classifySupplierHealth, type SupplierHealth } from './supplierAnalytics
 import { buildFulfilmentAnalytics, type FulfilmentAnalytics } from './fulfilmentAnalytics'
 import { unavailableAdvertisingAnalytics, type AdvertisingAnalytics } from './advertisingAnalytics'
 import {
-  buildAdvertisingScorecard, buildCampaignFact, classifyCampaign, groupCampaignRows, latestCampaignIdentity,
+  buildAdvertisingScorecard, buildCampaignFact, buildRealAdvertisingAnalytics, classifyCampaign, groupCampaignRows, latestCampaignIdentity,
   resolveCampaignProfitability, sumCampaignRows, type AdvertisingCampaignFact, type AdvertisingScorecard, type CampaignClassificationResult,
 } from './advertisingAnalytics'
 import { demoAdvertisingScenarios, type AdvertisingDemoScenario } from '@/lib/demo/advertising'
@@ -196,12 +196,14 @@ export async function getAnalyticsDashboard(periodKey: PeriodKey = 'last_30_days
 
   const settings = await getAutomationSettings(session)
   const { loadOrgSalesFacts, loadProductChannelProfitFacts, toPriceCostInput, loadSupplierHealthFacts, loadFulfilmentFacts } = await liveFacts()
+  const { loadAdvertisingFacts } = await liveAdFacts()
 
-  const [salesFacts, profitFacts, supplierHealthFacts, fulfilmentFacts] = await Promise.all([
+  const [salesFacts, profitFacts, supplierHealthFacts, fulfilmentFacts, adFacts] = await Promise.all([
     loadOrgSalesFacts(session.orgId, period, previousPeriod),
     loadProductChannelProfitFacts(session.orgId),
     loadSupplierHealthFacts(session.orgId, monitoring.supplierIntelligence),
     loadFulfilmentFacts(session.orgId, period),
+    loadAdvertisingFacts(session.orgId, period, previousPeriod),
   ])
 
   // A mixed-currency window is never silently summed (Milestone 11 §5/§8's
@@ -236,6 +238,18 @@ export async function getAnalyticsDashboard(periodKey: PeriodKey = 'last_30_days
   const supplierHealth = supplierHealthFacts.map((f) => classifySupplierHealth(f))
   const fulfilment = buildFulfilmentAnalytics(fulfilmentFacts)
 
+  // Milestone 14 — real advertising data now exists (the `advertising`
+  // table, `buildCampaignIntelligence` below); this reuses `allProjections`
+  // (already loaded above, one query) rather than a second profit-facts
+  // fetch, and produces the same `AdvertisingAnalytics` shape Milestone 10
+  // defined — additive, backward-compatible, no consumer of this field
+  // (`/automation`'s `MetricStat` tiles) needs to change.
+  const profitByProductChannel = new Map(allProjections.map((p) => [`${p.productId}:${p.channel}`, p]))
+  const campaigns = buildCampaignIntelligence(adFacts.rows, profitByProductChannel, settings, period, previousPeriod, adFacts.currency)
+  const adOrgRevenueMinor = salesFacts.mixedCurrencies.length === 0 && salesFacts.currency === adFacts.currency ? salesFacts.current.grossRevenueMinor : null
+  const advertisingScorecard = buildAdvertisingScorecard(campaigns, adOrgRevenueMinor, adFacts.currency)
+  const advertising = buildRealAdvertisingAnalytics(advertisingScorecard)
+
   const productsWithUnknownCost = allProjections.filter((p) => p.projection.status === 'unknown').length
   const productsMissingListingPrice = allProjections.filter((p) => p.sellingPrice.status === 'unavailable').length
   const dataQuality = buildDataQualitySummary({
@@ -261,7 +275,7 @@ export async function getAnalyticsDashboard(periodKey: PeriodKey = 'last_30_days
     topRevenueProducts, topProfitProducts, lossMakingProducts,
     supplierHealth,
     fulfilment,
-    advertising: unavailableAdvertisingAnalytics(),
+    advertising,
     dataQuality,
     alerts,
     marketReadiness: monitoring.marketReadiness,
@@ -274,15 +288,21 @@ export async function getAnalyticsDashboard(periodKey: PeriodKey = 'last_30_days
 // -----------------------------------------------------------------------------
 // Advertising intelligence (Milestone 14) — a separate entry point from
 // getAnalyticsDashboard(), the same "getCashflow() is its own read" shape
-// this module already uses, rather than growing AnalyticsDashboard's
-// shape (and every test that constructs one) for a feature with genuinely
-// different consumers (the new /advertising page, the CEO dashboard, the
-// chat) and its own per-campaign detail no single Metric<T> field could
-// carry. `AnalyticsDashboard.advertising` itself is deliberately left
-// exactly as Milestone 10 built it (always `unavailableAdvertisingAnalytics()`
-// in live mode) — not touched by this milestone, so nothing about
-// Milestone 10/11's tested dashboard aggregate changes; the real
-// intelligence lives here instead.
+// this module already uses, for a feature with genuinely different
+// consumers (the new /advertising page, the CEO dashboard, the chat) and
+// its own per-campaign detail no single Metric<T> field could carry.
+// `AnalyticsDashboard.advertising` (Milestone 10's shape) is NOT a second,
+// disconnected model — `getAnalyticsDashboard()` above now populates it
+// with `buildRealAdvertisingAnalytics(buildAdvertisingScorecard(...))`,
+// the exact same pure aggregation/classification engine this section
+// builds on, computed from the exact same `loadAdvertisingFacts` read and
+// the exact same per-product profitability projections
+// `getAnalyticsDashboard()` already loads — never a second query, never a
+// second calculation. `AdvertisingAnalytics`'s shape genuinely cannot
+// carry a *list* of campaigns with individual classifications (it is one
+// flat org-wide metric bag, Milestone 10's design, unchanged) — that
+// per-campaign detail is what `AdvertisingIntelligence` below adds
+// alongside it, not instead of it.
 // -----------------------------------------------------------------------------
 
 export interface CampaignIntelligence {

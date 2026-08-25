@@ -321,14 +321,17 @@ misreported as recovered.
 **Milestone 14 extends `advertisingAnalytics.ts`** from an empty interface
 into a real, deterministic engine over the `advertising` table (created in
 Milestone 1, never written to until now): `buildCampaignFact` (per-campaign
-`Metric<T>` figures — spend, revenue, ROAS, ACOS, CTR, CPC, conversion
-rate), `resolveCampaignProfitability` (ties a campaign to the one real
-profitability engine's `breakEvenAdSpend`, never a second calculation),
-`classifyCampaign` (the seven-way classification —
+`Metric<T>` figures — spend, revenue, ROAS, ACOS, CTR, CPC, CPA, average
+order value, conversion rate), `resolveCampaignProfitability` (ties a
+campaign to the one real profitability engine's `breakEvenAdSpend`, never a
+second calculation), `classifyCampaign` (the seven-way classification —
 `wasted_spend`/`poor_profitability`/`high_acos_low_roas`/
 `scale_opportunity`/`declining_performance`/`healthy`/`insufficient_data`,
 each gated by a named threshold or a minimum-sample-size check, never an
-LLM call), and `buildAdvertisingScorecard` (org-wide roll-up, worst
+LLM call — every boundary is `>=`/`<` exactly as documented and tested,
+e.g. ROAS exactly at the configured minimum is healthy-eligible, spend
+exactly at the waste threshold is waste), and `buildAdvertisingScorecard`
+(org-wide roll-up including `overallCpa`/`overallAverageOrderValue`, worst
 campaign wins, the same rule `healthScorecard.ts` already established).
 `liveAdvertisingFacts.ts` (server-only) is the one org-scoped Supabase
 reader, following the same `paginate.ts` pattern as every other Milestone
@@ -336,7 +339,14 @@ reader, following the same `paginate.ts` pattern as every other Milestone
 composes the two — genuinely empty in demo mode (never injecting fixture
 data into the live path), with `demo/advertising.ts`'s seven narrative
 scenarios computed through the real functions above against fixed fixture
-data instead. Wired into `ceo/repository.ts`'s existing `Promise.allSettled`
+data instead. `getAnalyticsDashboard()` (same file) also calls
+`buildRealAdvertisingAnalytics(scorecard)` to populate the pre-existing
+`AnalyticsDashboard.advertising` field (Milestone 10's org-wide summary
+shape, consumed by `/automation`) with this same real data — additive to
+an existing field, reusing the same `loadAdvertisingFacts` read and the
+same per-product profitability projections that function already loads,
+never a second query or a second, disconnected advertising model. Wired
+into `ceo/repository.ts`'s existing `Promise.allSettled`
 (a seventh source, `advertisingIntelligence`, with its own
 `dataSourceFailures` entry), `ceo/priorities.ts` (a seventh priority
 section, including the compliance-block override that prevents a

@@ -163,6 +163,10 @@ export interface AdvertisingCampaignFact {
   conversionRatePct: Metric<number>
   roas: Metric<number>
   acosPct: Metric<number>
+  /** Cost per acquisition — spend / conversions. `unavailable` (never a fabricated figure) when there are no conversions to divide by. */
+  cpa: Metric<Money>
+  /** Average order value attributed to this campaign's conversions — attributed revenue / conversions. `unavailable` when there are no conversions, not a coerced £0. */
+  averageOrderValue: Metric<Money>
 
   /** Only populated when the campaign has a known `productId` with real, live price/cost data — see `resolveCampaignProfitability` below. Never reconstructed independently of `profitability/channels.ts`'s real engine. */
   profitability: {
@@ -185,6 +189,8 @@ export function buildCampaignFact(identity: CampaignIdentity, totals: CampaignRa
   const convRate = ratio(totals.conversions, totals.clicks)
   const roas = ratio(totals.revenueMinor, totals.spendMinor)
   const acos = ratio(totals.spendMinor, totals.revenueMinor)
+  const cpa = ratio(totals.spendMinor, totals.conversions)
+  const aov = ratio(totals.revenueMinor, totals.conversions)
 
   return {
     identity, currency, windowStart, windowEnd, days: totals.days,
@@ -198,6 +204,8 @@ export function buildCampaignFact(identity: CampaignIdentity, totals: CampaignRa
     conversionRatePct: convRate === null ? unavailableMetric('No clicks recorded in this window.') : calculatedMetric(convRate * 100, 'conversions / clicks'),
     roas: roas === null ? unavailableMetric('No spend recorded in this window.') : calculatedMetric(roas, 'attributed revenue / spend'),
     acosPct: acos === null ? unavailableMetric('No attributed revenue in this window.') : calculatedMetric(acos * 100, 'spend / attributed revenue'),
+    cpa: cpa === null ? unavailableMetric('No conversions recorded in this window.') : calculatedMetric(money(Math.round(cpa), currency), 'spend / conversions'),
+    averageOrderValue: aov === null ? unavailableMetric('No conversions recorded in this window.') : calculatedMetric(money(Math.round(aov), currency), 'attributed revenue / conversions'),
     profitability: null,
     sampleSizeAdequate: totals.impressions >= MIN_IMPRESSIONS_FOR_SIGNIFICANCE || totals.clicks >= MIN_CLICKS_FOR_CONVERSION_SIGNIFICANCE,
   }
@@ -332,6 +340,10 @@ export interface AdvertisingScorecard {
   overallCpc: Metric<Money>
   overallRoas: Metric<number>
   overallAcosPct: Metric<number>
+  /** Total spend / total conversions across every campaign — `unavailable` when there are no conversions to divide by, never a fabricated £0. */
+  overallCpa: Metric<Money>
+  /** Total attributed revenue / total conversions across every campaign — `unavailable` when there are no conversions. */
+  overallAverageOrderValue: Metric<Money>
   /** Total ad spend / total org sales revenue for the same window — org-wide TACOS, computed only here (never per-campaign, where it is not a meaningful figure) and only when both figures share the org's own base currency, which they always do by construction (`liveAdvertisingFacts.ts`/`liveAnalyticsFacts.ts` both resolve the same `base_currency`). */
   tacosPct: Metric<number>
 }
@@ -386,6 +398,8 @@ export function buildAdvertisingScorecard(
     overallCpc: hasSpend && totalClicks > 0 ? calculatedMetric(money(Math.round(totalSpendMinor / totalClicks), currency), 'total spend / total clicks') : unavailableMetric('No clicks recorded in this window.'),
     overallRoas: hasSpend && totalSpendMinor > 0 ? calculatedMetric(totalRevenueMinor / totalSpendMinor, 'total attributed revenue / total spend') : unavailableMetric('No spend recorded in this window.'),
     overallAcosPct: hasSpend && totalRevenueMinor > 0 ? calculatedMetric((totalSpendMinor / totalRevenueMinor) * 100, 'total spend / total attributed revenue') : unavailableMetric('No attributed revenue in this window.'),
+    overallCpa: hasSpend && totalConversions > 0 ? calculatedMetric(money(Math.round(totalSpendMinor / totalConversions), currency), 'total spend / total conversions') : unavailableMetric('No conversions recorded in this window.'),
+    overallAverageOrderValue: hasSpend && totalConversions > 0 ? calculatedMetric(money(Math.round(totalRevenueMinor / totalConversions), currency), 'total attributed revenue / total conversions') : unavailableMetric('No conversions recorded in this window.'),
     tacosPct: hasSpend && orgRevenueMinor !== null && orgRevenueMinor > 0
       ? calculatedMetric((totalSpendMinor / orgRevenueMinor) * 100, 'total ad spend / total org sales revenue, same base currency')
       : unavailableMetric('Org sales revenue for this window is unavailable or zero, or no advertising spend was recorded.'),

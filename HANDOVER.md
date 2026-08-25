@@ -1613,17 +1613,95 @@ detail in `docs/ARCHITECTURE.md`'s `advertisingAnalytics.ts` paragraph and
   cross-checking every classification against every consumer. Fixed;
   proven by a dedicated test.
 
-**Verified:** 942 tests (up from 923 at the start of this session — +19
-across `tests/chat-campaign-intent.test.ts` (new, 14 tests: campaign
-matching, ambiguity, injected-JSON inertness), `tests/chat-recommend.test.ts`
-(+4, campaign recommendations), `tests/ceo-advertising-integration.test.ts`
-(+1, the `high_acos_low_roas` priority)); `npx tsc --noEmit`, `npm run
+### 30a. Hardening pass (same day, immediately after the commit above)
+
+A follow-up review asked specifically whether `AnalyticsDashboard.advertising`
+(Milestone 10's org-wide summary shape, consumed by `/automation`) had
+genuinely been extended with the new real data, or left as a second,
+disconnected model. It had been left disconnected — deliberately, to avoid
+Milestone 10/11 regression risk, but that meant `/automation`'s Advertising
+card would have kept showing `UNAVAILABLE` forever even once real
+campaign data existed. Fixed properly rather than left as a known gap:
+
+- `analytics/repository.ts`'s `getAnalyticsDashboard()` now calls
+  `loadAdvertisingFacts` in its existing `Promise.all` (one more parallel
+  read, not a second round trip), reuses the `allProjections` it already
+  computes to build the same `profitByProductChannel` map
+  `getAdvertisingIntelligence()` builds, and calls the exact same
+  `buildCampaignIntelligence`/`buildAdvertisingScorecard` pure functions —
+  then `buildRealAdvertisingAnalytics(scorecard)` (already written and
+  already unit-tested in the original commit, but never actually wired in)
+  converts the result into `AnalyticsDashboard.advertising`'s existing
+  shape. Additive only — the shape is unchanged, so `/automation`'s
+  `MetricStat` tiles needed no changes; demo mode is untouched (still
+  genuinely empty, correctly).
+- Found in the process: `/automation`'s Advertising card had a
+  description claiming every figure was "honestly unavailable" — true
+  when nothing but the fallback ever populated the field, false the
+  moment real data exists. Fixed the copy, and fixed a real display bug
+  sitting right next to it: `spend`/`profitImpact` were rendered with
+  `format={String as never}` — harmless while always `null`, but would
+  have printed a raw minor-unit integer (`"10000"`) instead of `"£100.00"`
+  the moment real spend existed. `roas` had the same problem (`String(4)`
+  → `"4"` instead of `"4.00"`). All three fixed.
+- Two metrics named explicitly in the follow-up review's requirements were
+  genuinely missing from the engine: **CPA** (cost per acquisition — spend
+  ÷ conversions) and **average order value** (attributed revenue ÷
+  conversions). Added to both `AdvertisingCampaignFact` (per-campaign) and
+  `AdvertisingScorecard` (`overallCpa`/`overallAverageOrderValue`,
+  org-wide) — same `Metric<Money>` pattern as every other money field,
+  `unavailable` (never a fabricated £0) when there are no conversions to
+  divide by. Surfaced on `/advertising`'s scorecard tiles and per-campaign
+  detail.
+- Added the boundary-condition tests the follow-up review asked for by
+  name and were genuinely missing: ROAS exactly at the configured minimum
+  (must NOT classify `high_acos_low_roas` — the rule is strictly below),
+  daily spend exactly at the waste threshold (3× `maxDailyAdSpendMinor`,
+  must classify `wasted_spend` — the rule is at-or-above), a missing
+  campaign name falling back to the real external id, and a static check
+  (reading `0001_core.sql` directly) proving `max_daily_ad_spend_minor`/
+  `min_roas` are `not null default` in the schema itself — "threshold not
+  configured" is structurally impossible, not just handled defensively in
+  application code.
+- **Deliberately not changed**: the classification vocabulary. The
+  follow-up review's own wording proposed a different set of names
+  (`underperforming`/`inefficient`/`high_spend_low_return`/
+  `strong_candidate_to_scale`/`paused_or_inactive`) than what shipped in
+  the original commit (`wasted_spend`/`poor_profitability`/
+  `high_acos_low_roas`/`scale_opportunity`/`declining_performance`). Both
+  are internally consistent, deterministic, and reason-carrying — this is
+  a naming preference, not a correctness gap, and renaming now would touch
+  the engine, both CEO integration files, chat's `FactBundle`/
+  `offlineAnswer.ts`, `recommend.ts`, the `/advertising` UI, five test
+  files and four docs for zero behavioural change. Left as-is; flagged
+  explicitly rather than silently overridden or silently ignored — a
+  future session should make this call deliberately if it still matters,
+  not inherit it from a stale prompt.
+- **Deliberately not changed**: `isPaused` is not treated as a distinct
+  classification. A paused campaign still classifies from the real
+  activity in its window (which may still be `wasted_spend`, worth
+  knowing even in hindsight) rather than being masked into a generic
+  "paused" bucket. This does not weaken the "no automated action" safety
+  gate the follow-up review asked about, because there is no automated
+  advertising action anywhere in this codebase to gate in the first place
+  — `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` are always
+  `not_executable`, paused or not.
+
+**Verified:** 958 tests (up from 923 at the start of this session — +19
+in the original commit across `tests/chat-campaign-intent.test.ts` (new,
+14 tests), `tests/chat-recommend.test.ts` (+4), `tests/ceo-advertising-integration.test.ts`
+(+1); +16 in this hardening pass, all in `tests/advertising-analytics.test.ts`:
+CPA/AOV at both the campaign and scorecard level, the four boundary-condition
+tests above, currency handling, a multi-campaign independence check, and
+the schema/fallback safety-gate checks). `npx tsc --noEmit`, `npm run
 lint`, `npm run build` and `npm run db:verify` all clean (25 migrations,
 72 tables, unchanged — genuinely no schema change, since the `advertising`
 table already existed and this milestone only ever reads/classifies it).
 Confirmed live in the browser, demo mode: `/advertising` renders an honest
 empty scorecard (`UNAVAILABLE` metrics, not zeros) plus all seven demo
-scenarios with correct classification text; `/` (dashboard), `/chat`,
+scenarios with correct classification text, including the two new CPA/AOV
+tiles; `/automation`'s Advertising card renders the corrected copy and
+format functions with no console errors; `/` (dashboard), `/chat`,
 `/approvals`, `/compliance` all re-confirmed with no console errors; the
 new "Advertising" nav entry present and correctly highlighted; asking chat
 "What is my advertising ROAS and are any campaigns wasting money?"
