@@ -62,6 +62,7 @@ function baseAutomation(overrides: Partial<AutomationStatus> = {}): AutomationSt
     recentActions: [], pendingJobs: [], demoScenarios: [],
     productionReadiness: { schedulerConfigured: true, jobsByStatus: {}, externalActionsByVerification: {}, connectors: [] },
     recoveryRequired: [],
+    maintenanceHealth: { state: 'NEVER_RUN', lastSuccessfulRun: null, lastAttemptedRun: null, currentRun: null, runningDurationMs: null, recentFailures: [] },
     ...overrides,
   }
 }

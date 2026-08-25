@@ -196,6 +196,7 @@ the hosting provider's environment settings.
 | `/api/health` | Liveness and configuration check |
 | `/api/automation/run` | Scheduler entry point for the job worker (Milestone 7) — requires `AUTOMATION_CRON_SECRET` |
 | `/api/monitoring/run` | Scheduler entry point for the monitoring sweep (Milestone 8) — requires the same `AUTOMATION_CRON_SECRET` |
+| `/api/automation/maintenance` | **The canonical operational entry point (Milestone 18):** execution recovery + advertising campaign monitoring, single-run-locked. Requires `AUTOMATION_CRON_SECRET`; append `?trigger=manual` to label a manual invocation — same route, same lock, same safety rules |
 
 ## 10. Product intelligence (Milestone 2)
 
@@ -1976,27 +1977,210 @@ db:verify` all clean — no schema change this pass (still 27 migrations,
 browser: `/advertising`'s Connections card renders both badges per
 platform correctly, no console errors.
 
-## 32. Next step
+## 32. Milestone 16 (Approval Execution Dispatcher, Advertising Monitor & Provider Verification) — what was built
 
-The two real options, per `docs/MILESTONES.md`: (1) **finish the Amazon
-Ads Reporting API integration** (the async create-report/poll/download
-flow `amazonAds.ts`'s `fetchCampaigns` currently declines rather than
-fake), which would let real Amazon Ads spend data start flowing through
-`advertising/sync.ts` into the existing intelligence engine unchanged —
-this is now the highest-value single piece of remaining wiring, since
-every other layer (validation, policy, execution, approval routing) is
-already built and tested end-to-end against the demo connector; or (2)
-**an automatic monitor** that watches real campaign classifications
-(`advertisingAnalytics.ts`'s `classifyCampaign`, already computed) and
-enqueues an `advertising_campaign_action` job when one crosses a
-threshold, following `profitabilityMonitor.ts`'s exact shape — deliberately
-not built this milestone (see §31) so that the first automatic proposal a
-real business ever sees is deliberately chosen, not accidental scope
-creep. `ai/actions/validate.ts`'s `EXECUTABLE_ACTION_TYPES` and
+Brief summary, added retroactively — this section was not written at the
+time. A real approval-execution dispatcher (`automation/executionDispatch.ts`,
+pure routing) wired into `approveDecision` (`approvalWorkflow.ts`), calling
+per-domain executors (`handlers/priceApprovalExecutor.ts`/
+`advertisingApprovalExecutor.ts`) that re-derive every safety-relevant fact
+fresh and re-run the real policy gate immediately before ever touching a
+connector — approval is never itself treated as proof execution is safe.
+Idempotent via a deterministic `approval:<decisionId>` key layered on
+`createAutomationAction`'s own DB-constraint dedup. Added the first
+automatic advertising monitor (`advertising/monitor.ts`: `runCampaignReview`/
+`runCampaignReviewForConnectedOrgs`) — OBSERVE (the existing classification
+engine) -> EVALUATE (`monitorPlan.ts`) -> RECOMMEND, never a direct
+execute — registered as job type `advertising_campaign_review`. Added
+staged, read-only Amazon Ads provider verification
+(`advertising/verification.ts`/`verificationCheck.ts`) as a third status
+dimension, genuinely separate from connection status (migration 0028).
+`/approvals` gained a "Recent decisions" section showing the real
+execution outcome rather than letting "Approved" imply the provider
+action already happened; `/advertising` gained a verification badge.
+
+## 33. Milestone 17 (Execution Recovery & Monitoring Hardening) — what was built
+
+Also a brief retroactive summary. Closed a genuine double-execution race
+in `approveDecision`: two concurrent requests could both pass the
+eligibility check and both reach dispatch before either finished.
+`createAutomationAction` now catches the `unique(org_id, idempotency_key)`
+constraint violation and returns the winner's row instead of throwing;
+`approveDecision` recognises `alreadyExisted && status === 'executing'` as
+a concurrent claim and never dispatches a second execution against it.
+Extracted the awaiting-approval/expired lifecycle check into a pure,
+directly-testable `approvalEligibility.ts`. Tightened `loadFreshCampaignFacts`
+to match on `provider`+`external_account_id` as well as `channel`+
+`external_id` (the `advertising` table's own unique constraint predates
+advertising connectors and does not include the account).
+
+Then built the execution recovery layer this had identified as the
+highest remaining reliability gap: a row stuck `automation_actions.status
+= 'executing'` (process crash mid-flight) had no path back to a known
+state. `executionRecovery.ts`'s `classifyStuckExecution` (pure) reaches
+exactly three honest outcomes from a read-only provider verify —
+succeeded (reconcile), failed (provider state still matches the known
+pre-change value), or unknown — and never retries a write under any
+circumstance. Reused `automation_action_status`'s existing `retry_pending`
+value (reserved since migration 0019, never previously set) for the
+unknown case rather than adding a new enum value. `automation/recovery.ts`
+orchestrates this per stuck action; the store gained
+`findStuckExecutingActions`/`recordRecoveryOutcome` (the latter
+compare-and-swapping on `status = 'executing'`). The advertising monitor
+gained an explicit stale-data skip (never recommend past the 48h
+freshness policy) and a full spend/revenue/ROAS/CPA/AOV/impressions/
+clicks/conversions snapshot in each recommendation's `inputFacts`. A
+first, unauthenticated-by-role `/api/automation/maintenance` route ran
+recovery then campaign review — since replaced by the real orchestrator
+below. `/automation` gained a "Recovery required" section.
+
+## 34. Milestone 18 (Production Scheduler, Job Reliability & Automation Operations) — what was built
+
+The maintenance route Milestone 17 added called two functions directly
+with no coordination beyond that. This milestone turned it into the real
+canonical operational entry point: a single-run-locked, crash-recoverable,
+partially-failure-tolerant orchestrator with real run history, health
+reporting, and (for the first time in this repository) an actual
+scheduler configuration, not just a route waiting for one.
+
+**Deployment architecture discovered (Phase 1):** this repository commits
+to no specific host — no `vercel.json` existed before this milestone, no
+`.github/workflows`, no Dockerfile/Procfile/fly.toml. `package.json` is a
+plain `next build`/`next start`. The existing scheduler-authenticated
+routes (`/api/automation/run`, `/api/monitoring/run`) were already written
+host-agnostically ("a Vercel Cron entry, any host's scheduled-function
+feature, or a plain crontab `curl` line" — this file's own prior wording).
+Given that, this milestone added a `vercel.json` as an *optional*
+convenience (inert unless the repo is actually deployed to Vercel) rather
+than assuming Vercel is the target, alongside documentation for any other
+host. **Implemented, not "configured, live and scheduled"** — see the
+distinction below.
+
+**Canonical maintenance entry point (Phase 2):** `automation/maintenance.ts`'s
+`runMaintenance(store, triggeredBy)` is now the *only* place that calls
+`runExecutionRecovery` and `runCampaignReviewForConnectedOrgs` together.
+`POST /api/automation/maintenance` (scheduler *and* manual — `?trigger=manual`
+labels a request as manual on the identical, identically-authenticated
+route, since this codebase has no separate "platform admin" credential to
+distinguish them by) both call this same function. No second maintenance
+implementation, no second cron route.
+
+**Single-run protection (Phase 4) and crash recovery (Phase 5):** reuses
+`automation_runs` (migration 0008 — "a log of completed scheduler runs,"
+reserved since Milestone 6, never previously written to by any
+application code, exactly like `retry_pending` was before Milestone 17).
+Migration 0029 makes `org_id` nullable specifically for this
+cross-organisation job (a maintenance run has no single owning
+organisation — RLS's existing `org_id in (select auth_org_ids())` policy
+already excludes `null`-org rows from every ordinary session
+automatically, no policy change needed) and adds a **partial unique
+index** — `unique(job_key) where org_id is null and status = 'running'`.
+Acquiring the lock is a plain insert; a second concurrent insert for the
+same `job_key` is rejected by Postgres itself, which is what makes this
+safe across multiple server processes/instances, not only within one
+process's memory. Before every acquire attempt, any row still `running`
+past `MAINTENANCE_LOCK_STALE_AFTER_MS` (15 minutes — generous headroom
+above what a real run should ever take, chosen and documented in
+`maintenanceHealth.ts`) is reaped to `failed` first, so a maintenance
+process that itself crashes can never permanently block every future run.
+
+**Persistent run history (Phase 6):** `automation_runs` itself —
+`items_processed`/`items_failed`/`decisions_created`/`duration_ms`/`error`/
+`summary` (jsonb, the full recovery+monitoring structured result) already
+fit this need almost exactly; no new table.
+
+**Partial failure (Phase 7):** both `runExecutionRecovery` and
+`runCampaignReviewForConnectedOrgs` already catch per-item/per-org errors
+internally and keep going (pre-existing from Milestone 16/17) — one
+organisation or provider failing never stops the rest. `classifyMaintenanceOutcome`
+(`maintenanceHealth.ts`, pure) only reports `'failed'` when *both*
+subsystems throw entirely (a catastrophic, not-per-item failure);
+anything else with a nonzero error count is `'partial_success'`.
+
+**Job idempotency (Phase 8):** the scheduler layer coordinates, it does
+not reimplement — `findPendingCampaignAction`, the per-day monitor
+idempotency key, and `automation_actions`' own compare-and-swap recovery
+outcome are all reused unchanged from Milestones 16/17.
+
+**Operational health (Phase 9) and staleness policy (Phase 10):**
+`classifyMaintenanceHealth` (pure, `maintenanceHealth.ts`) reads recent
+`automation_runs` rows (newest-first) and reaches one of `NEVER_RUN` /
+`RUNNING` / `HEALTHY` / `PARTIAL_SUCCESS` / `AUTOMATION_STALE` / `FAILED`
+— never fabricates a successful run. Staleness window
+(`MAINTENANCE_STALE_AFTER_MS`, 45 minutes) is derived directly from this
+same milestone's own recommended scheduler interval
+(`MAINTENANCE_EXPECTED_INTERVAL_MS`, 15 minutes) × 3 — generous enough
+that one or two missed/delayed ticks never false-positive, tight enough
+to catch "the scheduler has genuinely stopped calling this" within an
+hour. This repository had no scheduling assumption to derive from before
+this milestone; this *is* that assumption, not a guess layered on top of
+one. Staleness is purely an operational read — it never blocks, retries,
+or triggers anything.
+
+**Audit (Phase 13):** orchestration-level events (started/completed/
+skipped/failed) are recorded as `automation_runs` rows, deliberately *not*
+`audit_logs` entries — `audit_logs.org_id` is `not null references
+organisations`, and a cross-org maintenance run has no single owning org
+to attribute a row to; inventing one would misattribute every row that
+table's other readers assume belongs to a real tenant. Every *domain-level*
+event these two subsystems cause (an individual recommendation, an
+individual recovery outcome) is already audited through `audit_logs` with
+a real org_id by the functions that cause it, unchanged.
+
+**Security (Phase 14):** `core/schedulerAuth.ts` gained `extractBearerToken`
+(pulled out of three near-identical `header?.replace(/^Bearer\s+/i, '')`
+lines, one per scheduler route) so header parsing (missing, malformed,
+wrong scheme, empty token) is proven once, directly tested, and cannot
+drift between routes. `secretsMatch`'s constant-time comparison
+(pre-existing) is unchanged. No secret is ever included in a response
+body; the manual trigger uses the identical bearer-secret gate as the
+scheduled path, since this codebase has no separate per-user
+"platform admin" role to gate it with instead.
+
+**UI (Phase 11):** `/automation` gained an "Automation maintenance" card
+— health badge, last successful/attempted run, running duration or last
+duration, recommendations created, recent failures — all read from real
+`automation_runs` rows via `classifyMaintenanceHealth`, alongside the
+pre-existing "Recovery required" section from Milestone 17.
+
+**Testing (Phase 15):** 38 new tests — `scheduler-auth.test.ts` (13,
+header/secret edge cases), `maintenance-health.test.ts` (14, every health
+state and outcome classification), `maintenance-locking.test.ts` (11,
+against the in-memory store: first-acquire, concurrent-rejection,
+stale-reap-and-recover, release-on-success, release-on-failure,
+per-job-key isolation). `runMaintenance`/`acquireMaintenanceRun`'s
+Supabase-backed half remains untestable directly in Vitest (`server-only`,
+no live database in this test suite) — the same established limitation
+every other Supabase-touching orchestrator in this codebase has; verified
+by code review, the full suite, and `db:verify` against the migration
+itself (via PGlite).
+
+**What this milestone did *not* do:** no automatic scheduling is
+"live" — `vercel.json` only takes effect if this repository is actually
+deployed to Vercel, `CRON_SECRET` still needs setting there to match
+`AUTOMATION_CRON_SECRET`, and no other host's scheduler has been
+configured because no other host has been chosen. **Implemented and
+documented ≠ configured ≠ live and scheduled** — see §6/§35 (Phase 6
+"needs the owner" list) for what remains an operator action, not a code
+gap.
+
+## 35. Next step
+
+The two real options remaining, per `docs/MILESTONES.md`: (1) **finish
+the Amazon Ads Reporting API integration** (the async create-report/poll/
+download flow `amazonAds.ts`'s `fetchCampaigns` currently declines rather
+than fake) — still the highest-value single piece of remaining wiring,
+since every other layer (validation, policy, execution, approval routing,
+monitoring, recovery, scheduling) is now built and tested end-to-end
+against the demo connector; or (2) **deploy for real** — a live Supabase
+project, a chosen host, `AUTOMATION_CRON_SECRET` set, and (if that host is
+Vercel) `CRON_SECRET` set to the same value so `vercel.json`'s cron entry
+actually authenticates — the one thing no amount of further code can
+substitute for. `ai/actions/validate.ts`'s `EXECUTABLE_ACTION_TYPES` and
 `REVIEW_ONLY_REASONS` are exactly where `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
 `DECREASE_BUDGET` would graduate to chat-executable, once `CampaignIdentity`'s
-`provider` is threaded through `FactBundle` (see §31's chat note) — never
-a parallel proposal mechanism.
+`provider` is threaded through `FactBundle` — never a parallel proposal
+mechanism.
 
 Five smaller, genuine loose ends worth picking up opportunistically rather
 than as their own milestone: (1) a live-Supabase-backed test harness does

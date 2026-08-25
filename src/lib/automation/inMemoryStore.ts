@@ -17,6 +17,9 @@ import {
   type NotifyInput,
   type ProposeApprovalInput,
   type RecoveryOutcomeInput,
+  type AcquireMaintenanceRunResult,
+  type CompleteMaintenanceRunInput,
+  type MaintenanceRunRecord,
 } from './store'
 import type { AutomationActionType } from './types'
 import type { AutomationSettings } from './settingsTypes'
@@ -50,6 +53,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
   const approvals: (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[] = []
   const channelProductReconciliations = new Map<string, Partial<ChannelProductReconciliation>>()
   const advertisingCampaignReconciliations = new Map<string, Partial<AdvertisingCampaignReconciliation>>()
+  const maintenanceRuns: MaintenanceRunRecord[] = []
 
   function isAbandoned(job: JobRecord, nowMs: number): boolean {
     return job.status === 'running' && job.lockedAt !== null && nowMs - Date.parse(job.lockedAt) > lockTimeoutMs
@@ -64,6 +68,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       approvals: readonly (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[]
       channelProductReconciliations: Record<string, Partial<ChannelProductReconciliation>>
       advertisingCampaignReconciliations: Record<string, Partial<AdvertisingCampaignReconciliation>>
+      maintenanceRuns: MaintenanceRunRecord[]
     }
     setAutomationSettings: (orgId: string, settings: AutomationSettings) => void
   } = {
@@ -384,6 +389,55 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       return { applied: true }
     },
 
+    async acquireMaintenanceRun(jobKey: string, staleAfterMs: number): Promise<AcquireMaintenanceRunResult> {
+      // Reap first — same order and same reasoning as the real store:
+      // a stale `running` row (a crashed process) must never permanently
+      // block every future run.
+      const staleBeforeMs = Date.now() - staleAfterMs
+      for (const run of maintenanceRuns) {
+        if (run.jobKey === jobKey && run.status === 'running' && Date.parse(run.startedAt) < staleBeforeMs) {
+          run.status = 'failed'
+          run.finishedAt = new Date().toISOString()
+          run.error = `Reaped: this run was still "running" past the ${Math.round(staleAfterMs / 60_000)}-minute stale threshold — the process handling it most likely crashed without recording an outcome.`
+        }
+      }
+
+      // The real store's partial unique index, replicated: at most one
+      // `running` row per `jobKey` may exist at a time.
+      const active = maintenanceRuns.find((r) => r.jobKey === jobKey && r.status === 'running')
+      if (active) return { acquired: false, activeRun: { ...active } }
+
+      const id = randomUUID()
+      const startedAt = new Date().toISOString()
+      maintenanceRuns.push({
+        id, jobKey, status: 'running', startedAt, finishedAt: null, durationMs: null,
+        itemsProcessed: 0, itemsFailed: 0, decisionsCreated: 0, error: null, summary: {},
+      })
+      return { acquired: true, runId: id, startedAt }
+    },
+
+    async completeMaintenanceRun(runId: string, outcome: CompleteMaintenanceRunInput): Promise<void> {
+      const run = maintenanceRuns.find((r) => r.id === runId)
+      if (!run) throw new Error(`Unknown maintenance run ${runId}`)
+      const finishedAt = new Date().toISOString()
+      run.status = outcome.status
+      run.finishedAt = finishedAt
+      run.durationMs = Date.parse(finishedAt) - Date.parse(run.startedAt)
+      run.itemsProcessed = outcome.itemsProcessed
+      run.itemsFailed = outcome.itemsFailed
+      run.decisionsCreated = outcome.decisionsCreated
+      run.error = outcome.error
+      run.summary = outcome.summary
+    },
+
+    async getRecentMaintenanceRuns(jobKey: string, limit: number): Promise<readonly MaintenanceRunRecord[]> {
+      return maintenanceRuns
+        .filter((r) => r.jobKey === jobKey)
+        .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+        .slice(0, limit)
+        .map((r) => ({ ...r }))
+    },
+
     setAutomationSettings(orgId: string, settings: AutomationSettings) {
       settingsByOrg.set(orgId, settings)
     },
@@ -397,6 +451,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
         approvals: [...approvals],
         channelProductReconciliations: Object.fromEntries(channelProductReconciliations),
         advertisingCampaignReconciliations: Object.fromEntries(advertisingCampaignReconciliations),
+        maintenanceRuns: [...maintenanceRuns],
       }
     },
   }

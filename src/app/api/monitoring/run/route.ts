@@ -1,5 +1,5 @@
 import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
-import { secretsMatch } from '@/lib/core/schedulerAuth'
+import { secretsMatch, extractBearerToken } from '@/lib/core/schedulerAuth'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import { runDueMonitors } from '@/lib/monitoring/runner'
 import { getSupabaseEventStore } from '@/lib/monitoring/eventStore'
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     if (!expected) {
       return Response.json({ error: 'AUTOMATION_CRON_SECRET is not configured; refusing to run against a live database.' }, { status: 503 })
     }
-    const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
+    const provided = extractBearerToken(request.headers.get('authorization'))
     if (!provided || !secretsMatch(provided, expected)) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
     }

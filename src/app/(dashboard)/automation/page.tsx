@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Badge, Card, CardHeader, PageHeader, StatTile, TableWrap, type Tone } from '@/components/ui'
 import { MetricStat } from '@/components/dashboard/MetricStat'
 import { formatMoney, money, type Money } from '@/lib/core/money'
+import { formatRelative } from '@/lib/utils'
 import { getAutomationStatus } from '@/lib/automation/repository'
 import { getMonitoringStatus } from '@/lib/monitoring/repository'
 import { getAnalyticsDashboard } from '@/lib/analytics/repository'
@@ -10,9 +11,21 @@ import { getSession } from '@/lib/security/session'
 import type { AnyDemoScenario } from '@/lib/demo/automation'
 import type { MonitoringDemoScenario } from '@/lib/demo/monitoring'
 import type { AnalyticsDemoScenario } from '@/lib/demo/analytics'
+import type { MaintenanceHealthState } from '@/lib/automation/maintenanceHealth'
 import { pauseAll, resumeAll, toggleCategory } from './actions'
 
 export const dynamic = 'force-dynamic'
+
+const MAINTENANCE_TONE: Record<MaintenanceHealthState, Tone> = {
+  NEVER_RUN: 'neutral', RUNNING: 'accent', HEALTHY: 'positive', PARTIAL_SUCCESS: 'caution', AUTOMATION_STALE: 'caution', FAILED: 'negative',
+}
+const MAINTENANCE_LABEL: Record<MaintenanceHealthState, string> = {
+  NEVER_RUN: 'Never run', RUNNING: 'Running now', HEALTHY: 'Healthy', PARTIAL_SUCCESS: 'Partial success', AUTOMATION_STALE: 'Stale — not running on schedule', FAILED: 'Last run failed',
+}
+const MAINTENANCE_CARD_CLASS: Record<MaintenanceHealthState, string | undefined> = {
+  NEVER_RUN: undefined, RUNNING: undefined, HEALTHY: undefined,
+  PARTIAL_SUCCESS: 'border-caution/30 bg-caution-soft', AUTOMATION_STALE: 'border-caution/30 bg-caution-soft', FAILED: 'border-negative/30 bg-negative-soft',
+}
 
 const CATEGORY_LABELS: Record<string, string> = {
   publishing: 'Product publishing',
@@ -623,6 +636,51 @@ export default async function AutomationPage() {
         <StatTile label="Suppliers switched" value={String(status.today.suppliersSwitched)} sublabel={`${status.today.productsPaused} products paused`} />
         <StatTile label="Recovery required" value={String(status.recoveryRequired.length)} tone={status.recoveryRequired.length > 0 ? 'negative' : 'neutral'} />
       </div>
+
+      <Card className={MAINTENANCE_CARD_CLASS[status.maintenanceHealth.state]}>
+        <CardHeader
+          title="Automation maintenance"
+          description="Execution recovery and campaign monitoring, coordinated through /api/automation/maintenance — real run history, never a fabricated status."
+          action={<Badge tone={MAINTENANCE_TONE[status.maintenanceHealth.state]}>{MAINTENANCE_LABEL[status.maintenanceHealth.state]}</Badge>}
+        />
+        <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-4">
+          <div className="bg-surface px-5 py-4">
+            <p className="text-xs text-ink-subtle">Last successful run</p>
+            <p className="mt-1 text-sm font-medium">{status.maintenanceHealth.lastSuccessfulRun ? formatRelative(status.maintenanceHealth.lastSuccessfulRun.startedAt) : 'Never'}</p>
+          </div>
+          <div className="bg-surface px-5 py-4">
+            <p className="text-xs text-ink-subtle">Last attempted run</p>
+            <p className="mt-1 text-sm font-medium">{status.maintenanceHealth.lastAttemptedRun ? formatRelative(status.maintenanceHealth.lastAttemptedRun.startedAt) : 'Never'}</p>
+          </div>
+          <div className="bg-surface px-5 py-4">
+            <p className="text-xs text-ink-subtle">{status.maintenanceHealth.state === 'RUNNING' ? 'Running for' : 'Last duration'}</p>
+            <p className="mt-1 text-sm font-medium">
+              {status.maintenanceHealth.state === 'RUNNING' && status.maintenanceHealth.runningDurationMs !== null
+                ? `${Math.round(status.maintenanceHealth.runningDurationMs / 1000)}s so far`
+                : status.maintenanceHealth.lastAttemptedRun?.durationMs != null
+                  ? `${Math.round(status.maintenanceHealth.lastAttemptedRun.durationMs / 1000)}s`
+                  : 'Unknown'}
+            </p>
+          </div>
+          <div className="bg-surface px-5 py-4">
+            <p className="text-xs text-ink-subtle">Recommendations (last run)</p>
+            <p className="mt-1 text-sm font-medium">{status.maintenanceHealth.lastAttemptedRun?.decisionsCreated ?? 0}</p>
+          </div>
+        </div>
+        {status.maintenanceHealth.lastAttemptedRun?.error ? (
+          <p className="border-t border-border px-5 py-3 text-xs text-negative">{status.maintenanceHealth.lastAttemptedRun.error}</p>
+        ) : null}
+        {status.maintenanceHealth.recentFailures.length > 0 ? (
+          <ul className="divide-y divide-border border-t border-border">
+            {status.maintenanceHealth.recentFailures.slice(0, 5).map((run) => (
+              <li key={run.id} className="flex items-center justify-between gap-3 px-5 py-2.5 text-xs">
+                <span className="text-ink-muted">{formatRelative(run.startedAt)}</span>
+                <Badge tone={run.status === 'failed' ? 'negative' : 'caution'}>{run.status.replace(/_/g, ' ')}</Badge>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </Card>
 
       {status.recoveryRequired.length > 0 ? (
         <Card className="border-negative/30 bg-negative-soft">

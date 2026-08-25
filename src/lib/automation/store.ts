@@ -111,6 +111,43 @@ export interface CreateActionInput {
 export type VerificationStatus = 'not_applicable' | 'pending' | 'verified' | 'failed' | 'uncertain'
 export type ReconciliationStatus = 'not_applicable' | 'matched' | 'discrepancy' | 'pending'
 
+/**
+ * Milestone 18 — a cross-organisation system job's run record, backed by
+ * the previously-unused `automation_runs` table (migration 0008; made
+ * `org_id`-nullable for exactly this in migration 0029). `status` is a
+ * free-text column, not a Postgres enum, so `'partial_success'` and
+ * `'skipped'` need no schema change to introduce.
+ */
+export type MaintenanceRunStatus = 'running' | 'success' | 'failed' | 'partial_success' | 'skipped'
+
+export interface MaintenanceRunRecord {
+  id: string
+  jobKey: string
+  status: MaintenanceRunStatus
+  startedAt: string
+  finishedAt: string | null
+  durationMs: number | null
+  itemsProcessed: number
+  itemsFailed: number
+  decisionsCreated: number
+  error: string | null
+  summary: Record<string, unknown>
+}
+
+export type AcquireMaintenanceRunResult =
+  | { acquired: true; runId: string; startedAt: string }
+  /** Another row for this `jobKey` is still genuinely `running` (not stale) — the caller must not start a second, concurrent run. */
+  | { acquired: false; activeRun: MaintenanceRunRecord }
+
+export interface CompleteMaintenanceRunInput {
+  status: 'success' | 'failed' | 'partial_success' | 'skipped'
+  itemsProcessed: number
+  itemsFailed: number
+  decisionsCreated: number
+  error: string | null
+  summary: Record<string, unknown>
+}
+
 export interface CompleteActionOutcome {
   succeeded: boolean
   error?: string | null
@@ -274,4 +311,20 @@ export interface AutomationStore {
    * transition, which is what makes running the reaper twice at once safe.
    */
   recordRecoveryOutcome(actionId: string, input: RecoveryOutcomeInput): Promise<{ applied: boolean }>
+  /**
+   * Milestone 18 — the single-run lock for a cross-organisation system job
+   * (Phase 4/5). First reaps any row for `jobKey` still `status: 'running'`
+   * whose `started_at` is older than `staleAfterMs` (a crashed process that
+   * never completed its run — marked `failed` with an explanatory `error`,
+   * never silently deleted), then attempts to insert a fresh `running` row.
+   * The database's own partial unique index (`automation_runs_active_system_lock_idx`,
+   * migration 0029: `unique(job_key) where org_id is null and status =
+   * 'running'`) is what makes `acquired: false` correct across concurrent
+   * processes/instances, not merely within one process's memory.
+   */
+  acquireMaintenanceRun(jobKey: string, staleAfterMs: number): Promise<AcquireMaintenanceRunResult>
+  /** Moves a run out of `running` into its real terminal outcome, recording timing and the structured summary Phase 6/9 need. */
+  completeMaintenanceRun(runId: string, outcome: CompleteMaintenanceRunInput): Promise<void>
+  /** Most recent runs for `jobKey`, newest first — the input to the health/staleness reader (`maintenanceHealth.ts`). */
+  getRecentMaintenanceRuns(jobKey: string, limit: number): Promise<readonly MaintenanceRunRecord[]>
 }

@@ -8,6 +8,8 @@ import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
 import { listMarketplaceConnectors, marketplaceConnectorSummary } from '@/lib/marketplaces/connectors/registry'
 import type { MarketplaceConnectorSummary } from '@/lib/marketplaces/connectors/types'
 import type { Tables } from '@/lib/supabase/database.types'
+import { getRecentMaintenanceRuns } from './maintenanceRuns'
+import { classifyMaintenanceHealth, MAINTENANCE_JOB_KEY, type MaintenanceHealth } from './maintenanceHealth'
 
 export type AutomationAction = Tables<'automation_actions'>
 export type AutomationJob = Tables<'automation_jobs'>
@@ -46,6 +48,8 @@ export interface AutomationStatus {
    * never silently invisible.
    */
   recoveryRequired: readonly AutomationAction[]
+  /** Milestone 18 — real operational status of the maintenance orchestrator itself, never fabricated. See `maintenanceHealth.ts`'s own comment for the state model. */
+  maintenanceHealth: MaintenanceHealth
 }
 
 /**
@@ -93,6 +97,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
       demoScenarios: demoAutomationScenarios(),
       productionReadiness: { schedulerConfigured: false, jobsByStatus: {}, externalActionsByVerification: {}, connectors: connectorSummaries },
       recoveryRequired: [],
+      maintenanceHealth: classifyMaintenanceHealth([], new Date().toISOString()),
     }
   }
 
@@ -100,14 +105,21 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
   const startOfDay = new Date()
   startOfDay.setUTCHours(0, 0, 0, 0)
 
-  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }, { data: recoveryRequired }] = await Promise.all([
+  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }, { data: recoveryRequired }, maintenanceRuns] = await Promise.all([
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).gte('created_at', startOfDay.toISOString()),
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).order('created_at', { ascending: false }).limit(25),
     supabase.from('automation_jobs').select('*').eq('org_id', session.orgId).in('status', ['pending', 'running']).order('run_at', { ascending: true }).limit(25),
     supabase.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('org_id', session.orgId).eq('status', 'dead_letter'),
     supabase.from('automation_jobs').select('status').eq('org_id', session.orgId),
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).in('status', ['retry_pending', 'executing']).order('created_at', { ascending: false }).limit(25),
+    // Service-role read: maintenance runs are `org_id is null` (Milestone
+    // 18, migration 0029) and so are never visible through the
+    // session-scoped `supabase` client's RLS above — same reasoning as
+    // `getRecentMaintenanceRuns`'s own comment.
+    getRecentMaintenanceRuns(MAINTENANCE_JOB_KEY, 10),
   ])
+
+  const maintenanceHealth = classifyMaintenanceHealth(maintenanceRuns, new Date().toISOString())
 
   const jobsByStatus: Record<string, number> = {}
   for (const job of allJobs ?? []) jobsByStatus[job.status] = (jobsByStatus[job.status] ?? 0) + 1
@@ -145,6 +157,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
     demoScenarios: [],
     productionReadiness: { schedulerConfigured, jobsByStatus, externalActionsByVerification, connectors: connectorSummaries },
     recoveryRequired: recoveryRequired ?? [],
+    maintenanceHealth,
   }
 }
 

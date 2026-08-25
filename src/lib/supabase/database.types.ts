@@ -743,7 +743,7 @@ export interface Database {
       automation_runs: {
         Row: {
           id: string
-          org_id: string
+          org_id: string | null
           job_key: string
           status: string
           started_at: string
@@ -758,7 +758,7 @@ export interface Database {
         }
         Insert: {
           id?: string
-          org_id: string
+          org_id?: string | null
           job_key: string
           status?: string
           started_at?: string
@@ -773,7 +773,7 @@ export interface Database {
         }
         Update: {
           id?: string
-          org_id?: string
+          org_id?: string | null
           job_key?: string
           status?: string
           started_at?: string

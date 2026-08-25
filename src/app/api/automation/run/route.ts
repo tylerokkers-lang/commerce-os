@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
-import { secretsMatch } from '@/lib/core/schedulerAuth'
+import { secretsMatch, extractBearerToken } from '@/lib/core/schedulerAuth'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
 import { getSupabaseFactsLoader } from '@/lib/automation/facts'
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     if (!expected) {
       return Response.json({ error: 'AUTOMATION_CRON_SECRET is not configured; refusing to run against a live database.' }, { status: 503 })
     }
-    const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
+    const provided = extractBearerToken(request.headers.get('authorization'))
     if (!provided || !secretsMatch(provided, expected)) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
     }
