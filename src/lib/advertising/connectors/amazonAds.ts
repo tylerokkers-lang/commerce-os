@@ -34,14 +34,44 @@ import type {
  * HONEST, DELIBERATE GAP: Amazon Ads' Reporting API (the only source of
  * spend/impressions/clicks/conversions) is asynchronous — create a report
  * job, poll until it finishes, then download the result from a signed S3
- * URL. That multi-step, stateful flow is not implemented here. `ListCampaigns`
- * (synchronous, real, implemented below) gives campaign identity, status
- * and budget, but `fetchCampaigns` returns an honest `err(...)` rather than
- * a `NormalizedCampaignFact` with fabricated zero metrics — the same
- * "return a specific, honest error rather than invent a response" rule
- * `shopify.ts`'s `fetchFees`/`updateInventory` already follow for their own
- * genuinely-not-yet-implemented calls. `pauseCampaign`/`setCampaignBudget`
- * (Amazon Ads' synchronous `PUT /sp/campaigns` endpoint) are fully real.
+ * URL. That multi-step, stateful flow is not implemented here, and neither
+ * is a `ListCampaigns`-style read call — `fetchCampaigns` below makes no
+ * network request at all and returns an honest `err(...)` immediately,
+ * rather than a `NormalizedCampaignFact` with fabricated zero metrics —
+ * the same "return a specific, honest error rather than invent a
+ * response" rule `shopify.ts`'s `fetchFees`/`updateInventory` already
+ * follow for their own genuinely-not-yet-implemented calls.
+ *
+ * UNVERIFIED API SURFACE — read this before ever pointing this connector
+ * at a real account, not after something breaks. Everything below was
+ * written from general knowledge of Amazon Ads' API family, not confirmed
+ * against Amazon's current official API reference at implementation time,
+ * and none of it has executed against a live endpoint even once:
+ *   - Whether `PUT /sp/campaigns` (Sponsored Products) is still the
+ *     correct path/version, its exact required headers (Amazon's
+ *     campaign-management APIs have historically required a versioned
+ *     `Content-Type`, e.g. `application/vnd.spCampaign.v3+json`, not
+ *     assumed here), and its exact request/response body field names and
+ *     casing (`campaignId`/`state`/`dailyBudget` are a best guess).
+ *   - The shape assumed for a write error response
+ *     (`{ code?: string; details?: string }`) is unverified — a real
+ *     failure might arrive in a different shape entirely, in which case
+ *     `err(result.error)` still surfaces *something* (never silently
+ *     swallowed), but the message may be less specific than intended.
+ *   - `getAccessToken` never caches the LWA access token — every call
+ *     re-exchanges the refresh token. This mirrors `marketplaces/connectors/amazon.ts`'s
+ *     SP-API connector (equally uncached), so it is a shared, known
+ *     inefficiency rather than a new one, not a correctness bug: a
+ *     redundant token exchange still produces a valid token, it is just
+ *     wasteful against Amazon's separate LWA-endpoint rate limit.
+ *   - `rateLimit` on the descriptor is declared metadata only, exactly
+ *     like every other connector in this codebase (`docs/SECURITY.md`) —
+ *     nothing in this file self-enforces it; a caller/scheduler is
+ *     responsible for pacing calls.
+ * `pauseCampaign`/`setCampaignBudget` are real, working HTTP calls against
+ * that unverified surface — "real code," not a stub, but "real code
+ * against an unconfirmed contract," which is a meaningfully different and
+ * weaker claim than "known to work."
  */
 
 const DESCRIPTOR: AdvertisingConnectorDescriptor = {

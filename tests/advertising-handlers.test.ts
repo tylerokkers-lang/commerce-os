@@ -77,8 +77,8 @@ describe('handleAdvertisingCampaignAction', () => {
       job({
         jobType: 'advertising_campaign_action',
         payload: {
-          channel: 'amazon_uk', externalCampaignId: 'camp-1', actionType: 'pause_campaign',
-          campaignName: 'Test Campaign', currentDailyBudgetMinor: 2000, proposedDailyBudgetMinor: null,
+          channel: 'amazon_uk', provider: 'amazon_ads', externalAccountId: 'acct-1', externalCampaignId: 'camp-1', actionType: 'pause_campaign',
+          campaignName: 'Test Campaign', classification: 'wasted_spend', currentDailyBudgetMinor: 2000, proposedDailyBudgetMinor: null,
           isPaused: false, connectionStatus: 'connected', dataAgeHours: 2, roas: 1.1, idempotencyKey: 'job-1',
         },
       }),
@@ -94,13 +94,26 @@ describe('handleAdvertisingCampaignAction', () => {
       job({
         jobType: 'advertising_campaign_action',
         payload: {
-          channel: 'amazon_uk', externalCampaignId: 'camp-1', actionType: 'pause_campaign',
-          campaignName: 'Test Campaign', currentDailyBudgetMinor: 2000, proposedDailyBudgetMinor: null,
+          channel: 'amazon_uk', provider: 'amazon_ads', externalAccountId: 'acct-1', externalCampaignId: 'camp-1', actionType: 'pause_campaign',
+          campaignName: 'Test Campaign', classification: 'wasted_spend', currentDailyBudgetMinor: 2000, proposedDailyBudgetMinor: null,
           isPaused: false, connectionStatus: 'not_configured', dataAgeHours: 2, roas: 1.1, idempotencyKey: 'job-2',
         },
       }),
       store,
     )
     expect(result.succeeded).toBe(false)
+  })
+
+  it('a duplicate pending proposal for the same campaign+action is recognised, never creating a second approval', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const payload = {
+      channel: 'amazon_uk' as const, provider: 'amazon_ads' as const, externalAccountId: 'acct-1', externalCampaignId: 'camp-1', actionType: 'pause_campaign' as const,
+      campaignName: 'Test Campaign', classification: 'wasted_spend' as const, currentDailyBudgetMinor: 2000, proposedDailyBudgetMinor: null,
+      isPaused: false, connectionStatus: 'connected' as const, dataAgeHours: 2, roas: 1.1,
+    }
+    await handleAdvertisingCampaignAction(job({ jobType: 'advertising_campaign_action', payload: { ...payload, idempotencyKey: 'job-3' } }), store)
+    await handleAdvertisingCampaignAction(job({ jobType: 'advertising_campaign_action', payload: { ...payload, idempotencyKey: 'job-4' } }), store)
+
+    expect(store.getState().approvals).toHaveLength(1)
   })
 })

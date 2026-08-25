@@ -54,6 +54,24 @@ const CHANNEL_LABEL: Record<string, string> = { shopify: 'Shopify', amazon_uk: '
 const CONNECTION_TONE: Record<AdvertisingConnectionStatus, Tone> = { connected: 'positive', demo: 'demo', not_configured: 'neutral', degraded: 'caution', error: 'negative' }
 const CONNECTION_LABEL: Record<AdvertisingConnectionStatus, string> = { connected: 'Connected', demo: 'Demo', not_configured: 'Not connected', degraded: 'Degraded', error: 'Error' }
 
+/**
+ * Phase 13 — honest implementation status, a genuinely different axis
+ * from `status`/`CONNECTION_LABEL` above: a platform can be "Not
+ * connected" simply because nobody has entered credentials yet even
+ * though the integration is real and working (never true for any
+ * platform in this environment, but the distinction still matters), or
+ * "Not connected" because the integration itself is a stub regardless of
+ * credentials. Keyed by the registry key so it can never silently drift
+ * from which connector class is actually registered.
+ */
+const IMPLEMENTATION_TONE: Record<string, Tone> = { amazon_ads: 'caution', meta_ads: 'neutral', google_ads: 'neutral', tiktok_ads: 'neutral' }
+const IMPLEMENTATION_LABEL: Record<string, string> = {
+  amazon_ads: 'Implemented — requires live verification',
+  meta_ads: 'Stub — not implemented',
+  google_ads: 'Stub — not implemented',
+  tiktok_ads: 'Stub — not implemented',
+}
+
 function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary }) {
   return (
     <li className="px-5 py-3.5">
@@ -64,7 +82,10 @@ function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary })
             <p className="mt-0.5 text-xs text-ink-subtle">Missing: {connector.missingCredentials.join(', ')}</p>
           ) : null}
         </div>
-        <Badge tone={CONNECTION_TONE[connector.status]} className="shrink-0">{CONNECTION_LABEL[connector.status]}</Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge tone={CONNECTION_TONE[connector.status]}>{CONNECTION_LABEL[connector.status]}</Badge>
+          <Badge tone={IMPLEMENTATION_TONE[connector.key] ?? 'neutral'}>{IMPLEMENTATION_LABEL[connector.key] ?? 'Unknown'}</Badge>
+        </div>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-subtle">
         <span>Read: {connector.capabilities.readCampaigns ? 'yes' : 'no'}</span>

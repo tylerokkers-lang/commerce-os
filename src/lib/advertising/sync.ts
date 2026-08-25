@@ -2,7 +2,7 @@ import 'server-only'
 
 import { createServiceSupabase } from '@/lib/supabase/server'
 import { recordAudit } from '@/lib/audit'
-import { planAdvertisingSync } from './syncPlan'
+import { advertisingRowKey, planAdvertisingSync } from './syncPlan'
 import type { AdvertisingProvider } from './connectors/types'
 
 /**
@@ -17,12 +17,29 @@ import type { AdvertisingProvider } from './connectors/types'
 export interface AdvertisingSyncResult {
   provider: string
   connectorKey: string
+  fetchedCount: number
   written: number
+  createdCount: number
+  updatedCount: number
   quarantined: number
   quarantinedDetail: readonly { externalCampaignId: string; reasons: readonly string[] }[]
   blocked: string | null
   fetchError: string | null
   requestsMade: number
+}
+
+/** Existing `advertising` rows for exactly the campaign/day keys this batch touches — bounded by the fetched batch's own size, never a full-table scan. Used only to report `createdCount`/`updatedCount` honestly (Phase 9); the upsert itself is correct either way. */
+async function loadExistingKeys(orgId: string, channel: string, rows: readonly { externalId: string; periodDate: string }[]): Promise<Set<string>> {
+  if (rows.length === 0) return new Set()
+  const supabase = createServiceSupabase()
+  const externalIds = [...new Set(rows.map((r) => r.externalId))]
+  const { data } = await supabase
+    .from('advertising')
+    .select('external_id, period_date')
+    .eq('org_id', orgId)
+    .eq('channel', channel as never)
+    .in('external_id', externalIds)
+  return new Set((data ?? []).map((r) => advertisingRowKey(channel as never, r.external_id ?? '', r.period_date)))
 }
 
 async function loadConnectionChannel(orgId: string, platform: string): Promise<{ channel: string | null; lastSyncAt: string | null }> {
@@ -71,7 +88,7 @@ async function recordConnectionOutcome(orgId: string, platform: string, outcome:
 export async function runAdvertisingSync(orgId: string, isDemo: boolean, connector: AdvertisingProvider, limit = 500): Promise<AdvertisingSyncResult> {
   const nowIso = new Date().toISOString()
   const platform = connector.descriptor.platform
-  const base = { provider: platform, connectorKey: connector.descriptor.key, written: 0, quarantined: 0, quarantinedDetail: [], requestsMade: 0 }
+  const base = { provider: platform, connectorKey: connector.descriptor.key, fetchedCount: 0, written: 0, createdCount: 0, updatedCount: 0, quarantined: 0, quarantinedDetail: [], requestsMade: 0 }
 
   await recordAudit({
     orgId, action: 'ADVERTISING_SYNC_STARTED', entityType: 'advertising_connection', entityId: platform,
@@ -94,12 +111,15 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
     return { ...base, blocked: null, fetchError: fetchResult.error }
   }
 
-  const plan = planAdvertisingSync({ orgId, provider: platform, channel: channel as never, fetched: fetchResult.value.records, nowIso })
+  const existingKeys = channel
+    ? await loadExistingKeys(orgId, channel, fetchResult.value.records.map((r) => ({ externalId: r.externalCampaignId, periodDate: r.periodDate })))
+    : new Set<string>()
+  const plan = planAdvertisingSync({ orgId, provider: platform, channel: channel as never, fetched: fetchResult.value.records, nowIso, existingKeys })
 
   if (plan.blocked) {
     await recordConnectionOutcome(orgId, platform, { succeeded: false, error: plan.blocked, isDemo, nowIso })
     await recordAudit({ orgId, action: 'ADVERTISING_SYNC_FAILED', entityType: 'advertising_connection', entityId: platform, actorType: 'system', result: 'blocked', error: plan.blocked })
-    return { ...base, blocked: plan.blocked, fetchError: null, requestsMade: fetchResult.value.requestsMade }
+    return { ...base, fetchedCount: fetchResult.value.records.length, blocked: plan.blocked, fetchError: null, requestsMade: fetchResult.value.requestsMade }
   }
 
   if (plan.upserts.length > 0) {
@@ -117,7 +137,7 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
     if (error) {
       await recordConnectionOutcome(orgId, platform, { succeeded: false, error: error.message, isDemo, nowIso })
       await recordAudit({ orgId, action: 'ADVERTISING_SYNC_FAILED', entityType: 'advertising_connection', entityId: platform, actorType: 'system', result: 'failure', error: error.message })
-      return { ...base, blocked: null, fetchError: error.message, requestsMade: fetchResult.value.requestsMade }
+      return { ...base, fetchedCount: fetchResult.value.records.length, blocked: null, fetchError: error.message, requestsMade: fetchResult.value.requestsMade }
     }
   }
 
@@ -125,12 +145,15 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
   await recordAudit({
     orgId, action: 'ADVERTISING_SYNC_FINISHED', entityType: 'advertising_connection', entityId: platform,
     actorType: 'system', result: 'success',
-    metadata: { written: plan.upserts.length, quarantined: plan.quarantined.length, requestsMade: fetchResult.value.requestsMade },
+    metadata: { fetched: fetchResult.value.records.length, written: plan.upserts.length, created: plan.createdCount, updated: plan.updatedCount, quarantined: plan.quarantined.length, requestsMade: fetchResult.value.requestsMade },
   })
 
   return {
     ...base,
+    fetchedCount: fetchResult.value.records.length,
     written: plan.upserts.length,
+    createdCount: plan.createdCount,
+    updatedCount: plan.updatedCount,
     quarantined: plan.quarantined.length,
     quarantinedDetail: plan.quarantined.map((q) => ({ externalCampaignId: q.fact.externalCampaignId || '(missing)', reasons: q.failures.map((f) => f.reason) })),
     blocked: null,

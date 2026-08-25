@@ -53,3 +53,26 @@ export async function proposeApproval(input: ProposeApprovalInput): Promise<{ id
 
   return { id: data.id }
 }
+
+/**
+ * Milestone 15, Phase 5 — duplicate-pending-action protection. A plain
+ * existence check against `ai_decisions`, scoped by org/entity/decision
+ * type and `status = 'awaiting_approval'` — the same table
+ * `proposeApproval` itself writes to, never a second store of "what's
+ * pending."
+ */
+export async function findPendingCampaignAction(orgId: string, entityType: string, entityId: string, decisionType: string): Promise<{ id: string } | null> {
+  const supabase = createServiceSupabase()
+  const { data } = await supabase
+    .from('ai_decisions')
+    .select('id')
+    .eq('org_id', orgId)
+    .eq('entity_type', entityType)
+    .eq('entity_id', entityId)
+    .eq('decision_type', decisionType)
+    .eq('status', 'awaiting_approval')
+    .limit(1)
+    .maybeSingle()
+
+  return data ? { id: data.id } : null
+}

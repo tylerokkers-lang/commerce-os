@@ -1912,6 +1912,70 @@ enqueued `advertising_campaign_action` job), never a background process,
 the same "no autonomous proposal generation" boundary Milestone 13 already
 drew for product actions.
 
+**Hardening pass (same day, immediately following §31's initial build)**:
+a second review pass strengthened several pieces without changing the
+overall architecture —
+
+- **Campaign identity, made explicit and distinct**: `CampaignActionRequest`
+  now carries `provider`/`externalAccountId`/`externalCampaignId` directly
+  (previously `externalCampaignId` lived only on the outer
+  `CampaignActionInput`, duplicated and risking drift) — `channel` remains
+  a separate, deliberately-never-conflated routing fact. A new
+  `campaign_identity_valid` safety gate rejects a missing/empty
+  identifier. `classification` (the real, already-computed
+  `advertisingAnalytics.ts` result) and a `thresholds` snapshot
+  (`maxDailyAdSpendMinor`/`minRoas`/`maxAutoAdIncreasePct` at proposal
+  time) are now recorded in `inputFacts`, so an approval's full context is
+  reconstructable later without re-deriving it.
+- **Duplicate-pending-action protection** (a real gap, not previously
+  built): `AutomationStore` gained `findPendingCampaignAction`
+  (`ai_decisions` where `status = 'awaiting_approval'`, or the in-memory
+  store's `approvals` array) — `proposeCampaignAction` checks it first and
+  returns the existing pending decision (`wasDuplicate: true`) rather than
+  creating a second one for the same campaign+action type. Deliberately
+  distinct from `createAutomationAction`'s own idempotency-key uniqueness
+  (same event retried) and the pre-existing runaway-automation safeguard
+  (any actions, decided or not, in a rolling window) — this one answers
+  "is something already awaiting the owner right now."
+- **Explicit dry-run mode** (Phase 7, not previously built):
+  `submitCampaignAction` takes an optional `dryRun: boolean`. When true,
+  the connector is never called at all — not called-and-discarded, never
+  invoked — and a new `ADVERTISING_DRY_RUN_EXECUTED` audit action records
+  that nothing real happened. Proven directly: a test connector whose
+  write methods throw if ever called completes a dry run without
+  incident.
+- **Sync results, structured** (Phase 9): `planAdvertisingSync` now
+  accepts an optional `existingKeys` set and reports `createdCount`/
+  `updatedCount` separately (previously collapsed into one `written`
+  count) — `sync.ts` computes this from one bounded, existing-row lookup
+  scoped to exactly the fetched batch's own campaign/day keys, never a
+  full-table scan. `advertisingRowKey()` is now the one shared function
+  building the composite key, used by both the planner and the lookup, so
+  the two can never drift apart.
+- **A real documentation bug found and fixed, not a code bug**:
+  `amazonAds.ts`'s module comment claimed a `ListCampaigns`-style read
+  call was "implemented below" — it was not; `fetchCampaigns` has never
+  made any network call at all. Fixed, and replaced with an explicit
+  "UNVERIFIED API SURFACE" section naming exactly what is unconfirmed
+  against Amazon's real API (endpoint paths, required headers, request/
+  response field names, the assumed error-response shape, the absence of
+  LWA token caching) — the honest position is "real code against an
+  unconfirmed contract," not "known to work."
+- **UI**: `/advertising`'s Connections card gained a second badge per
+  platform — implementation status (`Implemented — requires live
+  verification` for Amazon Ads, `Stub — not implemented` for the other
+  three), a genuinely different axis from connection status (a platform
+  can be disconnected because nobody entered credentials, or disconnected
+  because the integration itself doesn't exist yet — never presented as
+  the same fact).
+
+**Verified again after the hardening pass:** 1066 tests (up from 1054),
+`npx tsc --noEmit`, `npm run lint`, `npm run build` and `npm run
+db:verify` all clean — no schema change this pass (still 27 migrations,
+73 tables; every change here was TypeScript-level). Confirmed live in the
+browser: `/advertising`'s Connections card renders both badges per
+platform correctly, no console errors.
+
 ## 32. Next step
 
 The two real options, per `docs/MILESTONES.md`: (1) **finish the Amazon

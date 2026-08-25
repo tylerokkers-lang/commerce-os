@@ -40,6 +40,20 @@ export interface SyncPlanInput {
   channel: ChannelKey | null
   fetched: readonly NormalizedCampaignFact[]
   nowIso: string
+  /**
+   * `channel:externalId:periodDate` keys already present in the
+   * `advertising` table for this org, so the plan can honestly report
+   * which upserts are genuinely new rows versus updates to ones already
+   * synced — never guessed, and entirely optional: an empty set (the
+   * default) simply reports every upsert as `created`, which is still
+   * true on the very first sync and merely less precise on a repeat one.
+   */
+  existingKeys?: ReadonlySet<string>
+}
+
+/** The exact composite key `advertising`'s own unique constraint uses — the one place this string is built, shared by the planner and `sync.ts`'s existing-row lookup, so the two can never drift apart. */
+export function advertisingRowKey(channel: ChannelKey, externalId: string, periodDate: string): string {
+  return `${channel}:${externalId}:${periodDate}`
 }
 
 export interface SyncPlan {
@@ -47,6 +61,9 @@ export interface SyncPlan {
   quarantined: readonly { fact: NormalizedCampaignFact; failures: readonly ValidationFailure[] }[]
   /** Non-null only when the plan could not proceed at all — `upserts` is always empty in that case. A missing-configuration safety gate (Phase 9), not a guess. */
   blocked: string | null
+  /** Of `upserts`: how many are genuinely new rows vs. updates to a row already synced — see `existingKeys` above. */
+  createdCount: number
+  updatedCount: number
 }
 
 /**
@@ -65,14 +82,18 @@ export function planAdvertisingSync(input: SyncPlanInput): SyncPlan {
       upserts: [],
       quarantined: [],
       blocked: `No sales channel is configured for this ${input.provider} connection — set one on /advertising before syncing.`,
+      createdCount: 0,
+      updatedCount: 0,
     }
   }
 
+  const channel = input.channel
+  const existingKeys = input.existingKeys ?? new Set<string>()
   const { valid, quarantined } = validateNormalizedCampaignFacts(input.fetched)
 
   const upserts: AdvertisingRowUpsert[] = valid.map((fact) => ({
     orgId: input.orgId,
-    channel: input.channel as ChannelKey,
+    channel,
     provider: fact.provider,
     campaignName: fact.campaignName,
     externalId: fact.externalCampaignId,
@@ -89,5 +110,7 @@ export function planAdvertisingSync(input: SyncPlanInput): SyncPlan {
     syncedAt: input.nowIso,
   }))
 
-  return { upserts, quarantined, blocked: null }
+  const updatedCount = upserts.filter((u) => existingKeys.has(advertisingRowKey(u.channel, u.externalId, u.periodDate))).length
+
+  return { upserts, quarantined, blocked: null, createdCount: upserts.length - updatedCount, updatedCount }
 }

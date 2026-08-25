@@ -3,6 +3,7 @@ import type { CampaignActionType } from '../advertisingAutomation'
 import type { AutomationStore, JobRecord } from '../store'
 import type { JobHandlerResult } from '../worker'
 import type { ChannelKey } from '@/lib/core/domain'
+import type { AdvertisingPlatform, CampaignClassification } from '@/lib/analytics/advertisingAnalytics'
 
 /**
  * Job handlers for the advertising sync + controlled-automation pipeline
@@ -42,13 +43,13 @@ export async function handleAdvertisingSync(job: JobRecord, _store: AutomationSt
 }
 
 function isCampaignActionPayload(p: Record<string, unknown>): p is {
-  channel: ChannelKey; externalCampaignId: string; actionType: CampaignActionType
-  campaignName: string; currentDailyBudgetMinor: number | null; proposedDailyBudgetMinor: number | null
+  channel: ChannelKey; provider: AdvertisingPlatform; externalAccountId: string; externalCampaignId: string; actionType: CampaignActionType
+  campaignName: string; classification: CampaignClassification | null; currentDailyBudgetMinor: number | null; proposedDailyBudgetMinor: number | null
   isPaused: boolean; connectionStatus: 'not_configured' | 'demo' | 'connected' | 'degraded' | 'error'
   dataAgeHours: number | null; roas: number | null; idempotencyKey: string
 } {
-  return typeof p.channel === 'string' && typeof p.externalCampaignId === 'string' && typeof p.actionType === 'string'
-    && typeof p.campaignName === 'string' && typeof p.isPaused === 'boolean' && typeof p.connectionStatus === 'string'
+  return typeof p.channel === 'string' && typeof p.provider === 'string' && typeof p.externalAccountId === 'string' && typeof p.externalCampaignId === 'string' && typeof p.actionType === 'string'
+    && typeof p.campaignName === 'string' && (p.classification === null || typeof p.classification === 'string') && typeof p.isPaused === 'boolean' && typeof p.connectionStatus === 'string'
     && typeof p.idempotencyKey === 'string'
 }
 
@@ -70,13 +71,16 @@ export async function handleAdvertisingCampaignAction(job: JobRecord, store: Aut
   const input: CampaignActionInput = {
     orgId: job.orgId,
     channel: p.channel,
-    externalCampaignId: p.externalCampaignId,
     idempotencyKey: p.idempotencyKey,
     jobId: job.id,
     correlationId: job.correlationId,
     request: {
       actionType: p.actionType,
+      provider: p.provider,
+      externalAccountId: p.externalAccountId,
+      externalCampaignId: p.externalCampaignId,
       campaignName: p.campaignName,
+      classification: p.classification,
       currentDailyBudgetMinor: p.currentDailyBudgetMinor,
       proposedDailyBudgetMinor: p.proposedDailyBudgetMinor,
       isPaused: p.isPaused,

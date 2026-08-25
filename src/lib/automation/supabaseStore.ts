@@ -5,7 +5,7 @@ import { createNotification } from '@/lib/notifications/create'
 import { enqueueJob, claimNextJob, completeJob, cancelJob } from './jobs'
 import { createAutomationAction, completeAutomationAction, countRecentActionsForEntity, reconcileAdvertisingCampaign, reconcileChannelProduct } from './actions'
 import { getAutomationSettingsForOrg } from './settings'
-import { proposeApproval } from './proposeApproval'
+import { proposeApproval, findPendingCampaignAction } from './proposeApproval'
 import type { AutomationStore } from './store'
 
 /**
@@ -25,6 +25,7 @@ export function getSupabaseAutomationStore(): AutomationStore {
     completeAutomationAction,
     countRecentActionsForEntity,
     proposeApproval,
+    findPendingCampaignAction,
     reconcileChannelProduct,
     reconcileAdvertisingCampaign,
     getAutomationSettings: getAutomationSettingsForOrg,

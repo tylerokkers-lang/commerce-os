@@ -14,7 +14,11 @@ import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 function request(overrides: Partial<CampaignActionRequest> = {}): CampaignActionRequest {
   return {
     actionType: 'pause_campaign',
+    provider: 'amazon_ads',
+    externalAccountId: 'acct-1',
+    externalCampaignId: 'camp-1',
     campaignName: 'Test Campaign',
+    classification: 'wasted_spend',
     currentDailyBudgetMinor: 2000,
     proposedDailyBudgetMinor: null,
     isPaused: false,
@@ -41,6 +45,28 @@ describe('assessCampaignActionPolicy: NEVER auto-permitted, for any input (the e
   it('a genuinely healthy, fully-passing request still lands on require_approval, not a fake block', () => {
     const { policy } = assessCampaignActionPolicy(request(), DEMO_AUTOMATION_SETTINGS)
     expect(policy.outcome).toBe('require_approval')
+  })
+})
+
+describe('assessCampaignActionPolicy: campaign identity (never conflating provider/account/campaign/channel)', () => {
+  it('a missing external campaign id blocks the action', () => {
+    const { policy } = assessCampaignActionPolicy(request({ externalCampaignId: '' }), DEMO_AUTOMATION_SETTINGS)
+    expect(policy.outcome).toBe('block')
+    expect(policy.requirements.find((r) => r.key === 'campaign_identity_valid')!.satisfied).toBe(false)
+  })
+
+  it('a missing external account id blocks the action', () => {
+    const { policy } = assessCampaignActionPolicy(request({ externalAccountId: '   ' }), DEMO_AUTOMATION_SETTINGS)
+    expect(policy.outcome).toBe('block')
+  })
+
+  it('a well-formed provider/account/campaign identity is reported satisfied and names all three plus the provider distinctly from any channel', () => {
+    const { policy } = assessCampaignActionPolicy(request({ provider: 'meta_ads', externalAccountId: 'acct-42', externalCampaignId: 'camp-99' }), DEMO_AUTOMATION_SETTINGS)
+    const identityReq = policy.requirements.find((r) => r.key === 'campaign_identity_valid')!
+    expect(identityReq.satisfied).toBe(true)
+    expect(identityReq.detail).toContain('meta_ads')
+    expect(identityReq.detail).toContain('acct-42')
+    expect(identityReq.detail).toContain('camp-99')
   })
 })
 

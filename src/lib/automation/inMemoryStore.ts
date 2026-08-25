@@ -186,6 +186,11 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
       return { id }
     },
 
+    async findPendingCampaignAction(orgId: string, entityType: string, entityId: string, decisionType: string): Promise<{ id: string } | null> {
+      const match = approvals.find((a) => a.orgId === orgId && a.entityType === entityType && a.entityId === entityId && a.decisionType === decisionType && a.status === 'awaiting_approval')
+      return match ? { id: match.id } : null
+    },
+
     async createAutomationAction(input: CreateActionInput) {
       const orgKey = `${input.orgId}:${input.idempotencyKey}`
       if (input.idempotencyKey && actionsByIdempotencyKey.has(orgKey)) {

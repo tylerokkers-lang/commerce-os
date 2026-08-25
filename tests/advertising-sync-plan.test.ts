@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planAdvertisingSync } from '@/lib/advertising/syncPlan'
+import { advertisingRowKey, planAdvertisingSync } from '@/lib/advertising/syncPlan'
 import type { NormalizedCampaignFact } from '@/lib/advertising/connectors/types'
 
 /**
@@ -61,6 +61,41 @@ describe('planAdvertisingSync: valid facts become upserts', () => {
     })
     expect(plan.upserts).toHaveLength(3)
     expect(new Set(plan.upserts.map((u) => u.externalId)).size).toBe(3)
+  })
+})
+
+describe('planAdvertisingSync: created vs. updated (Phase 9 — structured sync results)', () => {
+  it('with no existing keys supplied, every upsert is reported created — true and honest for a first sync', () => {
+    const plan = planAdvertisingSync({ orgId: ORG_A, provider: 'amazon_ads', channel: 'amazon_uk', fetched: [fact({ externalCampaignId: 'camp-1' }), fact({ externalCampaignId: 'camp-2' })], nowIso: NOW })
+    expect(plan.createdCount).toBe(2)
+    expect(plan.updatedCount).toBe(0)
+  })
+
+  it('a key already present in existingKeys is reported updated, not created', () => {
+    const existingKeys = new Set([advertisingRowKey('amazon_uk', 'camp-1', '2026-08-20')])
+    const plan = planAdvertisingSync({
+      orgId: ORG_A, provider: 'amazon_ads', channel: 'amazon_uk',
+      fetched: [fact({ externalCampaignId: 'camp-1' }), fact({ externalCampaignId: 'camp-2' })],
+      nowIso: NOW, existingKeys,
+    })
+    expect(plan.updatedCount).toBe(1)
+    expect(plan.createdCount).toBe(1)
+  })
+
+  it('a quarantined record is never counted as created or updated', () => {
+    const plan = planAdvertisingSync({
+      orgId: ORG_A, provider: 'amazon_ads', channel: 'amazon_uk',
+      fetched: [fact({ externalCampaignId: 'good' }), fact({ externalCampaignId: '' })],
+      nowIso: NOW,
+    })
+    expect(plan.createdCount + plan.updatedCount).toBe(plan.upserts.length)
+    expect(plan.createdCount).toBe(1)
+  })
+})
+
+describe('advertisingRowKey: the one shared key format', () => {
+  it('produces the exact composite key the advertising table\'s own unique constraint uses', () => {
+    expect(advertisingRowKey('amazon_uk', 'camp-1', '2026-08-20')).toBe('amazon_uk:camp-1:2026-08-20')
   })
 })
 

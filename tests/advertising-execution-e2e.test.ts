@@ -19,7 +19,11 @@ const ORG_B = 'org-b'
 function request(overrides: Partial<CampaignActionRequest> = {}): CampaignActionRequest {
   return {
     actionType: 'pause_campaign',
+    provider: 'amazon_ads',
+    externalAccountId: 'demo-account-1',
+    externalCampaignId: 'demo-camp-1',
     campaignName: 'Demo: Wasteful Campaign',
+    classification: 'wasted_spend',
     currentDailyBudgetMinor: 3000,
     proposedDailyBudgetMinor: null,
     isPaused: false,
@@ -34,7 +38,6 @@ function input(overrides: Partial<CampaignActionInput> = {}): CampaignActionInpu
   return {
     orgId: ORG_A,
     channel: 'amazon_uk',
-    externalCampaignId: 'demo-camp-1',
     request: request(),
     idempotencyKey: 'campaign-evt-1',
     ...overrides,
@@ -70,8 +73,7 @@ describe('proposeCampaignAction: never touches the connector, always requires ap
 
     const result = await proposeCampaignAction(
       input({
-        externalCampaignId: 'demo-camp-2',
-        request: request({ actionType: 'increase_ad_budget', currentDailyBudgetMinor: 4000, proposedDailyBudgetMinor: DEMO_AUTOMATION_SETTINGS.maxDailyAdSpendMinor + 500 }),
+        request: request({ externalCampaignId: 'demo-camp-2', actionType: 'increase_ad_budget', currentDailyBudgetMinor: 4000, proposedDailyBudgetMinor: DEMO_AUTOMATION_SETTINGS.maxDailyAdSpendMinor + 500 }),
       }),
       DEMO_AUTOMATION_SETTINGS,
       store,
@@ -81,13 +83,29 @@ describe('proposeCampaignAction: never touches the connector, always requires ap
     expect(store.getState().approvals).toHaveLength(0)
   })
 
-  it('resubmitting the same idempotency key never creates a second action or a second approval', async () => {
+  it('resubmitting the same idempotency key never creates a second action or a second approval — caught by the Phase 5 duplicate-pending check, since it is the identical campaign+action', async () => {
     const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
     const first = await proposeCampaignAction(input(), DEMO_AUTOMATION_SETTINGS, store)
     const second = await proposeCampaignAction(input(), DEMO_AUTOMATION_SETTINGS, store)
 
-    expect(second.actionId).toBe(first.actionId)
+    expect(first.wasDuplicate).toBe(false)
+    expect(second.wasDuplicate).toBe(true)
+    expect(second.policyOutcome).toBe('require_approval')
     expect(store.getState().approvals).toHaveLength(1)
+    expect(store.getState().actions).toHaveLength(1)
+  })
+
+  it('a genuinely different action (different idempotency key AND a different campaign) is never treated as a duplicate', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const first = await proposeCampaignAction(input(), DEMO_AUTOMATION_SETTINGS, store)
+    const second = await proposeCampaignAction(
+      input({ idempotencyKey: 'campaign-evt-2', request: request({ externalCampaignId: 'demo-camp-2' }) }),
+      DEMO_AUTOMATION_SETTINGS, store,
+    )
+
+    expect(first.wasDuplicate).toBe(false)
+    expect(second.wasDuplicate).toBe(false)
+    expect(store.getState().approvals).toHaveLength(2)
   })
 
   it('organisation isolation: two orgs proposing the identical campaign action never collide', async () => {
@@ -207,6 +225,71 @@ describe('submitCampaignAction: SUBMIT -> VERIFY -> RECONCILE, only ever called 
     expect(action.verificationStatus).toBe('uncertain')
     expect(action.status).toBe('failed')
     expect(store.getState().advertisingCampaignReconciliations['amazon_uk:demo-camp-2']).toBeUndefined()
+  })
+})
+
+describe('submitCampaignAction: dry-run mode (Phase 7) — never changes the real platform', () => {
+  it('a dry run never calls the connector, is reported as simulated, and reconciles nothing', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const created = await store.createAutomationAction({
+      orgId: ORG_A, actionType: 'pause_campaign', entityType: 'advertising_campaign', entityId: 'amazon_uk:demo-camp-1',
+      reason: 'test', inputFacts: {}, decision: {}, automationLevel: 'assisted',
+      policy: { outcome: 'require_approval', requirements: [], reason: 'test', riskLevel: 'low' },
+    })
+
+    // A connector whose write methods would throw if ever called — proves dry-run genuinely never reaches them.
+    const explodingConnector: typeof demoAdvertisingConnector = Object.create(demoAdvertisingConnector, {
+      pauseCampaign: { value: async () => { throw new Error('dry-run must never call the connector') } },
+      setCampaignBudget: { value: async () => { throw new Error('dry-run must never call the connector') } },
+    })
+
+    const result = await submitCampaignAction(
+      { orgId: ORG_A, channel: 'amazon_uk', externalCampaignId: 'demo-camp-1', actionType: 'pause_campaign', proposedDailyBudgetMinor: null, connector: explodingConnector, automationActionId: created.id, idempotencyKey: 'dry-1', dryRun: true },
+      store,
+    )
+
+    expect(result.simulated).toBe(true)
+    expect(result.executed).toBe(false)
+    expect(result.verified).toBe(false)
+    expect(store.getState().advertisingCampaignReconciliations['amazon_uk:demo-camp-1']).toBeUndefined()
+    // `explodingConnector`'s pauseCampaign/setCampaignBudget throw if called at all — the
+    // test completing without throwing is itself the proof the connector was never touched.
+  })
+
+  it('a dry run leaves a clearly-labelled audit entry stating nothing real happened', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const created = await store.createAutomationAction({
+      orgId: ORG_A, actionType: 'increase_ad_budget', entityType: 'advertising_campaign', entityId: 'amazon_uk:demo-camp-2',
+      reason: 'test', inputFacts: {}, decision: {}, automationLevel: 'assisted',
+      policy: { outcome: 'require_approval', requirements: [], reason: 'test', riskLevel: 'low' },
+    })
+
+    await submitCampaignAction(
+      { orgId: ORG_A, channel: 'amazon_uk', externalCampaignId: 'demo-camp-2', actionType: 'increase_ad_budget', proposedDailyBudgetMinor: 5000, connector: demoAdvertisingConnector, automationActionId: created.id, idempotencyKey: 'dry-2', dryRun: true },
+      store,
+    )
+
+    const entry = store.getState().auditLog.find((e) => e.action === 'ADVERTISING_DRY_RUN_EXECUTED')
+    expect(entry).toBeDefined()
+    expect(entry!.reason).toContain('Dry run')
+    expect(entry!.reason).toContain('no write was sent')
+  })
+
+  it('omitting dryRun (or false) executes for real, unaffected by the dry-run path existing', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
+    const created = await store.createAutomationAction({
+      orgId: ORG_A, actionType: 'pause_campaign', entityType: 'advertising_campaign', entityId: 'amazon_uk:demo-camp-1',
+      reason: 'test', inputFacts: {}, decision: {}, automationLevel: 'assisted',
+      policy: { outcome: 'require_approval', requirements: [], reason: 'test', riskLevel: 'low' },
+    })
+
+    const result = await submitCampaignAction(
+      { orgId: ORG_A, channel: 'amazon_uk', externalCampaignId: 'demo-camp-1', actionType: 'pause_campaign', proposedDailyBudgetMinor: null, connector: demoAdvertisingConnector, automationActionId: created.id, idempotencyKey: 'real-1', dryRun: false },
+      store,
+    )
+
+    expect(result.simulated).toBe(false)
+    expect(result.executed).toBe(true)
   })
 })
 

@@ -1,6 +1,7 @@
 import { evaluateAutomationPolicy, type DomainOutcome } from './policyEngine'
 import type { AutomationSettings } from './settingsTypes'
 import type { PolicyRequirement, PolicyResult } from './types'
+import type { AdvertisingPlatform, CampaignClassification } from '@/lib/analytics/advertisingAnalytics'
 
 /**
  * Guarded advertising campaign automation (Milestone 15).
@@ -35,7 +36,25 @@ export const MAX_CAMPAIGN_DATA_AGE_HOURS = 48
 
 export interface CampaignActionRequest {
   actionType: CampaignActionType
+  /**
+   * Identity, kept as three genuinely distinct fields, never conflated —
+   * `provider` is which ad platform ran the campaign (`amazon_ads` etc.),
+   * `externalAccountId` is that platform's advertiser/account id,
+   * `externalCampaignId` is the campaign itself within that account. None
+   * of these is `channel` (`ChannelKey`, `'shopify' | 'amazon_uk'`) — the
+   * sales channel a campaign is *attributed to*, a genuinely different
+   * axis (see `docs/SECURITY.md`'s Milestone 15 section: a TikTok Ads
+   * campaign can drive traffic to the Shopify channel). `channel` lives on
+   * `CampaignActionInput`/`advertising_connections`, not here, precisely
+   * because it is a routing/attribution fact, not part of the campaign's
+   * own identity on its platform.
+   */
+  provider: AdvertisingPlatform
+  externalAccountId: string
+  externalCampaignId: string
   campaignName: string
+  /** The real, already-computed classification (`advertisingAnalytics.ts`'s `classifyCampaign`) this action is responding to — context only, never re-derived here and never itself a safety gate (a `healthy` campaign can still be the subject of a manually-requested review). */
+  classification: CampaignClassification | null
   /** Null only when genuinely unknown — never coerced to 0. */
   currentDailyBudgetMinor: number | null
   /** Null for `pause_campaign`, which has no budget component. */
@@ -54,8 +73,20 @@ export interface CampaignActionAssessment {
   policy: PolicyResult
 }
 
+function isNonEmpty(value: string): boolean {
+  return value.trim().length > 0
+}
+
 function safetyGates(request: CampaignActionRequest): PolicyRequirement[] {
   const gates: PolicyRequirement[] = [
+    {
+      key: 'campaign_identity_valid',
+      label: 'Campaign identity is complete',
+      satisfied: isNonEmpty(request.externalCampaignId) && isNonEmpty(request.externalAccountId),
+      detail: isNonEmpty(request.externalCampaignId) && isNonEmpty(request.externalAccountId)
+        ? `${request.provider}: account ${request.externalAccountId}, campaign ${request.externalCampaignId}.`
+        : 'A real campaign and account identifier are both required — never a guessed or empty one.',
+    },
     {
       key: 'connection_live',
       label: 'Advertising platform connected',
@@ -108,9 +139,10 @@ const ACTION_TYPE_TO_AUTOMATION: Record<CampaignActionType, 'pause_campaign' | '
 }
 
 function describeAction(request: CampaignActionRequest): string {
-  if (request.actionType === 'pause_campaign') return `pause "${request.campaignName}"`
+  const classificationNote = request.classification ? ` — classified ${request.classification.replace(/_/g, ' ')}` : ''
+  if (request.actionType === 'pause_campaign') return `pause "${request.campaignName}"${classificationNote}`
   const direction = request.actionType === 'increase_ad_budget' ? 'increase' : 'decrease'
-  return `${direction} the daily budget for "${request.campaignName}" from ${request.currentDailyBudgetMinor ?? '?'} to ${request.proposedDailyBudgetMinor ?? '?'} minor units${request.roas !== null ? ` (current ROAS ${request.roas.toFixed(2)})` : ''}`
+  return `${direction} the daily budget for "${request.campaignName}" from ${request.currentDailyBudgetMinor ?? '?'} to ${request.proposedDailyBudgetMinor ?? '?'} minor units${request.roas !== null ? ` (current ROAS ${request.roas.toFixed(2)})` : ''}${classificationNote}`
 }
 
 export function assessCampaignActionPolicy(request: CampaignActionRequest, settings: AutomationSettings): CampaignActionAssessment {

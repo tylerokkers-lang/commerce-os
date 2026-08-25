@@ -220,6 +220,17 @@ export interface AutomationStore {
   /** Count of actions of this exact type for this exact entity created since `sinceIso` — the runaway-loop safeguard's input. */
   countRecentActionsForEntity(orgId: string, entityType: string, entityId: string | null, actionType: AutomationActionType, sinceIso: string): Promise<number>
   /**
+   * Milestone 15, Phase 5 — is there already a decision for this exact
+   * entity+action type sitting in `ai_decisions` with `status:
+   * 'awaiting_approval'` right now? Deliberately distinct from
+   * `countRecentActionsForEntity` (which counts *any* actions, decided or
+   * not, in a rolling window — the runaway-loop safeguard) — this answers
+   * "is something already awaiting the owner's decision," so a second
+   * proposal for the same campaign+action is returned rather than
+   * duplicated.
+   */
+  findPendingCampaignAction(orgId: string, entityType: string, entityId: string, decisionType: string): Promise<{ id: string } | null>
+  /**
    * The RECONCILE step (brief §Non-negotiable principles, "SUBMIT -> VERIFY
    * -> RECONCILE"): applies a verified external change to our own record.
    * Never called speculatively — only after `verifyListingState` (or
