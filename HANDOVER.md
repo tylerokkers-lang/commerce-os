@@ -2264,16 +2264,78 @@ Nothing in this milestone changes that — no real Amazon Ads credentials or
 account exist in this environment, and `runWriteVerification` has never
 been invoked against a live provider.
 
-## 36. Next step
+## 36. Milestone 20 (Amazon Ads Reporting API & Async Report Pipeline) — what was built, and what remains
 
-The two real options remaining, per `docs/MILESTONES.md`: (1) **finish
-the Amazon Ads Reporting API integration** (the async create-report/poll/
-download flow `amazonAds.ts`'s `fetchCampaigns` currently declines rather
-than fake) — still the highest-value single piece of remaining wiring,
-since every other layer (validation, policy, execution, approval routing,
-monitoring, recovery, scheduling, capability verification) is now built
-and tested end-to-end against the demo connector; or (2) **deploy for
-real** — a live Supabase project, a chosen host, `AUTOMATION_CRON_SECRET`
+The async create-report/poll/download flow `amazonAds.ts`'s `fetchCampaigns`
+previously declined outright is now real: `requestReport`/`checkReportStatus`/
+`downloadReport` (Amazon Ads Reporting API v3, unverified — same honesty
+convention as this file's existing write methods) are driven by a new
+server-only orchestrator, `advertising/amazonAdsReportPipeline.ts`, itself
+built on pure, directly-tested decision logic in `advertising/amazonAdsReporting.ts`:
+`decideReportPipelineAction` (exactly one action per call — request,
+check, or wait, never a loop), `computeReportWindow` (a bounded, overlapping
+window, never "entire history every cycle"), and `normalizeAmazonAdsReportRow`
+(precise, documented metric semantics — `attributedSales14d` -> revenue,
+`attributedConversions14d` -> conversions, never units; `dailyBudgetMinor`
+always `null` since a report row never carries it).
+
+Migration 0031 adds report-tracking columns to `advertising_connections`
+(`report_status`/`report_id`/`report_requested_at`/`report_completed_at`/
+`report_window_start`/`report_window_end`/`report_error`) — additive, no
+new table, since a report request is exactly the same one-row-per-(org,
+provider) granularity that table already has.
+
+`advertising/sync.ts`'s `runAdvertisingSync` special-cases `amazon_ads` to
+call the pipeline instead of the generic `fetchCampaigns()` every other
+provider (the demo connector today) still uses unchanged; a "still
+processing" result is never recorded as a connection failure. A report
+that completes flows through the *exact same* `planAdvertisingSync`/
+upsert/quarantine path every other provider's data already does — no
+second persistence path. A new `runAdvertisingSyncForConnectedOrgs()`
+mirrors `advertising/monitor.ts`'s own "iterate every connected org"
+shape, with the same per-org/per-provider failure isolation, and is now
+wired into `automation/maintenance.ts`'s `runMaintenance` as a genuine
+third orchestration step (recovery -> advertising sync -> monitoring) —
+`classifyMaintenanceOutcome` was generalised from a hardcoded two-subsystem
+check to an array of subsystem outcomes to accommodate this honestly,
+rather than silently folding sync's own failures into monitoring's count.
+
+`amazonAdsConnector.descriptor.capabilities.readCampaigns` is now `true`
+(real code exists) — the capability registry correctly derives this as
+`IMPLEMENTED_UNVERIFIED`, per Milestone 19's own non-negotiable rule,
+never automatically `READ_VERIFIED` from implementation alone.
+`verifyCampaignState`/`verifyWrites` remain honestly `false` — a
+per-campaign state read-back is a different, not-yet-implemented call,
+distinct from the report pipeline.
+
+**Verified this pass:** 1253 tests (up from 1219, 34 new — the pure
+report-lifecycle/window/normalization logic in full), `npx tsc --noEmit`,
+`npm run lint`, `npm run build` and `npm run db:verify` all clean (73
+tables, one additive migration).
+
+**Deliberately not done this pass — genuine remaining work, not
+oversights:** (1) the capability/verification UI on `/advertising` does
+not yet surface report-pipeline status (`report_status`/`report_error`)
+as its own distinct badge — Phase 18 of this milestone's own brief; (2)
+`runAdvertisingVerificationHarness` (Milestone 19) has not been extended
+to drive the report-creation/status/retrieval steps (Phase 19) — it still
+only exercises `fetchCampaigns()`, which for Amazon Ads still returns its
+honest "not the real entry point" error, so the harness cannot currently
+progress past `authentication_verified` for this provider even with real
+credentials; (3) `advanceAmazonAdsReportPipeline`/`runAdvertisingSyncForConnectedOrgs`
+themselves remain untestable directly in Vitest (`server-only`) — the
+same established limitation as every other Supabase-touching orchestrator
+in this codebase; their pure decision logic is fully tested instead; (4)
+no live Amazon Ads account exists to have exercised any of this against a
+real report — Amazon Ads remains, truthfully, **Implemented, NOT
+live-verified.**
+
+## 37. Next step
+
+The two real options remaining, per `docs/MILESTONES.md`: (1) **close the
+three gaps §36 lists above** — UI status, harness extension, and (whenever
+real credentials exist) an actual live verification run; or (2) **deploy
+for real** — a live Supabase project, a chosen host, `AUTOMATION_CRON_SECRET`
 set, and (if that host is Vercel) `CRON_SECRET` set to the same value so
 `vercel.json`'s cron entry actually authenticates — the one thing no
 amount of further code can substitute for. Once real Amazon Ads

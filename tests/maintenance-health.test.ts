@@ -126,18 +126,26 @@ describe('classifyMaintenanceHealth: recentFailures and ordering', () => {
 
 describe('classifyMaintenanceOutcome: partial failure never fails the whole run', () => {
   it('no errors, nothing threw -> success', () => {
-    expect(classifyMaintenanceOutcome({ recoveryThrew: false, monitoringThrew: false, recoveryErrorCount: 0, monitoringErrorCount: 0 })).toBe('success')
+    expect(classifyMaintenanceOutcome([{ threw: false, errorCount: 0 }, { threw: false, errorCount: 0 }])).toBe('success')
   })
 
   it('some per-item errors but no subsystem threw -> partial_success (organisation B failing never blocks C)', () => {
-    expect(classifyMaintenanceOutcome({ recoveryThrew: false, monitoringThrew: false, recoveryErrorCount: 0, monitoringErrorCount: 2 })).toBe('partial_success')
+    expect(classifyMaintenanceOutcome([{ threw: false, errorCount: 0 }, { threw: false, errorCount: 2 }])).toBe('partial_success')
   })
 
-  it('one subsystem threw entirely, the other succeeded cleanly -> partial_success, never failed outright', () => {
-    expect(classifyMaintenanceOutcome({ recoveryThrew: true, monitoringThrew: false, recoveryErrorCount: 0, monitoringErrorCount: 0 })).toBe('partial_success')
+  it('one subsystem threw entirely, others succeeded cleanly -> partial_success, never failed outright', () => {
+    expect(classifyMaintenanceOutcome([{ threw: true, errorCount: 0 }, { threw: false, errorCount: 0 }, { threw: false, errorCount: 0 }])).toBe('partial_success')
   })
 
-  it('both subsystems threw entirely -> failed, a genuinely catastrophic run', () => {
-    expect(classifyMaintenanceOutcome({ recoveryThrew: true, monitoringThrew: true, recoveryErrorCount: 0, monitoringErrorCount: 0 })).toBe('failed')
+  it('every subsystem threw entirely -> failed, a genuinely catastrophic run', () => {
+    expect(classifyMaintenanceOutcome([{ threw: true, errorCount: 0 }, { threw: true, errorCount: 0 }])).toBe('failed')
+  })
+
+  it('two of three subsystems threw, one still ran cleanly -> partial_success, not failed', () => {
+    expect(classifyMaintenanceOutcome([{ threw: true, errorCount: 0 }, { threw: true, errorCount: 0 }, { threw: false, errorCount: 0 }])).toBe('partial_success')
+  })
+
+  it('an empty subsystem list -> success (vacuously nothing failed)', () => {
+    expect(classifyMaintenanceOutcome([])).toBe('success')
   })
 })

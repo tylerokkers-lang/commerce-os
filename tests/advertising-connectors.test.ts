@@ -105,11 +105,16 @@ describe('amazonAdsConnector: real credential gating, no network call without th
     expect(amazonAdsConnector.isConfigured()).toBe(false)
   })
 
-  it('declares real capabilities honestly: can write (pause/budget), cannot read metrics synchronously, cannot verify', () => {
+  it('declares real capabilities honestly: can write (pause/budget), can read via the async report pipeline (Milestone 20), cannot verify writes', () => {
     expect(amazonAdsConnector.descriptor.capabilities.pauseCampaign).toBe(true)
     expect(amazonAdsConnector.descriptor.capabilities.setBudget).toBe(true)
-    expect(amazonAdsConnector.descriptor.capabilities.readCampaigns).toBe(false)
+    expect(amazonAdsConnector.descriptor.capabilities.readCampaigns).toBe(true)
     expect(amazonAdsConnector.descriptor.capabilities.verifyWrites).toBe(false)
+  })
+
+  it('fetchCampaigns itself still always errors honestly — the real read path is advertising/amazonAdsReportPipeline.ts, never a fabricated empty success from this method', async () => {
+    const result = await amazonAdsConnector.fetchCampaigns({ limit: 10 })
+    expect(result.ok).toBe(false)
   })
 })
 

@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib'
 import { err, ok, type Result } from '@/lib/core/result'
 import type {
   AdvertisingConnectionHealth,
@@ -10,6 +11,7 @@ import type {
   FetchOutcome,
   NormalizedCampaignFact,
 } from './types'
+import type { RawAmazonAdsReportRow } from '../amazonAdsReporting'
 
 /**
  * The real Amazon Ads (Sponsored Products) connector.
@@ -31,16 +33,29 @@ import type {
  * behind `isConfigured()` — without all four required variables this class
  * makes no network call of any kind.
  *
- * HONEST, DELIBERATE GAP: Amazon Ads' Reporting API (the only source of
- * spend/impressions/clicks/conversions) is asynchronous — create a report
- * job, poll until it finishes, then download the result from a signed S3
- * URL. That multi-step, stateful flow is not implemented here, and neither
- * is a `ListCampaigns`-style read call — `fetchCampaigns` below makes no
- * network request at all and returns an honest `err(...)` immediately,
- * rather than a `NormalizedCampaignFact` with fabricated zero metrics —
- * the same "return a specific, honest error rather than invent a
- * response" rule `shopify.ts`'s `fetchFees`/`updateInventory` already
- * follow for their own genuinely-not-yet-implemented calls.
+ * ASYNC REPORTING API (Milestone 20): `requestReport`/`checkReportStatus`/
+ * `downloadReport` below are real, working HTTP calls implementing Amazon
+ * Ads' asynchronous Reporting API — the only source of spend/impressions/
+ * clicks/conversions. They are deliberately *not* called from
+ * `fetchCampaigns` below: a real report can take minutes to hours to
+ * finish, and this codebase's non-negotiable rule is "never wait
+ * indefinitely for report completion" — so the async lifecycle is driven
+ * by `advertising/amazonAdsReportPipeline.ts` (server-only, DB-backed,
+ * called once per maintenance cycle) instead, which persists the
+ * in-flight report's state across separate HTTP requests and can span
+ * multiple maintenance runs. `fetchCampaigns` stays the same honest,
+ * immediate `err(...)` it always was — it is not the entry point real
+ * Amazon Ads syncing uses; `advertising/sync.ts` special-cases this one
+ * provider to call the report pipeline instead (see that file's own
+ * comment).
+ *
+ * IMPLEMENTED, NOT VERIFIED: exactly like `pauseCampaign`/`setCampaignBudget`
+ * below, the report methods are real code against an unconfirmed API
+ * contract — no Amazon Ads account exists to have exchanged a real report
+ * request against. `capabilities.readCampaigns` is `true` (real code
+ * exists) but the capability registry (`capabilityRegistry.ts`) still
+ * reports this as `IMPLEMENTED_UNVERIFIED`, never `READ_VERIFIED`, until a
+ * real verification run actually succeeds.
  *
  * UNVERIFIED API SURFACE — read this before ever pointing this connector
  * at a real account, not after something breaks. Everything below was
@@ -72,13 +87,34 @@ import type {
  * that unverified surface — "real code," not a stub, but "real code
  * against an unconfirmed contract," which is a meaningfully different and
  * weaker claim than "known to work."
+ *
+ * Reporting API additions (Milestone 20), equally unverified:
+ *   - `POST /reporting/reports` (create), `GET /reporting/reports/{id}`
+ *     (status) and the reporting-specific `Content-Type`
+ *     (`application/vnd.createasyncreportrequest.v3+json`) are the
+ *     current Amazon Ads Reporting API v3 shape as documented in general
+ *     knowledge at implementation time — not confirmed against a live
+ *     endpoint, and Amazon has changed this API's version/shape before.
+ *   - The report request body's exact `configuration` shape
+ *     (`adProduct`/`groupBy`/`columns`/`reportTypeId`/`timeUnit`/`format`)
+ *     and the exact column names requested (`campaignId`/`campaignName`/
+ *     `campaignStatus`/`date`/`impressions`/`clicks`/`cost`/
+ *     `attributedSales14d`/`attributedConversions14d`) are a best-effort
+ *     reconstruction, not a confirmed schema.
+ *   - The downloaded report file is assumed gzip-compressed JSON
+ *     (`format: 'GZIP_JSON'` in the request, manually `gunzip`'d here
+ *     rather than relying on HTTP `Content-Encoding`, since Amazon's own
+ *     documentation describes the *file itself* as a gzip archive, not
+ *     transport-level compression) — unverified against a real file.
+ *   - The status values (`PENDING`/`PROCESSING`/`COMPLETED`/`FAILURE`)
+ *     and the completed-report's `url` field name are a best guess.
  */
 
 const DESCRIPTOR: AdvertisingConnectorDescriptor = {
   key: 'amazon_ads',
   label: 'Amazon Ads',
   platform: 'amazon_ads',
-  capabilities: { readCampaigns: false, pauseCampaign: true, setBudget: true, verifyWrites: false },
+  capabilities: { readCampaigns: true, pauseCampaign: true, setBudget: true, verifyWrites: false },
   implementationStatus: 'implemented',
   requiredCredentials: [
     'AMAZON_ADS_CLIENT_ID',
@@ -177,14 +213,95 @@ export class AmazonAdsConnector implements AdvertisingProvider {
     return ok({ status: 'connected', checkedAt: now, detail: null })
   }
 
+  /** The advertising account identity report rows are scoped to — never a secret itself (an account/profile id, not a credential), exposed so `amazonAdsReportPipeline.ts` can stamp `NormalizedCampaignFact.externalAccountId` without re-reading `process.env` in a second place. */
+  getProfileId(): string | null {
+    return credentials()?.profileId ?? null
+  }
+
   async fetchCampaigns(options: FetchCampaignsOptions): Promise<Result<FetchOutcome<NormalizedCampaignFact>, string>> {
     const creds = credentials()
     if (!creds) return err('Amazon Ads is not configured.')
     return err(
-      `Amazon Ads campaign metrics require the asynchronous Reporting API (create report -> poll -> download), ` +
-      `which this connector does not yet implement — see this file's module comment (requested up to ${options.limit} campaigns). ` +
-      `Campaign identity/budget/status alone, without spend/revenue/impressions/clicks/conversions, would not satisfy NormalizedCampaignFact honestly.`,
+      `Amazon Ads campaign metrics require the asynchronous Reporting API (create report -> poll -> download) — ` +
+      `implemented as requestReport/checkReportStatus/downloadReport below, but deliberately not called from here ` +
+      `(requested up to ${options.limit} campaigns): a real report can take minutes to hours, and this codebase's ` +
+      `sync engine must never block a caller waiting for one. Use advertising/amazonAdsReportPipeline.ts, which ` +
+      `drives this same connector's report methods across separate maintenance-cycle invocations instead.`,
     )
+  }
+
+  /**
+   * Step 1 of the async Reporting API — creates a Sponsored Products
+   * campaign performance report for `[startDate, endDate]` (inclusive,
+   * `YYYY-MM-DD`) and returns Amazon's own report identifier. Never
+   * called more than once per genuinely new reporting window — see
+   * `amazonAdsReportPipeline.ts`'s idempotency handling.
+   */
+  async requestReport(startDate: string, endDate: string): Promise<Result<{ reportId: string }, string>> {
+    const creds = credentials()
+    if (!creds) return err('Amazon Ads is not configured.')
+
+    const result = await adsApiRequest<{ reportId?: string }>(
+      creds, '/reporting/reports', 'POST',
+      {
+        name: `commerce-os-sp-campaigns-${startDate}-${endDate}`,
+        startDate,
+        endDate,
+        configuration: {
+          adProduct: 'SPONSORED_PRODUCTS',
+          groupBy: ['campaign'],
+          columns: ['campaignId', 'campaignName', 'campaignStatus', 'date', 'impressions', 'clicks', 'cost', 'attributedSales14d', 'attributedConversions14d'],
+          reportTypeId: 'spCampaigns',
+          timeUnit: 'DAILY',
+          format: 'GZIP_JSON',
+        },
+      },
+    )
+    if (!result.ok) return result
+    if (!result.value.reportId) return err('Amazon Ads report creation returned no reportId.')
+    return ok({ reportId: result.value.reportId })
+  }
+
+  /**
+   * Step 2 — a single, immediate status check. Never retries or waits
+   * internally; the caller (`amazonAdsReportPipeline.ts`) decides whether
+   * and when to check again, across separate invocations, never a loop
+   * within one call.
+   */
+  async checkReportStatus(reportId: string): Promise<Result<{ status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILURE'; downloadUrl: string | null; failureReason: string | null }, string>> {
+    const creds = credentials()
+    if (!creds) return err('Amazon Ads is not configured.')
+
+    const result = await adsApiRequest<{ status?: string; url?: string; failureReason?: string }>(creds, `/reporting/reports/${encodeURIComponent(reportId)}`, 'GET')
+    if (!result.ok) return result
+
+    const status = result.value.status
+    if (status !== 'PENDING' && status !== 'PROCESSING' && status !== 'COMPLETED' && status !== 'FAILURE') {
+      return err(`Amazon Ads returned an unrecognised report status: "${String(status)}".`)
+    }
+    return ok({ status, downloadUrl: result.value.url ?? null, failureReason: result.value.failureReason ?? null })
+  }
+
+  /**
+   * Step 3 — downloads and decompresses a completed report's file, parsing
+   * it into raw rows. The URL is Amazon's own pre-signed download link
+   * (no Amazon Ads auth headers attached — a pre-signed URL carries its
+   * own, separate authorization), so this does not go through
+   * `adsApiRequest`. Never called for anything but a `COMPLETED` report's
+   * own `downloadUrl` — the caller is responsible for that ordering.
+   */
+  async downloadReport(downloadUrl: string): Promise<Result<readonly RawAmazonAdsReportRow[], string>> {
+    try {
+      const response = await fetch(downloadUrl)
+      if (!response.ok) return err(`Amazon Ads report download returned ${response.status} ${response.statusText}.`)
+      const compressed = Buffer.from(await response.arrayBuffer())
+      const decompressed = gunzipSync(compressed).toString('utf-8')
+      const parsed = JSON.parse(decompressed) as unknown
+      if (!Array.isArray(parsed)) return err('Amazon Ads report file did not contain a JSON array of rows.')
+      return ok(parsed as readonly RawAmazonAdsReportRow[])
+    } catch (error) {
+      return err(`Amazon Ads report download/decompression failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   async pauseCampaign(input: CampaignWriteInput): Promise<Result<AdvertisingWriteOutcome, AdvertisingWriteFailure>> {

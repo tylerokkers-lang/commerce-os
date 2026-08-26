@@ -122,10 +122,12 @@ describe('canRead / canWrite / requiresCredentials', () => {
 function amazonAdsSummary(overrides: Partial<AdvertisingConnectorSummary> = {}): AdvertisingConnectorSummary {
   return {
     key: 'amazon_ads', label: 'Amazon Ads', platform: 'amazon_ads',
-    // The real, current Amazon Ads descriptor (amazonAds.ts): reads and
-    // verification are honestly false (the Reporting API gap); the two
-    // write methods are real code against an unconfirmed contract.
-    capabilities: { readCampaigns: false, pauseCampaign: true, setBudget: true, verifyWrites: false },
+    // The real, current Amazon Ads descriptor (amazonAds.ts, Milestone 20):
+    // reads are now real code (the async report pipeline) but still
+    // capability-registry-unverified; verifyCampaignState remains
+    // honestly unimplemented; the two write methods are real code
+    // against an unconfirmed contract.
+    capabilities: { readCampaigns: true, pauseCampaign: true, setBudget: true, verifyWrites: false },
     implementationStatus: 'implemented',
     status: 'not_configured',
     isConfigured: false,
@@ -140,9 +142,10 @@ function amazonAdsSummary(overrides: Partial<AdvertisingConnectorSummary> = {}):
 }
 
 describe('getProviderCapabilityStatus: real Amazon Ads state in this environment (no credentials configured)', () => {
-  it('readCampaigns is NOT_IMPLEMENTED — the connector honestly declares it false, never inflated to match a hypothetical', () => {
+  it('readCampaigns is IMPLEMENTED_UNVERIFIED (Milestone 20: real report-pipeline code exists), never automatically READ_VERIFIED from implementation alone', () => {
     const result = getProviderCapabilityStatus(amazonAdsSummary(), 'readCampaigns')
-    expect(result.status).toBe('NOT_IMPLEMENTED')
+    expect(result.status).toBe('IMPLEMENTED_UNVERIFIED')
+    expect(result.verified).toBe(false)
   })
 
   it('verifyCampaignState is NOT_IMPLEMENTED — gated by the honestly-false verifyWrites flag', () => {

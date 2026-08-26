@@ -233,6 +233,13 @@ export interface Database {
           write_verification_status: string
           write_verified_at: string | null
           write_verification_detail: string | null
+          report_status: string
+          report_id: string | null
+          report_requested_at: string | null
+          report_completed_at: string | null
+          report_window_start: string | null
+          report_window_end: string | null
+          report_error: string | null
         }
         Insert: {
           id?: string
@@ -256,6 +263,13 @@ export interface Database {
           write_verification_status?: string
           write_verified_at?: string | null
           write_verification_detail?: string | null
+          report_status?: string
+          report_id?: string | null
+          report_requested_at?: string | null
+          report_completed_at?: string | null
+          report_window_start?: string | null
+          report_window_end?: string | null
+          report_error?: string | null
         }
         Update: {
           id?: string
@@ -279,6 +293,13 @@ export interface Database {
           write_verification_status?: string
           write_verified_at?: string | null
           write_verification_detail?: string | null
+          report_status?: string
+          report_id?: string | null
+          report_requested_at?: string | null
+          report_completed_at?: string | null
+          report_window_start?: string | null
+          report_window_end?: string | null
+          report_error?: string | null
         }
         Relationships: [
           {

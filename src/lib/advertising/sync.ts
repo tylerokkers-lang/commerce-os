@@ -3,7 +3,11 @@ import 'server-only'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import { recordAudit } from '@/lib/audit'
 import { advertisingRowKey, planAdvertisingSync } from './syncPlan'
-import type { AdvertisingProvider } from './connectors/types'
+import { advanceAmazonAdsReportPipeline } from './amazonAdsReportPipeline'
+import { connectorForPlatform } from './connectors/registry'
+import type { AmazonAdsConnector } from './connectors/amazonAds'
+import type { AdvertisingProvider, NormalizedCampaignFact } from './connectors/types'
+import type { AdvertisingPlatform } from '@/lib/analytics/advertisingAnalytics'
 
 /**
  * Phase 4's server-only half — the actual Postgres reads/writes.
@@ -26,6 +30,15 @@ export interface AdvertisingSyncResult {
   blocked: string | null
   fetchError: string | null
   requestsMade: number
+  /**
+   * Milestone 20 — only meaningful for a provider whose read path is the
+   * async report pipeline (`amazon_ads` today). `null` for every other
+   * provider. A `'requested'`/`'processing'` status here is genuinely
+   * different from `fetchError`: nothing is wrong, there is simply no new
+   * data *this* cycle — the caller must never treat it as a sync failure.
+   */
+  reportStatus: string | null
+  reportDetail: string | null
 }
 
 /** Existing `advertising` rows for exactly the campaign/day keys this batch touches — bounded by the fetched batch's own size, never a full-table scan. Used only to report `createdCount`/`updatedCount` honestly (Phase 9); the upsert itself is correct either way. */
@@ -88,7 +101,7 @@ async function recordConnectionOutcome(orgId: string, platform: string, outcome:
 export async function runAdvertisingSync(orgId: string, isDemo: boolean, connector: AdvertisingProvider, limit = 500): Promise<AdvertisingSyncResult> {
   const nowIso = new Date().toISOString()
   const platform = connector.descriptor.platform
-  const base = { provider: platform, connectorKey: connector.descriptor.key, fetchedCount: 0, written: 0, createdCount: 0, updatedCount: 0, quarantined: 0, quarantinedDetail: [], requestsMade: 0 }
+  const base = { provider: platform, connectorKey: connector.descriptor.key, fetchedCount: 0, written: 0, createdCount: 0, updatedCount: 0, quarantined: 0, quarantinedDetail: [], requestsMade: 0, reportStatus: null, reportDetail: null }
 
   await recordAudit({
     orgId, action: 'ADVERTISING_SYNC_STARTED', entityType: 'advertising_connection', entityId: platform,
@@ -104,6 +117,30 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
 
   const { channel } = await loadConnectionChannel(orgId, platform)
 
+  // Milestone 20 — Amazon Ads' real read path is the async report
+  // pipeline, not a single synchronous `fetchCampaigns()` call (a real
+  // report can take minutes to hours). Every other provider (the demo
+  // connector today) keeps using the generic, immediate `fetchCampaigns()`
+  // contract unchanged.
+  if (platform === 'amazon_ads') {
+    const pipelineResult = await advanceAmazonAdsReportPipeline(orgId, connector as AmazonAdsConnector)
+
+    if (pipelineResult.status === 'failed') {
+      await recordConnectionOutcome(orgId, platform, { succeeded: false, error: pipelineResult.detail, isDemo, nowIso })
+      return { ...base, blocked: null, fetchError: null, reportStatus: pipelineResult.status, reportDetail: pipelineResult.detail }
+    }
+
+    if (!pipelineResult.ready) {
+      // Genuinely nothing wrong — a report is in flight or a fresh one
+      // was just requested. Never recorded as a connection failure; the
+      // connection itself is fine, there is simply no new data yet.
+      await recordConnectionOutcome(orgId, platform, { succeeded: true, error: null, isDemo, nowIso })
+      return { ...base, blocked: null, fetchError: null, reportStatus: pipelineResult.status, reportDetail: pipelineResult.detail }
+    }
+
+    return syncFacts(orgId, isDemo, platform, connector, channel, pipelineResult.facts, nowIso, base, { reportStatus: pipelineResult.status, reportDetail: pipelineResult.detail })
+  }
+
   const fetchResult = await connector.fetchCampaigns({ limit })
   if (!fetchResult.ok) {
     await recordConnectionOutcome(orgId, platform, { succeeded: false, error: fetchResult.error, isDemo, nowIso })
@@ -111,15 +148,24 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
     return { ...base, blocked: null, fetchError: fetchResult.error }
   }
 
+  return syncFacts(orgId, isDemo, platform, connector, channel, fetchResult.value.records, nowIso, { ...base, requestsMade: fetchResult.value.requestsMade }, { reportStatus: null, reportDetail: null })
+}
+
+async function syncFacts(
+  orgId: string, isDemo: boolean, platform: string, connector: AdvertisingProvider, channel: string | null,
+  records: readonly NormalizedCampaignFact[], nowIso: string,
+  base: Omit<AdvertisingSyncResult, 'blocked' | 'fetchError' | 'reportStatus' | 'reportDetail'>,
+  reportInfo: { reportStatus: string | null; reportDetail: string | null },
+): Promise<AdvertisingSyncResult> {
   const existingKeys = channel
-    ? await loadExistingKeys(orgId, channel, fetchResult.value.records.map((r) => ({ externalId: r.externalCampaignId, periodDate: r.periodDate })))
+    ? await loadExistingKeys(orgId, channel, records.map((r) => ({ externalId: r.externalCampaignId, periodDate: r.periodDate })))
     : new Set<string>()
-  const plan = planAdvertisingSync({ orgId, provider: platform, channel: channel as never, fetched: fetchResult.value.records, nowIso, existingKeys })
+  const plan = planAdvertisingSync({ orgId, provider: platform as never, channel: channel as never, fetched: records, nowIso, existingKeys })
 
   if (plan.blocked) {
     await recordConnectionOutcome(orgId, platform, { succeeded: false, error: plan.blocked, isDemo, nowIso })
     await recordAudit({ orgId, action: 'ADVERTISING_SYNC_FAILED', entityType: 'advertising_connection', entityId: platform, actorType: 'system', result: 'blocked', error: plan.blocked })
-    return { ...base, fetchedCount: fetchResult.value.records.length, blocked: plan.blocked, fetchError: null, requestsMade: fetchResult.value.requestsMade }
+    return { ...base, fetchedCount: records.length, blocked: plan.blocked, fetchError: null, ...reportInfo }
   }
 
   if (plan.upserts.length > 0) {
@@ -137,7 +183,7 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
     if (error) {
       await recordConnectionOutcome(orgId, platform, { succeeded: false, error: error.message, isDemo, nowIso })
       await recordAudit({ orgId, action: 'ADVERTISING_SYNC_FAILED', entityType: 'advertising_connection', entityId: platform, actorType: 'system', result: 'failure', error: error.message })
-      return { ...base, fetchedCount: fetchResult.value.records.length, blocked: null, fetchError: error.message, requestsMade: fetchResult.value.requestsMade }
+      return { ...base, fetchedCount: records.length, blocked: null, fetchError: error.message, ...reportInfo }
     }
   }
 
@@ -145,12 +191,12 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
   await recordAudit({
     orgId, action: 'ADVERTISING_SYNC_FINISHED', entityType: 'advertising_connection', entityId: platform,
     actorType: 'system', result: 'success',
-    metadata: { fetched: fetchResult.value.records.length, written: plan.upserts.length, created: plan.createdCount, updated: plan.updatedCount, quarantined: plan.quarantined.length, requestsMade: fetchResult.value.requestsMade },
+    metadata: { fetched: records.length, written: plan.upserts.length, created: plan.createdCount, updated: plan.updatedCount, quarantined: plan.quarantined.length, requestsMade: base.requestsMade },
   })
 
   return {
     ...base,
-    fetchedCount: fetchResult.value.records.length,
+    fetchedCount: records.length,
     written: plan.upserts.length,
     createdCount: plan.createdCount,
     updatedCount: plan.updatedCount,
@@ -158,6 +204,72 @@ export async function runAdvertisingSync(orgId: string, isDemo: boolean, connect
     quarantinedDetail: plan.quarantined.map((q) => ({ externalCampaignId: q.fact.externalCampaignId || '(missing)', reasons: q.failures.map((f) => f.reason) })),
     blocked: null,
     fetchError: null,
-    requestsMade: fetchResult.value.requestsMade,
+    ...reportInfo,
   }
+}
+
+/**
+ * Milestone 20, Phase 15/16/17 — "advertising data collection" step of the
+ * maintenance orchestrator (`automation/maintenance.ts`), run before the
+ * campaign monitor so this cycle's monitor evaluation sees the freshest
+ * data this same run could obtain. One organisation's or one provider's
+ * sync failing (a connector throwing, a genuinely broken connection) is
+ * caught per-org/per-provider here and never stops the rest — the same
+ * partial-failure isolation `runCampaignReviewForConnectedOrgs` already
+ * provides for monitoring.
+ */
+export interface MultiOrgAdvertisingSyncResult {
+  accountsChecked: number
+  reportsRequested: number
+  reportsProcessing: number
+  reportsRetrieved: number
+  reportsFailed: number
+  recordsValidated: number
+  recordsQuarantined: number
+  factsCreated: number
+  factsUpdated: number
+  errors: string[]
+  perAccount: readonly AdvertisingSyncResult[]
+}
+
+export async function runAdvertisingSyncForConnectedOrgs(): Promise<MultiOrgAdvertisingSyncResult> {
+  const supabase = createServiceSupabase()
+  const { data } = await supabase.from('advertising_connections').select('org_id, provider').eq('is_connected', true)
+
+  const result: MultiOrgAdvertisingSyncResult = {
+    accountsChecked: 0, reportsRequested: 0, reportsProcessing: 0, reportsRetrieved: 0, reportsFailed: 0,
+    recordsValidated: 0, recordsQuarantined: 0, factsCreated: 0, factsUpdated: 0, errors: [], perAccount: [],
+  }
+  const perAccount: AdvertisingSyncResult[] = []
+
+  for (const row of data ?? []) {
+    result.accountsChecked++
+    try {
+      // Every `advertising_connections` row a live database can ever hold
+      // that this maintenance job reaches comes from a real org — this
+      // job never runs for a demo session (see `automation/recovery.ts`'s
+      // identical reasoning for why `isDemo` is always false here).
+      const connector = connectorForPlatform(row.provider as AdvertisingPlatform, false)
+      const syncResult = await runAdvertisingSync(row.org_id, false, connector)
+      perAccount.push(syncResult)
+
+      if (syncResult.reportStatus === 'requested') result.reportsRequested++
+      else if (syncResult.reportStatus === 'processing') result.reportsProcessing++
+      else if (syncResult.reportStatus === 'completed') result.reportsRetrieved++
+      else if (syncResult.reportStatus === 'failed') result.reportsFailed++
+      else if (syncResult.fetchError) result.reportsFailed++
+
+      result.recordsValidated += syncResult.written
+      result.recordsQuarantined += syncResult.quarantined
+      result.factsCreated += syncResult.createdCount
+      result.factsUpdated += syncResult.updatedCount
+      if (syncResult.fetchError) result.errors.push(`${row.org_id}:${row.provider}: ${syncResult.fetchError}`)
+      if (syncResult.blocked) result.errors.push(`${row.org_id}:${row.provider}: ${syncResult.blocked}`)
+    } catch (error) {
+      result.reportsFailed++
+      result.errors.push(`${row.org_id}:${row.provider}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  return { ...result, perAccount }
 }

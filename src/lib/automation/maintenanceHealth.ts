@@ -119,27 +119,27 @@ export function classifyMaintenanceHealth(runs: readonly MaintenanceRunRecord[],
 
 export type MaintenanceOutcomeStatus = 'success' | 'partial_success' | 'failed'
 
-export interface MaintenanceOutcomeInput {
-  /** `runExecutionRecovery` itself threw, rather than returning its own per-action error list. */
-  recoveryThrew: boolean
-  /** `runCampaignReviewForConnectedOrgs` itself threw. */
-  monitoringThrew: boolean
-  recoveryErrorCount: number
-  monitoringErrorCount: number
+/** One subsystem's outcome (`runExecutionRecovery`, `runAdvertisingSyncForConnectedOrgs`, `runCampaignReviewForConnectedOrgs`, or any future one) — `threw` means the whole subsystem call itself threw, rather than returning its own per-item error list. */
+export interface MaintenanceSubsystemOutcome {
+  threw: boolean
+  errorCount: number
 }
 
 /**
  * Phase 7 — one organisation or provider failing must never fail the
- * whole run. Both `runExecutionRecovery` and `runCampaignReviewForConnectedOrgs`
- * already catch per-item/per-org errors internally and keep going,
- * surfacing them as their own `errors` arrays rather than throwing — so a
- * nonzero error count here already represents "some, not all, work
- * failed." Only an exception escaping the *whole* subsystem (a totally
- * broken DB connection, not one bad campaign) counts toward `failed`.
+ * whole run. Every subsystem already catches per-item/per-org errors
+ * internally and keeps going, surfacing them as its own `errors` array
+ * rather than throwing — so a nonzero `errorCount` here already
+ * represents "some, not all, work failed." Only *every* subsystem's call
+ * itself throwing entirely (every one totally unreachable — not "one bad
+ * campaign") counts toward `failed`; any single subsystem throwing while
+ * at least one other still ran is `partial_success`, never a catastrophic
+ * failure of the whole run.
  */
-export function classifyMaintenanceOutcome(input: MaintenanceOutcomeInput): MaintenanceOutcomeStatus {
-  if (input.recoveryThrew && input.monitoringThrew) return 'failed'
-  if (input.recoveryThrew || input.monitoringThrew) return 'partial_success'
-  if (input.recoveryErrorCount > 0 || input.monitoringErrorCount > 0) return 'partial_success'
+export function classifyMaintenanceOutcome(subsystems: readonly MaintenanceSubsystemOutcome[]): MaintenanceOutcomeStatus {
+  const threwCount = subsystems.filter((s) => s.threw).length
+  if (subsystems.length > 0 && threwCount === subsystems.length) return 'failed'
+  if (threwCount > 0) return 'partial_success'
+  if (subsystems.some((s) => s.errorCount > 0)) return 'partial_success'
   return 'success'
 }

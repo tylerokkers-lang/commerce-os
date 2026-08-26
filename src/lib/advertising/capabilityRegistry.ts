@@ -56,10 +56,12 @@ export const CAPABILITY_KIND: Record<AdvertisingCapabilityName, AdvertisingCapab
  *   1. STUB / NOT_IMPLEMENTED    — the connector's own `capabilities` flag
  *      for this exact capability is `false`. `demo_ads` and `amazon_ads`'s
  *      own honest declarations decide this, never guessed here — e.g.
- *      Amazon Ads' real descriptor declares `readCampaigns: false` and
- *      `verifyWrites: false` (the Reporting API gap — see `amazonAds.ts`'s
- *      own comment), so those two capabilities are `NOT_IMPLEMENTED` for
- *      Amazon Ads even though `pauseCampaign`/`setBudget` are `true`.
+ *      Amazon Ads' real descriptor declares `verifyWrites: false` (a real
+ *      per-campaign state read-back is not implemented, distinct from
+ *      the async report pipeline `readCampaigns: true` now uses — see
+ *      `amazonAds.ts`'s own comment), so `verifyCampaignState` is
+ *      `NOT_IMPLEMENTED` for Amazon Ads even though `readCampaigns`/
+ *      `pauseCampaign`/`setBudget` are all `true`.
  *   2. MISCONFIGURED             — `isConfigured()` is false but at least
  *      one required credential is present (a partial/malformed configuration,
  *      distinct from "nothing has been entered at all").
