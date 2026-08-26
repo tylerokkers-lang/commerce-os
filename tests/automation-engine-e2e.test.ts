@@ -47,7 +47,7 @@ function autoSwitchRequest(overrides: Partial<RedundancyRequest> = {}): Redundan
     reason: { key: 'out_of_stock', detail: 'zero stock reported' },
     automationLevel: 'autonomous',
     thresholds: { minGrossMarginPct: 25, minNetMarginPct: 10 },
-    previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed' },
+    previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed', ebay: 'not_assessed' },
     economics: { sellingPrice: fromMajor(35), returnRatePct: 4, vatRatePct: 20, vatInclusive: true },
     profileInput: { category: 'kitchen', shopifyAdSpendPerUnit: fromMajor(1.5) },
     alternatives: [{ id: 'sup-good-alt', name: 'Ridgeway Homeware Supply', signals: goodSignals({ unitCost: fromMajor(9.5) }) }],
@@ -123,7 +123,7 @@ describe('automation engine end-to-end: event -> job -> worker -> facts -> polic
     const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: DEMO_AUTOMATION_SETTINGS } })
     const noncompliantAlternative = autoSwitchRequest({
       channels: ['shopify', 'amazon_uk'],
-      previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved' },
+      previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved', ebay: 'not_assessed' },
       alternatives: [{ id: 'sup-noncompliant', name: 'No Invoice Supply', signals: goodSignals({ supportsCustomInvoice: false }) }],
     })
 

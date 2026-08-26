@@ -27,7 +27,7 @@ const OUTCOME_LABELS: Record<ComplianceCheck['outcome'], string> = {
   not_applicable: 'Not applicable',
 }
 
-const CHANNEL_LABELS: Record<ChannelKey, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK' }
+const CHANNEL_LABELS: Record<ChannelKey, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK', ebay: 'eBay' }
 
 const RECOMMENDATION_TONES: Record<ExpansionRecommendation, 'positive' | 'negative' | 'caution' | 'neutral'> = {
   ready: 'positive',

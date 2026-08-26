@@ -1,14 +1,16 @@
 import { amazonConnector } from './amazon'
 import { amazonDemoConnector } from './amazonDemo'
+import { ebayConnector } from './ebay'
+import { ebayDemoConnector } from './ebayDemo'
 import { shopifyConnector } from './shopify'
 import { shopifyDemoConnector } from './shopifyDemo'
 import type { MarketplaceConnector, MarketplaceConnectorSummary, MarketplaceConnectionStatus } from './types'
 
 /**
- * The marketplace connector registry (Milestone 4).
+ * The marketplace connector registry (Milestone 4; eBay added Milestone 21).
  *
- * Four connectors: a real one and a demo one for each of Shopify and Amazon
- * UK. The real ones report `not_configured` in this environment because no
+ * A real connector and a demo connector for each of Shopify, Amazon UK and
+ * eBay. The real ones report `not_configured` in this environment because no
  * credentials exist; the demo ones always report `demo`. Neither is ever
  * substituted for the other — the registry, and every caller, always knows
  * which kind of connector it is holding.
@@ -19,6 +21,8 @@ const CONNECTORS = new Map<string, MarketplaceConnector>([
   [shopifyDemoConnector.descriptor.key, shopifyDemoConnector],
   [amazonConnector.descriptor.key, amazonConnector],
   [amazonDemoConnector.descriptor.key, amazonDemoConnector],
+  [ebayConnector.descriptor.key, ebayConnector],
+  [ebayDemoConnector.descriptor.key, ebayDemoConnector],
 ])
 
 export const listMarketplaceConnectors = (): readonly MarketplaceConnector[] => [...CONNECTORS.values()]
@@ -26,10 +30,10 @@ export const getMarketplaceConnector = (key: string): MarketplaceConnector | und
 
 /** The connector to use for a channel, given whether the session is in demo mode. */
 export function connectorForChannel(
-  channel: 'shopify' | 'amazon_uk',
+  channel: 'shopify' | 'amazon_uk' | 'ebay',
   isDemo: boolean,
 ): MarketplaceConnector {
-  const key = isDemo ? `${channel === 'amazon_uk' ? 'amazon_uk' : 'shopify'}_demo` : channel
+  const key = isDemo ? `${channel}_demo` : channel
   const connector = CONNECTORS.get(key)
   if (!connector) throw new Error(`No connector registered for ${key}`)
   return connector

@@ -56,6 +56,16 @@ async function ourListingRecords(
 export async function getMarketplaceChannels(): Promise<readonly MarketplaceChannelSummary[]> {
   const session = await requireSession()
 
+  // eBay (Milestone 21) is deliberately not listed here yet. Reconciliation
+  // below compares `demoProducts()[sku].channelStatus[channel]` against the
+  // connector's own listings — but no demo product is genuinely "listed" on
+  // eBay yet (`channelStatus.ebay` is honestly `not_listed` for every seed;
+  // see `demo/dataset.ts`), so every eBay demo listing would show up as a
+  // fabricated "extra listing we don't know about" rather than a real
+  // discrepancy. eBay's connector and status already surface correctly via
+  // `getMarketplaceConnector('ebay')`/`getAllMarketplaceConnectors()`; adding
+  // it to this reconciliation dashboard is deferred until product-level eBay
+  // listing state is genuinely modelled (a later, separately-reported step).
   const channels: readonly ChannelKey[] = ['shopify', 'amazon_uk']
   const results: MarketplaceChannelSummary[] = []
 

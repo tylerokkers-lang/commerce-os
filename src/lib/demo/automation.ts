@@ -109,7 +109,7 @@ function goodAlternativeSwitchRequest(automationLevel: AutomationSettings['autom
     reason: { key: 'out_of_stock' as const, detail: 'the supplier reported zero stock on the last sync' },
     automationLevel,
     thresholds: { minGrossMarginPct: DEMO_CONTEXT.minGrossMarginPct, minNetMarginPct: DEMO_CONTEXT.minNetMarginPct },
-    previousChannelStatus: { shopify: assessShopifyCapability(preferredSignals).status, amazon_uk: 'not_assessed' as const },
+    previousChannelStatus: { shopify: assessShopifyCapability(preferredSignals).status, amazon_uk: 'not_assessed' as const, ebay: 'not_assessed' as const },
     alternatives: [
       // A small, realistic cost increase (80p landed) against an otherwise
       // identical supplier profile — genuinely "provably no worse."
@@ -135,6 +135,7 @@ function knifeRailSwitchRequest(automationLevel: AutomationSettings['automationL
     previousChannelStatus: {
       shopify: assessShopifyCapability(preferred.signals).status,
       amazon_uk: assessAmazonCapability(preferred.signals).status,
+      ebay: 'not_assessed' as const,
     },
     alternatives,
     economics: {

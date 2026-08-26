@@ -62,7 +62,7 @@ function baseRequest(over: Partial<RedundancyRequest> = {}): RedundancyRequest {
     reason: { key: 'out_of_stock', detail: 'the supplier reported zero stock' },
     automationLevel: 'assisted',
     thresholds: { minGrossMarginPct: 25, minNetMarginPct: 10 },
-    previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved' },
+    previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved', ebay: 'not_assessed' },
     alternatives: [],
     economics: {
       sellingPrice: fromMajor(32),
@@ -181,7 +181,7 @@ describe('supplier redundancy', () => {
     const decision = evaluateSupplierRedundancy(
       baseRequest({
         automationLevel: 'supervised',
-        previousChannelStatus: { shopify: 'approved', amazon_uk: 'blocked' },
+        previousChannelStatus: { shopify: 'approved', amazon_uk: 'blocked', ebay: 'not_assessed' },
         alternatives: [{ id: 'good', name: 'Suitable Alternative', signals: suitableAlternativeSignals }],
       }),
     )

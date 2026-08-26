@@ -19,7 +19,7 @@ const BASE_REQUEST: Omit<RedundancyRequest, 'automationLevel' | 'alternatives'> 
   channels: ['shopify'],
   reason: { key: 'out_of_stock', detail: 'zero stock' },
   thresholds: { minGrossMarginPct: 25, minNetMarginPct: 10 },
-  previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed' },
+  previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed', ebay: 'not_assessed' },
   economics: { sellingPrice: fromMajor(30), returnRatePct: 5, vatRatePct: 20, vatInclusive: true },
   profileInput: { category: 'kitchen' },
 }
@@ -40,7 +40,7 @@ describe('supplier switch automation', () => {
     const request: RedundancyRequest = {
       ...BASE_REQUEST,
       channels: ['shopify', 'amazon_uk'],
-      previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved' },
+      previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved', ebay: 'not_assessed' },
       automationLevel: 'autonomous',
       alternatives: [{ id: 'sup-3', name: 'Bad Alt', signals: badSignals }],
     }

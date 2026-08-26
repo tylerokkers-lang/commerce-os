@@ -47,6 +47,7 @@ export const NAV_SECTIONS = [
 export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   shopify: 'Shopify',
   amazon_uk: 'Amazon UK',
+  ebay: 'eBay',
 }
 
 export const STAGE_LABELS: Record<ProductStage, string> = {

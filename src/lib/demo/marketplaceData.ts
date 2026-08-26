@@ -128,3 +128,40 @@ export function demoAmazonFees(): readonly MarketplaceFeeSnapshot[] {
     }
   })
 }
+
+/**
+ * `DemoProductSeed.channels` (above) only models `{ shopify, amazon_uk }` —
+ * adding a third fixed key would touch every seed definition for a change
+ * genuinely out of scope for Milestone 21 Step 1 (the eBay channel adapter
+ * itself). Instead, the eBay demo data cross-lists the same products already
+ * "live" on Amazon UK — a realistic proxy (a small seller commonly lists an
+ * identical catalogue on both marketplaces) that keeps every figure derived
+ * from the same real `PRODUCT_SEEDS`/profitability numbers as every other
+ * demo connector, rather than inventing a separate, disconnected fixture.
+ */
+export function demoEbayListings(): readonly MarketplaceListingSnapshot[] {
+  return PRODUCT_SEEDS.filter((seed) => LIVE_ON(seed, 'amazon_uk')).map((seed) => ({
+    externalId: `EBAY-${seed.sku}`,
+    channelProductRef: seed.sku,
+    title: seed.title,
+    status: 'active',
+    priceMinor: fromMajor(seed.price).minor,
+    currency: 'GBP',
+    stockQty: OUR_STOCK.get(seed.sku) ?? Math.max(seed.daysOfStock ?? 30, 0),
+    reportedAt: CHECKED_AT,
+    raw: { sku: seed.sku },
+  }))
+}
+
+export function demoEbayOrders(): readonly MarketplaceOrderSnapshot[] {
+  const active = PRODUCT_SEEDS.filter((seed) => LIVE_ON(seed, 'amazon_uk') && seed.unitsSold > 0)
+  return active.slice(0, 3).map((seed, index) => ({
+    externalId: `11-${10000 + index * 7}-${20000 + index * 11}`,
+    placedAt: new Date(Date.parse(CHECKED_AT) - index * 4_500_000).toISOString(),
+    status: 'paid',
+    totalMinor: fromMajor(seed.price).minor,
+    currency: 'GBP',
+    lineItemRefs: [seed.sku],
+    raw: { sku: seed.sku },
+  }))
+}

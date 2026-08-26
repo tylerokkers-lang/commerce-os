@@ -145,7 +145,7 @@ export interface AnalyticsDashboard {
   demoScenarios: readonly AnalyticsDemoScenario[]
 }
 
-const CHANNEL_LABELS: Record<ChannelKey, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK' }
+const CHANNEL_LABELS: Record<ChannelKey, string> = { shopify: 'Shopify', amazon_uk: 'Amazon UK', ebay: 'eBay' }
 
 function toHighlight(p: ProductChannelProfitAnalytics, rank: { revenueRank?: number; profitRank?: number }, revenueChangePct: number | null): ProductProfitHighlight {
   const known = p.projection.status === 'calculated' ? p.projection.value : null

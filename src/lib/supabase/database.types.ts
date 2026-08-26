@@ -5604,7 +5604,7 @@ export interface Database {
       automation_level: 'manual' | 'assisted' | 'supervised' | 'autonomous'
       automation_risk_level: 'low' | 'medium' | 'high' | 'unknown'
       candidate_status: 'new' | 'scored' | 'promoted' | 'rejected' | 'duplicate' | 'archived'
-      channel_key: 'shopify' | 'amazon_uk'
+      channel_key: 'shopify' | 'amazon_uk' | 'ebay'
       channel_listing_status: 'not_listed' | 'draft' | 'review_required' | 'blocked' | 'testing' | 'live' | 'paused' | 'removed'
       compliance_verdict: 'pass' | 'fail' | 'review_required' | 'not_assessed'
       connector_source_type: 'api' | 'feed' | 'csv' | 'manual' | 'custom'

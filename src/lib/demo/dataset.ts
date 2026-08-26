@@ -180,7 +180,12 @@ export function demoProducts(): readonly ProductSummary[] {
       stage: seed.stage,
       healthScore: healthScore(seed, econ.netMarginPct),
       opportunityScore: seed.opportunityScore,
-      channelStatus: { shopify: seed.channels.shopify, amazon_uk: seed.channels.amazon_uk },
+      // eBay is not yet part of the demo dataset's per-product channel model
+      // (`DemoProductSeed.channels`) — Milestone 21 Step 1 only builds the
+      // eBay channel adapter itself, not per-product eBay listing state, so
+      // every demo product is honestly 'not_listed' on eBay rather than a
+      // fabricated status.
+      channelStatus: { shopify: seed.channels.shopify, amazon_uk: seed.channels.amazon_uk, ebay: 'not_listed' },
       revenue,
       contribution,
       contributionMarginPct: econ.netMarginPct,

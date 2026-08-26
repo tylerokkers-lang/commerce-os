@@ -31,7 +31,7 @@ export async function getProducts(): Promise<readonly ProductSummary[]> {
     stage: row.stage,
     healthScore: 0,
     opportunityScore: null,
-    channelStatus: { shopify: 'not_listed', amazon_uk: 'not_listed' },
+    channelStatus: { shopify: 'not_listed', amazon_uk: 'not_listed', ebay: 'not_listed' },
     revenue: zero('GBP'),
     contribution: zero('GBP'),
     contributionMarginPct: null,

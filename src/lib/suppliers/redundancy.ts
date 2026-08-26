@@ -1,5 +1,6 @@
 import {
   assessAmazonCapability,
+  assessEbayCapability,
   assessShopifyCapability,
   rankSuppliers,
   type ChannelCapability,
@@ -96,6 +97,7 @@ const CAPABILITY_BY_CHANNEL: Record<
 > = {
   shopify: assessShopifyCapability,
   amazon_uk: assessAmazonCapability,
+  ebay: assessEbayCapability,
 }
 
 function assessAlternative(

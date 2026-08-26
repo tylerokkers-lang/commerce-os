@@ -52,6 +52,7 @@ export function demoRedundancyPreview(supplierId: string): RedundancyDecision | 
     previousChannelStatus: {
       shopify: assessShopifyCapability(preferred.signals).status,
       amazon_uk: assessAmazonCapability(preferred.signals).status,
+      ebay: 'not_assessed', // Not one of SCENARIO_CHANNELS — genuinely never assessed in this scenario.
     },
     alternatives,
     economics: {

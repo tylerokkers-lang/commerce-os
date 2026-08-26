@@ -2330,7 +2330,112 @@ no live Amazon Ads account exists to have exercised any of this against a
 real report — Amazon Ads remains, truthfully, **Implemented, NOT
 live-verified.**
 
-## 37. Next step
+## 37. Milestone 21 Step 1 (eBay Channel Adapter — read-only, MANUAL_PURCHASE_MODE) — what was built, and what remains
+
+The first real, non-Shopify/Amazon marketplace channel. Scoped deliberately
+narrow: **only the channel adapter itself** (connector + demo connector +
+registry wiring + the `channel_key` enum value), per the user's own
+instruction to implement incrementally and report after each step — order
+ingestion, the supplier-purchase workflow, estimated-vs-actual economics,
+notifications and UI are all separately deferred below, not oversights.
+
+**Architecture decisions made before writing any code** (per the brief's
+explicit "inspect before changing anything"): eBay implements the existing
+`MarketplaceConnector` interface (`marketplaces/connectors/types.ts`) —
+no new parallel abstraction. The existing 5-state `MarketplaceConnectionStatus`
+(`demo`/`not_configured`/`connected`/`degraded`/`error`, derived by
+`deriveMarketplaceStatus` from a real authenticated call) already satisfies
+the brief's "never report connected without success" requirement, so no
+second, eBay-specific status enum was built. `channel_key` (migration 0003)
+gained `'ebay'` via an additive `alter type ... add value` (migration 0032)
+— the same safe pattern `product_stage` already used for `'rejected'`.
+
+**What was built:** `marketplaces/connectors/ebay.ts` — a real
+`EbayConnector`, OAuth2 refresh-token exchange against eBay's token
+endpoint (HTTP Basic app auth, distinct from Amazon LWA's form-field
+auth), `fetchOrders`/`fetchListings` against the Fulfillment/Inventory
+Sell APIs, `submitFulfilmentUpdate` (tracking push — informational only,
+never a purchase or financial action). Every write method
+(`updateListingPrice`/`updateInventory`/`setListingStatus`/`verifyListingState`)
+honestly returns `not_supported` — capabilities declare
+`writeListings: false, syncInventory: false, processRefunds: false,
+readFees: false, verifyWrites: false`, i.e. **no purchasing or financial
+authority requested at all**, satisfying §4's minimum-permissions
+requirement structurally, not by convention. `requiredCredentials:
+['EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET', 'EBAY_REFRESH_TOKEN']`, documented
+in `.env.example` alongside the exact OAuth scopes the refresh token must
+carry. `marketplaces/connectors/ebayDemo.ts` mirrors `amazonDemo.ts`'s
+shape; `demo/marketplaceData.ts` gained `demoEbayListings`/`demoEbayOrders`
+(cross-listing the same products already live on Amazon UK, since
+`DemoProductSeed.channels` was not widened to a third fixed key —
+genuinely out of scope for the adapter itself). Both connectors registered
+in `registry.ts`; `connectorForChannel`'s signature widened to
+`'shopify' | 'amazon_uk' | 'ebay'`.
+
+**Fallout from widening `ChannelKey`, fixed honestly rather than
+suppressed:** every `Record<ChannelKey, ...>` site in the codebase
+(`CHANNEL_LABELS` in three places, `ProductSummary.channelStatus`,
+`RedundancyRequest.previousChannelStatus`, the channel-capability
+assessment map in `suppliers/redundancy.ts`) needed a real eBay entry, not
+a cast. Added `assessEbayCapability` to `suppliers/scoring.ts` — modelled
+on Shopify's checks (eBay's dropship policy does not carry Amazon's
+seller-of-record/blind-shipping requirement) but with Amazon-strict
+delivery-time thresholds (eBay tracks Late Shipment Rate strictly) —
+flagged UNVERIFIED, a best-effort reconstruction, same honesty convention
+as the connector itself. Every demo/real product's `channelStatus.ebay` is
+honestly `'not_listed'` (no product-level eBay listing state exists yet).
+
+**Deliberately deferred, not wired into the reconciliation dashboard:**
+`marketplaces/repository.ts`'s `getMarketplaceChannels()`/
+`getChannelDiscrepancies()` still only iterate `['shopify', 'amazon_uk']`
+— adding eBay there today would compare every demo eBay listing against a
+permanently-`not_listed` "our side" and manufacture fake discrepancies,
+a fact-first violation. eBay's connector/status already surface correctly
+through `getMarketplaceConnector('ebay')`; wiring it into this dashboard
+waits until product-level eBay listing state is genuinely modelled.
+
+**Implemented:** eBay channel adapter (real + demo connectors), OAuth2
+token exchange, order/listing reads, tracking push, `channel_key` migration,
+registry wiring, `.env.example` documentation, capability-map fallout
+fixed everywhere it appeared.
+**Tested:** 10 new tests (configuration gating, capability honesty —
+no write/refund/verify/purchase authority declared, demo connector
+behaviour, registry resolution, OAuth failure handling, and a test proving
+the client secret never appears in a request URL) — 1263 total, up from
+1253, all passing. `npx tsc --noEmit`, `npm run lint`, `npm run build`,
+`npm run db:verify` (73 tables, one additive migration) all clean.
+**Verified:** Nothing against a real eBay account — no seller account or
+registered eBay application exists. Every endpoint path, response field
+name, and OAuth scope name in `ebay.ts` is a best-effort, explicitly
+flagged reconstruction, not confirmed against eBay's current official
+reference or a live call. eBay remains, truthfully, **Implemented, NOT
+live-verified** — `isConfigured()` gates every method, so no code path
+makes a network call in this environment.
+**Remaining (separate, later steps, per the brief's own sequencing):**
+wiring `orders/ingestion.ts`'s `planOrderIngestion` to an actual Postgres
+write (a genuine, pre-existing, non-eBay-specific gap — nothing writes to
+`orders`/`order_items` from any connector today); the manual-purchase
+workflow and first real use of `supplier_orders`/`supplier_order_items`
+(currently unused by any application code, no FK to `orders`); the
+AWAITING_PURCHASE state/notification (§8); the operator purchase-recording
+UI (§9); estimated-vs-actual economics and variance tracking (§10-11);
+per-line-item shipment support in `submitFulfilmentUpdate` (currently
+ships the whole order); wiring eBay into the reconciliation dashboard once
+product-level eBay listing state exists; eBay webhooks (`webhooks: false`
+today); eBay's Finances API for `fetchFees`; comprehensive idempotency
+testing for eBay-specific webhook/retry scenarios (§15); architecture
+readiness for staged autonomous purchasing (§21) — explicitly not
+implemented, no autonomous purchasing exists anywhere in this codebase.
+**Risks/limitations:** every eBay API assumption in `ebay.ts` is
+unverified against eBay's live API; the demo eBay dataset is a proxy
+(cross-listed Amazon UK products), not a distinct fixture; `assessEbayCapability`'s
+policy claims are a best-effort reconstruction, not confirmed eBay policy
+text.
+**Milestone:** 21 ("eBay Controlled-Execution Integration"), Step 1 of an
+explicitly incremental sequence — the channel adapter and its
+authentication/connection-status foundation only (§§3-5 of the brief).
+
+## 38. Next step
 
 The two real options remaining, per `docs/MILESTONES.md`: (1) **close the
 three gaps §36 lists above** — UI status, harness extension, and (whenever

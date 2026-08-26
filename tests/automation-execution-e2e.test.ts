@@ -182,7 +182,7 @@ describe('supplier switch execution', () => {
   const baseRequest: Omit<RedundancyRequest, 'automationLevel' | 'alternatives'> = {
     productTitle: 'Widget', channels: ['shopify'], reason: { key: 'out_of_stock', detail: 'zero stock' },
     thresholds: { minGrossMarginPct: 25, minNetMarginPct: 10 },
-    previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed' },
+    previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed', ebay: 'not_assessed' },
     economics: { sellingPrice: fromMajor(35), returnRatePct: 4, vatRatePct: 20, vatInclusive: true },
     profileInput: { category: 'kitchen', shopifyAdSpendPerUnit: fromMajor(1.5) },
   }
@@ -217,7 +217,7 @@ describe('supplier switch execution', () => {
         request: {
           ...baseRequest,
           channels: ['shopify', 'amazon_uk'],
-          previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved' },
+          previousChannelStatus: { shopify: 'approved', amazon_uk: 'approved', ebay: 'not_assessed' },
           automationLevel: 'autonomous',
           alternatives: [{ id: 'sup-bad', name: 'Bad Alt', signals: goodSignals({ supportsCustomInvoice: false }) }],
         },

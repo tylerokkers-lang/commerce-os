@@ -424,3 +424,41 @@ export function assessAmazonCapability(signals: SupplierSignals): ChannelCapabil
     ],
   }
 }
+
+/**
+ * eBay (Milestone 21). Modelled on Shopify's checks, not Amazon's — eBay's
+ * seller policies do not carry Amazon's "seller of record"/blind-shipping
+ * requirement for dropshipping, so `supportsCustomInvoice`/`supportsBlindShipping`
+ * are not treated as blockers here. What eBay does track strictly is
+ * estimated-delivery accuracy (a seller's "Late Shipment Rate"), so the
+ * delivery-time thresholds are kept as strict as Amazon's rather than
+ * Shopify's more lenient ones.
+ *
+ * UNVERIFIED: this is a best-effort reconstruction of eBay's seller
+ * performance policy from general knowledge, not confirmed against eBay's
+ * current official policy text — flagged the same way `ebay.ts`'s own
+ * module comment flags its unverified API-response field names.
+ */
+export function assessEbayCapability(signals: SupplierSignals): ChannelCapability {
+  const blockers: string[] = []
+  const cautions: string[] = []
+
+  if (!signals.providesTracking) {
+    blockers.push('Provides no tracking, which eBay requires to confirm dispatch against the seller\'s Late Shipment Rate.')
+  }
+  if (!signals.handlesReturns) {
+    blockers.push('Will not handle returns, and eBay holds the seller account responsible for return requests regardless.')
+  }
+  if ((signals.deliveryDaysMax ?? 99) > 14) {
+    blockers.push(`Delivery of up to ${signals.deliveryDaysMax} days risks breaching eBay's estimated-delivery-date policy.`)
+  } else if ((signals.deliveryDaysMax ?? 99) > 7) {
+    cautions.push(`Delivery of up to ${signals.deliveryDaysMax} days leaves little margin against eBay's estimated delivery date.`)
+  }
+  if ((signals.documentCount ?? 0) === 0) {
+    cautions.push('No compliance documentation on file for this supplier.')
+  }
+
+  if (blockers.length > 0) return { status: 'blocked', reasons: blockers }
+  if (cautions.length > 0) return { status: 'review_required', reasons: cautions }
+  return { status: 'approved', reasons: ['Provides tracking, handles returns, and meets eBay\'s estimated-delivery expectations.'] }
+}

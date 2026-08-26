@@ -54,7 +54,7 @@ describe('the automation-level ladder', () => {
       reason: { key: 'out_of_stock', detail: 'zero stock' },
       automationLevel: level,
       thresholds: { minGrossMarginPct: 25, minNetMarginPct: 10 },
-      previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed' },
+      previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed', ebay: 'not_assessed' },
       economics: { sellingPrice: fromMajor(35), returnRatePct: 4, vatRatePct: 20, vatInclusive: true },
       profileInput: { category: 'kitchen', shopifyAdSpendPerUnit: fromMajor(1.5) },
       alternatives: [{
