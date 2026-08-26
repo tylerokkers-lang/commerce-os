@@ -2,6 +2,7 @@ import 'server-only'
 
 import { add, zero } from '@/lib/core/money'
 import { isKnown } from '@/lib/analytics/types'
+import { buildExecutiveSummary } from './executiveSummary'
 import type {
   BusinessSummary,
   CashflowProjection,
@@ -17,7 +18,12 @@ import {
 import { requireSession } from '@/lib/security/session'
 import { getComplianceIssues } from '@/lib/compliance/repository'
 import { getPendingApprovals } from '@/lib/automation/approvals'
-import { getOpportunities, getStockAlerts } from '@/lib/products/repository'
+import { getStockAlerts } from '@/lib/products/repository'
+// The canonical `getOpportunities` — `products/repository.ts` had a second,
+// byte-for-byte identical copy (a genuine, pre-existing duplicate, found
+// while wiring this file); removed there rather than left as a second
+// source of truth. Every other caller already used this one.
+import { getOpportunities } from '@/lib/products/opportunities'
 import { getFinanceSummary } from '@/lib/tax/repository'
 
 /**
@@ -367,38 +373,6 @@ function rowsInWindow<T extends { periodDate: string }>(rows: readonly T[], star
   return rows.filter((r) => r.periodDate >= startDate && r.periodDate <= endDate)
 }
 
-/**
- * The one place `ExecutiveSummary` (`ceo/types.ts`) is built from an
- * `AnalyticsDashboard` — `ceo/repository.ts` imports this rather than
- * defining its own copy, and `getBusinessSummary()` above reuses it too,
- * so both callers agree on the same "best-known net margin across every
- * channel with a calculated projection" computation. Lives in this file,
- * not `ceo/repository.ts`, specifically so `getBusinessSummary()` above
- * can call it without creating a circular import (`ceo/repository.ts`
- * already depends on this file for `getAnalyticsDashboard`/
- * `getAdvertisingIntelligence` — the dependency only ever runs one way).
- */
-export function buildExecutiveSummary(analytics: AnalyticsDashboard) {
-  const knownMarginChannels = analytics.channels.filter((c) => c.profit.averageNetMarginPct.status === 'calculated' && typeof c.profit.averageNetMarginPct.value === 'number')
-  const knownNetMarginPct = knownMarginChannels.length === 0
-    ? null
-    : Math.round((knownMarginChannels.reduce((sum, c) => sum + (c.profit.averageNetMarginPct.value as number), 0) / knownMarginChannels.length) * 100) / 100
-  const profitDataComplete = analytics.channels.length > 0 && analytics.channels.every((c) => c.profit.productsWithUnknownProfit === 0) && knownNetMarginPct !== null
-
-  return {
-    isDemo: analytics.isDemo,
-    periodLabel: analytics.period.label,
-    revenue: analytics.sales.revenue,
-    netRevenue: analytics.sales.netRevenue,
-    orders: analytics.sales.orders,
-    averageOrderValue: analytics.sales.averageOrderValue,
-    refundsValue: analytics.sales.refundsValue,
-    refundRatePct: analytics.sales.refundRatePct,
-    returnRatePct: analytics.sales.returnRatePct,
-    knownNetMarginPct,
-    profitDataComplete,
-  }
-}
 
 export async function getAdvertisingIntelligence(periodKey: PeriodKey = 'last_30_days'): Promise<AdvertisingIntelligence> {
   const session = await requireSession()

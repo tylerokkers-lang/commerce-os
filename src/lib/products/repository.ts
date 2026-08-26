@@ -1,7 +1,7 @@
 import 'server-only'
 
-import type { OpportunitySummary, ProductSummary, StockAlert } from '@/lib/core/domain'
-import { demoOpportunities, demoProducts, demoStockAlerts } from '@/lib/demo/dataset'
+import type { ProductSummary, StockAlert } from '@/lib/core/domain'
+import { demoProducts, demoStockAlerts } from '@/lib/demo/dataset'
 import { requireSession } from '@/lib/security/session'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { zero } from '@/lib/core/money'
@@ -46,10 +46,9 @@ export async function getProducts(): Promise<readonly ProductSummary[]> {
   }))
 }
 
-export async function getOpportunities(): Promise<readonly OpportunitySummary[]> {
-  const session = await requireSession()
-  return session.isDemo ? demoOpportunities() : []
-}
+// `getOpportunities` used to be duplicated here, byte-for-byte identical
+// to `products/opportunities.ts`'s own version — removed; that file is
+// the one every real caller already used. Import from there instead.
 
 export async function getStockAlerts(): Promise<readonly StockAlert[]> {
   const session = await requireSession()

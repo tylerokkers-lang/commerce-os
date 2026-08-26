@@ -1,7 +1,8 @@
 import 'server-only'
 
 import { requireSession } from '@/lib/security/session'
-import { getAnalyticsDashboard, buildExecutiveSummary, type AnalyticsDashboard } from '@/lib/analytics/repository'
+import { getAnalyticsDashboard, type AnalyticsDashboard } from '@/lib/analytics/repository'
+import { buildExecutiveSummary } from '@/lib/analytics/executiveSummary'
 import { getMonitoringStatus, type MonitoringStatus } from '@/lib/monitoring/repository'
 import { getAutomationStatus, type AutomationStatus } from '@/lib/automation/repository'
 import { getPendingApprovals } from '@/lib/automation/approvals'

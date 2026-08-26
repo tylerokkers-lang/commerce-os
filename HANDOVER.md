@@ -2891,9 +2891,120 @@ environment to confirm these real figures against, and another session's
 dev-server lock again prevented a browser check of `/report`/`/finance`.
 Confirmed via `tsc`/build only.
 
-## 43. Next step
+## 43. Final structured inspection pass — testability follow-up, one confirmed duplicate closed, one genuine gap identified but correctly not attempted
 
-The two real options remaining, per `docs/MILESTONES.md`: (1) **the one
+Requested as a deliberate "look before declaring done" pass, not a new
+milestone for its own sake: confirm whether any genuine, purely
+code-level, credential-free gap remains before stopping.
+
+**1. Executive-summary testability (explicitly requested).** Confirmed
+empirically — not just by convention — that `buildExecutiveSummary`
+(relocated into `analytics/repository.ts` in §42/Milestone 24) truly
+could not be unit-tested: a throwaway test importing it failed with
+`Cannot find package 'server-only'` (the package is not even installed
+as a real dependency in this project; Node's own module resolution fails
+immediately on the file's top-level `import 'server-only'`). Relocated
+the function again, this time to a genuinely pure new file,
+`analytics/executiveSummary.ts` (no `server-only` import at all) — the
+same "pure planner, separate server-only orchestrator" split this
+codebase already uses throughout (`syncPlan.ts`/`sync.ts`,
+`monitorPlan.ts`/`monitor.ts`, `verificationCheck.ts`/`verification.ts`,
+`amazonAdsReporting.ts`/`amazonAdsReportPipeline.ts`). `analytics/repository.ts`
+and `ceo/repository.ts` both import it from there now; **business
+behaviour is byte-for-byte unchanged** — only the file it lives in
+moved. 9 new tests (`tests/executive-summary.test.ts`) exercise the real
+decision logic directly: the plain (never revenue-weighted) average
+across channels with a calculated margin, `profitDataComplete`'s exact
+two-part condition (every channel's unknown-product count is zero AND a
+margin is actually known), rounding to two decimal places, and that
+every pass-through field (`revenue`/`orders`/etc.) is literally the same
+object the dashboard already computed, never rebuilt.
+
+**2. One confirmed, pre-existing duplicate closed.** While wiring §42's
+`getOpportunities()` call, found `products/repository.ts` carried a
+second, byte-for-byte identical copy of `products/opportunities.ts`'s
+own `getOpportunities()` — a genuine, already-existing instance of the
+duplicated-business-logic pattern the brief warns against, not something
+this pass introduced. Every real caller (`/`, `/opportunities`,
+`/opportunities/[id]`, `ai/repository.ts`) already used the
+`products/opportunities.ts` version; the `products/repository.ts` copy
+had zero callers anywhere once §42's own new import (the only thing
+using it) was pointed at the canonical one instead. Removed the
+duplicate rather than leave a second source of truth sitting unused.
+
+**3. A genuine, real, but deliberately NOT-attempted gap: order
+ingestion is still not wired to Postgres.** `orders/repository.ts`'s
+`getOrderScenarios()` returns `[]` in live mode unconditionally, with a
+comment citing "no live connector exists (Milestone 4)" — stale (real
+Shopify/Amazon/eBay connectors have existed since Milestones 4/21; the
+real reason has always been narrower and still holds: nothing in this
+codebase ever calls `orders/ingestion.ts`'s `planOrderIngestion` — a
+fully-built, presumably-tested pure decision function — with real
+connector data and writes the result to the `orders`/`order_items`
+tables). This is the exact same class of bug §42 (Milestone 24) found
+and fixed for `getBusinessSummary()`/`getDailyReport()`, and it is
+genuinely credential-free: the decision logic already works identically
+against the demo connector, any future live connector, or eBay once its
+credentials arrive — building the write path does not require any of
+them to exist first.
+
+**Deliberately not implemented this pass.** Unlike §42's fix (a
+straightforward "read an existing, already-computed dashboard instead of
+returning a hardcoded stub"), closing this one for real means: resolving
+each snapshot's line items against real product SKUs
+(`allLineItemsResolved`/`lineItemsTotalMinor` — no live resolver for
+this currently exists either), writing `orders`/`order_items` rows and
+an `order_status_transitions` entry per the existing append-only
+pattern, and wiring a genuine trigger point (a maintenance-cycle "order
+sync" step, the same shape `runAdvertisingSyncForConnectedOrgs()`
+already established for advertising) — a full milestone's worth of new
+write-path code, idempotency proof, and dedicated tests, not a "final
+inspection" tidy-up. Attempting it inside this pass would have meant
+either rushing genuinely money-adjacent, idempotency-critical code
+without the same test rigour every other write path in this codebase
+has earned, or silently narrowing scope without saying so — both worse
+than naming it clearly as the next real candidate instead. The
+downstream gap this session's earlier eBay research also already
+surfaced — `supplier_orders`/`supplier_order_items` having zero
+application-code callers, no FK link to `orders` — remains exactly as
+documented in §37; order ingestion would need to land first.
+
+**Other checklist areas inspected, nothing further found worth
+reporting:** cross-domain decision consistency, auditability, and
+idempotency show no new gaps beyond what's already tracked — every
+mechanism this brief asked about (compliance-block overrides, append-only
+transition tables, idempotency-key uniqueness constraints) was already
+built and already exercised by existing tests in prior milestones,
+re-confirmed by inspection rather than by finding anything new to fix.
+Cash vs profit vs receivables/liabilities remains genuinely unbuilt
+(finance/VAT/payout-timing) — explicitly out of scope per this pass's
+own instruction not to build finance functionality without a concrete
+architecture already present to extend.
+
+**Tested:** 9 new tests (`buildExecutiveSummary`'s real decision logic) —
+1294 total, up from 1285. `npx tsc --noEmit`, `npm run lint`, `npm run
+build`, `npm run db:verify` (73 tables, no new migration) all clean.
+
+**Safety:** read-side and pure-logic-relocation only — no policy,
+approval, capability-gate, purchasing, or write-path code touched;
+`MANUAL_PURCHASE_MODE` and every existing safety gate are unaffected.
+
+## 44. Next step
+
+**The one genuinely unblocked, non-trivial code candidate (§43): order
+ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is
+fully built and has never been called with real data or wired to a
+write path. Needs, in order: a live-product SKU/line-item resolver (no
+live resolver currently exists), the actual `orders`/`order_items`/
+`order_status_transitions` write, and a maintenance-cycle trigger
+matching `runAdvertisingSyncForConnectedOrgs()`'s own shape — sized as
+its own milestone with full idempotency and write-path test coverage,
+not a quick addition. Needs no credentials to build or test (works
+identically against the demo connector); a live connector only changes
+whether it ever actually runs against real marketplace data.
+
+The two infrastructure/credential-blocked options remaining, per
+`docs/MILESTONES.md`: (1) **the one
 gap §36/§39 still leave open** — an actual live verification run, which
 needs real Amazon Ads credentials this environment does not have; or (2) **deploy
 for real** — a live Supabase project, a chosen host, `AUTOMATION_CRON_SECRET`
