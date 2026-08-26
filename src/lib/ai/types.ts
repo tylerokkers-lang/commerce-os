@@ -110,6 +110,16 @@ export interface FactBundle {
     provider: string | null
     externalAccountId: string | null
     dailyBudgetMinor: number | null
+    /**
+     * Milestone 23 — the same field `ceo/priorities.ts`'s advertising
+     * section already reads to gate a `scale_opportunity` campaign against
+     * the compliance-block override (`docs/PRINCIPLES.md` §3): a
+     * scaling recommendation for a campaign whose product is currently
+     * compliance-BLOCKED on the same channel must never be surfaced as an
+     * unrestricted opportunity. `null` when the campaign has no known
+     * product linkage.
+     */
+    productId: string | null
   }[]
   advertisingScorecard: { overall: string; totalCampaigns: number; totalSpend: string; overallRoas: string; tacosPct: string } | null
 }

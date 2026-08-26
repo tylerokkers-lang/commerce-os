@@ -111,24 +111,8 @@ function supplierRecommendations(bundle: FactBundle): Recommendation[] {
     }))
 }
 
-/**
- * Milestone 14 — a non-healthy campaign becomes a `REVIEW_CAMPAIGN`
- * recommendation: the one campaign-vocabulary type that is actually
- * `executable` today (see `actions/types.ts`'s module comment) because it
- * is a pure escalation, never a budget or pause change. `scale_opportunity`
- * is deliberately excluded here: `bundle.advertisingCampaigns` (unlike the
- * `CampaignIntelligence` list `ceo/priorities.ts` reads) carries no
- * `productId`, so this function cannot re-check the compliance-block
- * override that keeps a compliance-blocked product's campaign from being
- * recommended for scaling (`ceo/priorities.ts`'s "7. Advertising
- * intelligence" section already does this correctly for the priorities
- * list) — recommending a budget increase here without that check would
- * risk exactly the unrestricted-scaling-recommendation bug that rule
- * exists to prevent, so no scaling recommendation is generated from this
- * function at all; `/advertising` and the CEO priorities list remain the
- * only places a scaling opportunity is ever surfaced.
- */
-function campaignRecommendations(bundle: FactBundle): Recommendation[] {
+/** Every non-`scale_opportunity`, non-`healthy`, non-`insufficient_data` campaign becomes a `REVIEW_CAMPAIGN` escalation — unchanged from Milestone 14. */
+function underperformingCampaignRecommendations(bundle: FactBundle): Recommendation[] {
   return bundle.advertisingCampaigns
     .filter((c) => c.classification !== 'healthy' && c.classification !== 'insufficient_data' && c.classification !== 'scale_opportunity')
     .slice(0, 5)
@@ -144,7 +128,7 @@ function campaignRecommendations(bundle: FactBundle): Recommendation[] {
       ],
       targetEntityType: 'advertising_campaign' as const, targetEntityId: c.campaignKey, targetLabel: c.campaignName, channel: c.channel as ChannelKey,
       expectedBenefit: 'Raises this campaign for your review — no spend, budget or pause state changes on its own.',
-      risk: 'This only escalates the item; a real budget or pause change would need a live advertising platform connector, which this codebase does not have yet.',
+      risk: 'This only escalates the item; use chat to request a specific pause or budget change once you have decided.',
       confidence: 'high' as const,
       complianceStatus: 'unknown' as const,
       currencyContext: null,
@@ -154,6 +138,94 @@ function campaignRecommendations(bundle: FactBundle): Recommendation[] {
       suggestedNextStep: `Ask "review campaign ${c.campaignName}" to raise this for your review.`,
       href: '/advertising',
     }))
+}
+
+/**
+ * Milestone 23 — `scale_opportunity` campaigns, previously excluded here
+ * entirely: `bundle.advertisingCampaigns` carried no `productId`, so this
+ * function could not re-check the compliance-block override
+ * `ceo/priorities.ts`'s "7. Advertising intelligence" section already
+ * applies — recommending a budget increase without that check would risk
+ * the exact unrestricted-scaling-recommendation bug that override exists
+ * to prevent. `productId` now flows through `FactBundle` (the same
+ * threading pattern Milestone 22 used for `provider`/`externalAccountId`),
+ * so the identical check `ceo/priorities.ts` performs is replicated here —
+ * never a second, independently-decided compliance verdict.
+ *
+ * A compliance-blocked product's campaign gets a `REVIEW_PRODUCT`
+ * recommendation pointing at `/compliance` instead — the same
+ * "state the conflict explicitly, never silently drop it" choice
+ * `ceo/priorities.ts`'s `scale_blocked` priority already makes. An
+ * unblocked one becomes `INCREASE_BUDGET` — genuinely `executable` since
+ * Milestone 22 built the real chat-to-approval path for it, always
+ * `requiresApproval: true` (the domain policy this executes through,
+ * `automation/advertisingAutomation.ts`'s `assessCampaignActionPolicy`,
+ * can never auto-permit a spend change, for any input). No specific
+ * percentage is suggested — the same "or any percentage" convention
+ * `priceRecommendations` above already uses, since this codebase has no
+ * elasticity model to compute a "correct" increase from.
+ */
+function scaleOpportunityRecommendations(bundle: FactBundle): Recommendation[] {
+  return bundle.advertisingCampaigns
+    .filter((c) => c.classification === 'scale_opportunity')
+    .slice(0, 5)
+    .map((c) => {
+      const blockedForCompliance = c.productId
+        ? bundle.complianceIssues.some((issue) => issue.productId === c.productId && issue.channel === c.channel && issue.verdict === 'fail')
+        : false
+      const channelLabel = CHANNEL_LABELS[c.channel] ?? c.channel
+
+      if (blockedForCompliance) {
+        return {
+          id: `rec:campaign_scale_blocked:${c.campaignKey}`,
+          type: 'REVIEW_PRODUCT' as const,
+          title: `${c.campaignName} on ${channelLabel} looks like a scaling opportunity, but the product is compliance-blocked`,
+          explanation: 'This campaign would otherwise qualify for a scaling recommendation, but the advertised product is currently BLOCKED by compliance on this channel — the block is never bypassed, so scaling is not recommended until it is resolved.',
+          supportingFacts: [
+            { category: 'fact' as const, label: 'Spend', value: c.spend },
+            { category: 'calculated' as const, label: 'ROAS', value: c.roas },
+          ],
+          targetEntityType: 'product' as const, targetEntityId: c.productId!, targetLabel: c.campaignName, channel: c.channel as ChannelKey,
+          expectedBenefit: 'Resolving the compliance block unblocks both the listing and a real scaling recommendation for this campaign.',
+          risk: 'The compliance block is never bypassed automatically.',
+          confidence: 'high' as const,
+          complianceStatus: 'blocked' as const,
+          currencyContext: null,
+          assumptions: [],
+          requiresApproval: false,
+          executable: false,
+          suggestedNextStep: 'Resolve the compliance block on /compliance before considering a budget increase.',
+          href: '/compliance',
+        }
+      }
+
+      return {
+        id: `rec:campaign_scale:${c.campaignKey}`,
+        type: 'INCREASE_BUDGET' as const,
+        title: `Increase budget for ${c.campaignName} on ${channelLabel}`,
+        explanation: c.reasons[0] ?? `${c.campaignName} was classified a profitable scaling opportunity.`,
+        supportingFacts: [
+          { category: 'fact' as const, label: 'Spend', value: c.spend },
+          { category: 'fact' as const, label: 'Attributed revenue', value: c.attributedRevenue },
+          { category: 'calculated' as const, label: 'ROAS', value: c.roas },
+        ],
+        targetEntityType: 'advertising_campaign' as const, targetEntityId: c.campaignKey, targetLabel: c.campaignName, channel: c.channel as ChannelKey,
+        expectedBenefit: 'A higher daily budget on a genuinely profitable campaign, within the org\'s configured safe limits, would capture more of the same profitable demand.',
+        risk: 'A budget increase does not guarantee proportionally higher revenue — this is a performance fact, not a demand prediction. No automated advertising action executes without your approval, and the policy engine may still block or require approval depending on the org\'s configured daily ad-spend cap.',
+        confidence: 'medium' as const,
+        complianceStatus: 'pass' as const,
+        currencyContext: null,
+        assumptions: ['No sales-elasticity model exists in this codebase — a spend increase is proposed, a revenue outcome is not predicted.'],
+        requiresApproval: true,
+        executable: true,
+        suggestedNextStep: `Ask "increase the budget for campaign ${c.campaignName} by 10%" (or any percentage) to generate a reviewable proposal.`,
+        href: '/advertising',
+      }
+    })
+}
+
+function campaignRecommendations(bundle: FactBundle): Recommendation[] {
+  return [...underperformingCampaignRecommendations(bundle), ...scaleOpportunityRecommendations(bundle)]
 }
 
 export function buildRecommendations(bundle: FactBundle): readonly Recommendation[] {

@@ -2736,7 +2736,68 @@ Milestones 20/21's credential-gated stopping points, per the user's own
 instruction to continue only where no developer approval/credentials are
 required.
 
-## 41. Next step
+## 41. Milestone 23 (Scale-Opportunity Recommendations) — the last credential-free item on the "Next step" loose-ends list
+
+Continuing "next unblocked milestone" (eBay held at
+`CONFIGURATION_INCOMPLETE`, Amazon Ads live verification still blocked on
+credentials). Inspection of the five loose ends §42 (below) tracks found
+four gated on either a live Supabase project or a real `ANTHROPIC_API_KEY`
+— genuine infrastructure/credentials this environment does not have —
+leaving exactly one purely code-level gap: `ai/actions/recommend.ts`'s
+`campaignRecommendations` never generated anything for a
+`scale_opportunity`-classified campaign at all.
+
+**The gap was deliberate, not an oversight — and closing it correctly
+meant closing its real dependency first.** The function's own comment
+explained why: `ceo/priorities.ts`'s "7. Advertising intelligence" section
+already recommends scaling a `scale_opportunity` campaign, but only after
+checking a compliance-block override — a campaign is never recommended
+for scaling when its advertised product is currently compliance-BLOCKED
+on the same channel (`docs/PRINCIPLES.md` §3). `bundle.advertisingCampaigns`
+carried no `productId` for `recommend.ts` to perform that same check with,
+so `scale_opportunity` was excluded outright rather than risk recommending
+an unrestricted scale-up the compliance system had already blocked.
+
+**What was built:** `productId` now flows through `FactBundle.advertisingCampaigns`
+(`ai/types.ts`/`factBundle.ts`, from `CampaignIdentity.productId` — the
+same threading pattern §40/Milestone 22 used for `provider`/
+`externalAccountId`). `recommend.ts` gained `scaleOpportunityRecommendations`,
+replicating `ceo/priorities.ts`'s exact compliance check
+(`complianceIssues.some(productId, channel, verdict === 'fail')`) rather
+than a second, independently-decided verdict. A blocked campaign produces
+a `REVIEW_PRODUCT` recommendation pointing at `/compliance`
+(`requiresApproval: false`, `executable: false` — nothing to approve, the
+block must be resolved first); an unblocked one produces a genuine
+`INCREASE_BUDGET` recommendation — reachable as a real, dispatchable
+proposal since §40 built the chat-to-approval path for it, always
+`requiresApproval: true` since `assessCampaignActionPolicy` can never
+auto-permit a spend change for any input. No specific percentage is
+suggested in the recommendation text, matching `priceRecommendations`'
+own "(or any percentage)" convention — this codebase has no
+sales-elasticity model to compute a "correct" increase from.
+
+**Not touched:** `ceo/priorities.ts` itself (unchanged — its own
+compliance-block override already existed and is now simply mirrored, not
+altered), `advertisingAutomation.ts`/`advertisingExecution.ts`/
+`advertisingApprovalExecutor.ts`/`executionDispatch.ts` (all already
+correct from §40).
+
+**Tested:** 5 new tests (unblocked campaign → `INCREASE_BUDGET`; no known
+`productId` → still `INCREASE_BUDGET`, since there is genuinely nothing to
+check; blocked campaign → `REVIEW_PRODUCT` at `/compliance`, never
+`INCREASE_BUDGET`; a block on a *different* channel never blocks it — the
+check is channel-specific; a `review_required` verdict, as opposed to an
+active `fail`, never blocks it either) plus 3 existing fixture files
+updated for the new `productId` field — 1285 tests total, up from 1280.
+`npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run db:verify`
+(73 tables, no new migration) all clean.
+
+**Not live-verified:** same standing limitation as §39/§40 — no real
+advertising credentials exist in this environment, and no private dev
+server was available to browser-check a real chat-originated scale
+recommendation reaching `/approvals`.
+
+## 42. Next step
 
 The two real options remaining, per `docs/MILESTONES.md`: (1) **the one
 gap §36/§39 still leave open** — an actual live verification run, which
@@ -2773,11 +2834,10 @@ unverified in this environment; (4) a real Supabase project should be
 exercised end-to-end for `requestActionApproval` -> `/approvals` ->
 `approveDecision`, for product, `REVIEW_CAMPAIGN`, and (now built, §40)
 budget/pause proposals alike, before relying on any of them for a real
-business; (5) `ai/actions/recommend.ts`'s `campaignRecommendations`
-deliberately never generates a `scale_opportunity` recommendation — a
-separate, narrower gap than the one §40 closed (this one is about which
-recommendations `recommend.ts` chooses to *surface*, not whether a
-campaign action can execute once proposed) and still open. When international expansion is
+business; (5) closed in §41 (Milestone 23) — `campaignRecommendations`
+now generates a real recommendation for a `scale_opportunity` campaign,
+correctly gated by the same compliance-block override `ceo/priorities.ts`
+already applies. When international expansion is
 eventually revisited (the *other* "Milestone 15" — see §31's numbering
 note), read Milestone 9's section first — the market model, FX
 intelligence, country-aware compliance delegation and expansion engine it

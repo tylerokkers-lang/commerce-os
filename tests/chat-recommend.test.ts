@@ -107,7 +107,7 @@ describe('buildRecommendations: advertising campaigns (Milestone 14)', () => {
       campaignKey: 'amazon_uk:camp-1', campaignName: 'Wasteful Campaign', channel: 'amazon_uk', isPaused: false,
       spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — no revenue', acosPct: 'unavailable — no revenue',
       classification: 'wasted_spend', severity: 'critical', reasons: ['Spent with zero conversions.'],
-      externalCampaignId: 'camp-1', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 5000,
+      externalCampaignId: 'camp-1', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 5000, productId: 'p1',
       ...overrides,
     }
   }
@@ -133,9 +133,72 @@ describe('buildRecommendations: advertising campaigns (Milestone 14)', () => {
     expect(buildRecommendations(bundle).some((r) => r.type === 'REVIEW_CAMPAIGN')).toBe(false)
   })
 
-  it('scale_opportunity is deliberately never recommended here — the compliance-block override this needs lives in ceo/priorities.ts, which carries productId; this bundle shape does not', () => {
+  it('a scale_opportunity campaign is never a REVIEW_CAMPAIGN — it gets its own, more specific type', () => {
     const bundle = emptyBundle({ advertisingCampaigns: [campaign({ classification: 'scale_opportunity', severity: 'opportunity', reasons: ['ROAS well above minimum.'] })] })
     expect(buildRecommendations(bundle).some((r) => r.type === 'REVIEW_CAMPAIGN')).toBe(false)
+  })
+})
+
+describe('buildRecommendations: scale_opportunity campaigns (Milestone 23)', () => {
+  function campaign(overrides: Partial<FactBundle['advertisingCampaigns'][number]> = {}): FactBundle['advertisingCampaigns'][number] {
+    return {
+      campaignKey: 'amazon_uk:camp-1', campaignName: 'Star Performer', channel: 'amazon_uk', isPaused: false,
+      spend: '£100.00', attributedRevenue: '£600.00', roas: '6.00', acosPct: '16.7%',
+      classification: 'scale_opportunity', severity: 'opportunity', reasons: ['ROAS well above minimum.'],
+      externalCampaignId: 'camp-1', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 5000, productId: 'p1',
+      ...overrides,
+    }
+  }
+
+  it('an unblocked scale_opportunity campaign becomes an executable INCREASE_BUDGET recommendation', () => {
+    const bundle = emptyBundle({ advertisingCampaigns: [campaign()] })
+    const recs = buildRecommendations(bundle).filter((r) => r.type === 'INCREASE_BUDGET')
+    expect(recs).toHaveLength(1)
+    expect(recs[0].targetEntityType).toBe('advertising_campaign')
+    expect(recs[0].targetEntityId).toBe('amazon_uk:camp-1')
+    expect(recs[0].requiresApproval).toBe(true)
+    expect(recs[0].executable).toBe(true)
+    expect(recs[0].complianceStatus).toBe('pass')
+    expect(recs[0].href).toBe('/advertising')
+  })
+
+  it('a scale_opportunity campaign with no known productId still becomes INCREASE_BUDGET — there is genuinely nothing to check it against', () => {
+    const bundle = emptyBundle({ advertisingCampaigns: [campaign({ productId: null })] })
+    const recs = buildRecommendations(bundle).filter((r) => r.type === 'INCREASE_BUDGET')
+    expect(recs).toHaveLength(1)
+  })
+
+  it('a scale_opportunity campaign whose product is compliance-BLOCKED on the same channel never becomes INCREASE_BUDGET — it becomes a REVIEW_PRODUCT pointing at /compliance instead', () => {
+    const bundle = emptyBundle({
+      advertisingCampaigns: [campaign()],
+      complianceIssues: [{ productId: 'p1', sku: 'SKU-1', title: 'Star Performer Product', channel: 'amazon_uk', verdict: 'fail', blockingReasons: ['Missing certificate.'] }],
+    })
+    const recs = buildRecommendations(bundle)
+    expect(recs.some((r) => r.type === 'INCREASE_BUDGET')).toBe(false)
+    const blocked = recs.find((r) => r.type === 'REVIEW_PRODUCT' && r.targetEntityId === 'p1')
+    expect(blocked).toBeDefined()
+    expect(blocked!.requiresApproval).toBe(false)
+    expect(blocked!.executable).toBe(false)
+    expect(blocked!.complianceStatus).toBe('blocked')
+    expect(blocked!.href).toBe('/compliance')
+  })
+
+  it('a compliance block on a DIFFERENT channel never blocks the scale recommendation — the check is channel-specific, never blanket', () => {
+    const bundle = emptyBundle({
+      advertisingCampaigns: [campaign()],
+      complianceIssues: [{ productId: 'p1', sku: 'SKU-1', title: 'Star Performer Product', channel: 'shopify', verdict: 'fail', blockingReasons: ['Missing certificate.'] }],
+    })
+    const recs = buildRecommendations(bundle).filter((r) => r.type === 'INCREASE_BUDGET')
+    expect(recs).toHaveLength(1)
+  })
+
+  it('a compliance review_required (not fail) never blocks the scale recommendation — only an active fail verdict does', () => {
+    const bundle = emptyBundle({
+      advertisingCampaigns: [campaign()],
+      complianceIssues: [{ productId: 'p1', sku: 'SKU-1', title: 'Star Performer Product', channel: 'amazon_uk', verdict: 'review_required', blockingReasons: [] }],
+    })
+    const recs = buildRecommendations(bundle).filter((r) => r.type === 'INCREASE_BUDGET')
+    expect(recs).toHaveLength(1)
   })
 })
 
