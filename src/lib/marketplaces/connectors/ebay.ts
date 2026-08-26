@@ -52,15 +52,28 @@ import type {
  * connector is live-verified without a genuine successful call against a
  * real account.
  *
- * UNVERIFIED API SURFACE — read this before ever pointing this connector
- * at a real account:
- *   - The Sell Fulfillment API (`GET /sell/fulfillment/v1/order`) and Sell
- *     Inventory API (`GET /sell/inventory/v1/inventory_item`) endpoint
- *     paths/versions and response field names below
- *     (`orderId`/`orderFulfillmentStatus`/`orderPaymentStatus`/`pricingSummary`/
- *     `lineItems`/`cancelStatus`/`sku`/`availability`) are a best-effort
- *     reconstruction from general knowledge of eBay's API family, not
- *     confirmed against eBay's current official reference or a live call.
+ * DOCUMENTATION VERIFICATION (Milestone 21 Step 1.5): every endpoint path,
+ * scope name and response field name below was cross-checked against
+ * eBay's official OpenAPI-generated API reference (mirrored, since
+ * developer.ebay.com itself blocks automated fetches — verified via the
+ * generated PHP SDK docs at github.com/zVPS/ebay-sell-fulfillment-php-client
+ * and github.com/zVPS/ebay-sell-inventory-php-client, which document eBay's
+ * own OpenAPI spec field-for-field) plus eBay's public OAuth scope list
+ * (developer.ebay.com/api-docs/static/oauth-scopes.html, mirrored via
+ * apitut.com/ebay/api/scopelist.html). Confirmed correct: the token
+ * endpoint, all three read endpoints and their query parameters, every
+ * scope string, and every response field this connector reads
+ * (`orders[].orderId/creationDate/orderFulfillmentStatus/orderPaymentStatus/
+ * cancelStatus.cancelState/pricingSummary.total.value|currency/lineItems[].lineItemId`,
+ * `inventoryItems[].sku/product.title/availability.shipToLocationAvailability.quantity`).
+ * One real discrepancy was found and corrected: `createShippingFulfillment`
+ * returns its `fulfillmentId` in the HTTP `Location` response header (a
+ * 201 with a possibly-empty JSON body), not as a body field — `submitFulfilmentUpdate`
+ * below now reads it from there. This has not been exercised against a
+ * live account (Step 1.5 is read-only by instruction), so it is corrected
+ * against documentation but still untested in practice.
+ *
+ * STILL UNVERIFIED / OUT OF SCOPE, not because they were overlooked:
  *   - eBay's Inventory API deliberately separates *identity* (inventory
  *     items: SKU, title, stock) from *price* (a separate "offer" resource
  *     per SKU) — `fetchListings` below reads identity/stock only and
@@ -70,9 +83,10 @@ import type {
  *   - `fetchFees`/`syncInventory`(write)/all three price-and-inventory
  *     write methods are honestly `not_supported`/unimplemented — eBay fee
  *     reporting requires the separate Finances API, not implemented here.
- *   - The order-status mapping (`orderFulfillmentStatus`/`orderPaymentStatus`/
- *     `cancelStatus.cancelState` -> the five-value `MarketplaceOrderSnapshot.status`)
- *     is a best guess at eBay's real field values and states.
+ *   - No sandbox toggle exists — this connector only ever targets
+ *     `api.ebay.com` (production). eBay's sandbox lives at a distinct host
+ *     (`api.sandbox.ebay.com`) with its own credential set; adding a
+ *     toggle is a genuine, deliberately deferred gap, not an oversight.
  *   - `getAccessToken` never caches the access token — every call
  *     re-exchanges the refresh token, the same known, shared inefficiency
  *     `amazon.ts`/`amazonAds.ts` both already have, not a new one.
@@ -160,7 +174,41 @@ async function getAccessToken(creds: EbayCredentials): Promise<Result<string, st
   }
 }
 
-async function ebayApiRequest<T>(creds: EbayCredentials, path: string, method: 'GET' | 'POST', body?: unknown): Promise<Result<T, string>> {
+interface EbayApiSuccess<T> {
+  status: number
+  data: T
+  /** The `Location` response header, when eBay returns one (e.g. `createShippingFulfillment`'s 201). */
+  location: string | null
+}
+
+interface EbayApiErrorBody {
+  errors?: readonly { errorId?: number; message?: string; longMessage?: string }[]
+}
+
+/**
+ * Turns eBay's own error envelope (`{ errors: [{ errorId, message,
+ * longMessage, ... }] }`, confirmed via the official `Error` model —
+ * see the module doc comment) into a precise, attributable message —
+ * distinguishing "eBay rejected this" (with eBay's own reason) from a
+ * generic HTTP status, which matters for telling AUTH_FAILED apart from
+ * PERMISSION_INSUFFICIENT apart from a genuine API-surface mismatch.
+ */
+function describeEbayError(status: number, statusText: string, body: unknown): string {
+  const firstError = (body as EbayApiErrorBody | null)?.errors?.[0]
+  if (firstError?.message) {
+    const idPart = firstError.errorId !== undefined ? ` (errorId ${firstError.errorId})` : ''
+    return `eBay API error ${status}${idPart}: ${firstError.longMessage ?? firstError.message}`
+  }
+  return `eBay API returned ${status} ${statusText}.`
+}
+
+/**
+ * The shared low-level request: exchanges the token, calls the endpoint,
+ * and returns the parsed body alongside the status and `Location` header
+ * — `submitFulfilmentUpdate` needs the header, every read method only
+ * needs the body, via the `ebayApiRequest` wrapper below.
+ */
+async function performEbayApiRequest(creds: EbayCredentials, path: string, method: 'GET' | 'POST', body?: unknown): Promise<Result<EbayApiSuccess<unknown>, string>> {
   const tokenResult = await getAccessToken(creds)
   if (!tokenResult.ok) return tokenResult
 
@@ -174,11 +222,31 @@ async function ebayApiRequest<T>(creds: EbayCredentials, path: string, method: '
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-    if (!response.ok) return err(`eBay API returned ${response.status} ${response.statusText} for ${path}.`)
-    return ok((await response.json()) as T)
+
+    // A successful write (e.g. createShippingFulfillment's 201) can return
+    // an empty or minimal body — parsing it as JSON unconditionally would
+    // throw on a genuinely successful call, so an empty body parses to `null`.
+    const rawText = await response.text()
+    let parsed: unknown = null
+    if (rawText.length > 0) {
+      try {
+        parsed = JSON.parse(rawText)
+      } catch {
+        return err(`eBay API returned a non-JSON response for ${path}: ${rawText.slice(0, 200)}`)
+      }
+    }
+
+    if (!response.ok) return err(describeEbayError(response.status, response.statusText, parsed))
+    return ok({ status: response.status, data: parsed, location: response.headers.get('location') })
   } catch (error) {
     return err(`eBay API request to ${path} failed: ${error instanceof Error ? error.message : String(error)}`)
   }
+}
+
+async function ebayApiRequest<T>(creds: EbayCredentials, path: string, method: 'GET' | 'POST', body?: unknown): Promise<Result<T, string>> {
+  const result = await performEbayApiRequest(creds, path, method, body)
+  if (!result.ok) return result
+  return ok(result.value.data as T)
 }
 
 interface RawEbayOrder {
@@ -225,9 +293,13 @@ export class EbayConnector implements MarketplaceConnector {
     const creds = credentials()
     if (!creds) return err('eBay is not configured.')
 
+    // getInventoryItems' documented limit is 1-100 (distinct from getOrders'
+    // 1-1000) — clamped here rather than left to fail against eBay's own
+    // validation, confirmed via the official getInventoryItems reference.
+    const limit = Math.min(Math.max(options.limit, 1), 100)
     const result = await ebayApiRequest<{
       inventoryItems?: readonly { sku: string; product?: { title?: string }; availability?: { shipToLocationAvailability?: { quantity?: number } } }[]
-    }>(creds, `/sell/inventory/v1/inventory_item?limit=${options.limit}`, 'GET')
+    }>(creds, `/sell/inventory/v1/inventory_item?limit=${limit}`, 'GET')
     if (!result.ok) return result
 
     const records: MarketplaceListingSnapshot[] = (result.value.inventoryItems ?? []).map((item) => ({
@@ -293,7 +365,7 @@ export class EbayConnector implements MarketplaceConnector {
     const creds = credentials()
     if (!creds) return err('eBay is not configured.')
 
-    const result = await ebayApiRequest<{ fulfillmentId?: string }>(
+    const result = await performEbayApiRequest(
       creds,
       `/sell/fulfillment/v1/order/${encodeURIComponent(update.externalOrderId)}/shipping_fulfillment`,
       'POST',
@@ -305,7 +377,11 @@ export class EbayConnector implements MarketplaceConnector {
       },
     )
     if (!result.ok) return result
-    return ok({ accepted: true, marketplaceReference: result.value.fulfillmentId ?? null })
+    // Confirmed via eBay's official createShippingFulfillment reference: the
+    // fulfillmentId is returned in the Location header's last path segment
+    // (.../shipping_fulfillment/{fulfillmentId}), not as a JSON body field.
+    const fulfillmentId = result.value.location?.split('/').filter(Boolean).pop() ?? null
+    return ok({ accepted: true, marketplaceReference: fulfillmentId })
   }
 
   /**
@@ -337,4 +413,4 @@ export class EbayConnector implements MarketplaceConnector {
 export const ebayConnector = new EbayConnector()
 
 /** Exposed for unit tests that cannot make real network or OAuth calls. */
-export const __internal = { credentials, getAccessToken, ebayApiRequest }
+export const __internal = { credentials, getAccessToken, ebayApiRequest, performEbayApiRequest, describeEbayError }

@@ -258,3 +258,85 @@ describe('eBay OAuth token exchange (Milestone 21, §4 — credentials handling)
     }
   })
 })
+
+/**
+ * Milestone 21 Step 1.5 — corrections made after cross-checking the
+ * implementation against eBay's official API reference (see ebay.ts's
+ * module doc comment for sources). These tests prove the two real
+ * discrepancies found are actually fixed, not just documented.
+ */
+describe('eBay API response handling (Milestone 21 Step 1.5 — doc-verified corrections)', () => {
+  function mockTokenThenApi(apiResponse: Response) {
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/identity/v1/oauth2/token')) {
+        return new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 })
+      }
+      return apiResponse
+    }) as typeof fetch
+    return () => {
+      globalThis.fetch = original
+    }
+  }
+
+  it('describeEbayError surfaces eBay\'s own errorId/message rather than a bare HTTP status', () => {
+    const message = ebayInternal.describeEbayError(403, 'Forbidden', {
+      errors: [{ errorId: 1100, message: 'Insufficient permissions', longMessage: 'The token does not have the required scope for this call.' }],
+    })
+    expect(message).toContain('1100')
+    expect(message).toContain('required scope')
+  })
+
+  it('describeEbayError falls back to the bare HTTP status when eBay returns no parseable error body', () => {
+    const message = ebayInternal.describeEbayError(500, 'Internal Server Error', null)
+    expect(message).toBe('eBay API returned 500 Internal Server Error.')
+  })
+
+  it('a real eBay error envelope on a failed call becomes a precise, attributable error, not a generic HTTP status', async () => {
+    const restore = mockTokenThenApi(
+      new Response(JSON.stringify({ errors: [{ errorId: 2001, message: 'Invalid access token' }] }), { status: 401, statusText: 'Unauthorized' }),
+    )
+    try {
+      const result = await ebayInternal.ebayApiRequest({ clientId: 'x', clientSecret: 'y', refreshToken: 'z' }, '/sell/fulfillment/v1/order?limit=1', 'GET')
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toContain('Invalid access token')
+    } finally {
+      restore()
+    }
+  })
+
+  it('an empty 201 response body (createShippingFulfillment\'s real shape) is parsed as success, never crashes on empty JSON', async () => {
+    const restore = mockTokenThenApi(
+      new Response('', { status: 201, headers: { Location: 'https://api.ebay.com/sell/fulfillment/v1/order/ORDER-1/shipping_fulfillment/FUL-123' } }),
+    )
+    try {
+      const result = await ebayInternal.performEbayApiRequest({ clientId: 'x', clientSecret: 'y', refreshToken: 'z' }, '/sell/fulfillment/v1/order/ORDER-1/shipping_fulfillment', 'POST', { lineItems: [] })
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.value.data).toBeNull()
+        expect(result.value.location).toContain('FUL-123')
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  it('submitFulfilmentUpdate reads the fulfillment id from the Location header, not a body field (the corrected behaviour)', async () => {
+    const restore = mockTokenThenApi(
+      new Response('', { status: 201, headers: { Location: 'https://api.ebay.com/sell/fulfillment/v1/order/ORDER-1/shipping_fulfillment/FUL-999' } }),
+    )
+    const originalEnv = { ...process.env }
+    process.env.EBAY_CLIENT_ID = 'x'
+    process.env.EBAY_CLIENT_SECRET = 'y'
+    process.env.EBAY_REFRESH_TOKEN = 'z'
+    try {
+      const result = await ebayConnector.submitFulfilmentUpdate({ externalOrderId: 'ORDER-1', carrier: 'Royal Mail', trackingNumber: 'TRACK-1', idempotencyKey: 'idem-1' })
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.marketplaceReference).toBe('FUL-999')
+    } finally {
+      restore()
+      process.env = originalEnv
+    }
+  })
+})

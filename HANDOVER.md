@@ -2435,7 +2435,119 @@ text.
 explicitly incremental sequence — the channel adapter and its
 authentication/connection-status foundation only (§§3-5 of the brief).
 
-## 38. Next step
+## 38. Milestone 21 Step 1.5 (eBay Documentation Verification & Live-Connection Readiness) — what was checked, corrected, and why it stopped short of live
+
+Requested as a deliberate gate before Step 2 (order ingestion, notifications,
+purchasing UI): convert eBay's status from "Implemented, not live-verified"
+into one of `LIVE_VERIFIED / AUTH_FAILED / PERMISSION_INSUFFICIENT /
+CONFIGURATION_INCOMPLETE / API_SURFACE_MISMATCH` by actually exercising the
+connector against a real eBay Business Seller account — never by inspection
+alone.
+
+**Documentation verification performed:** `developer.ebay.com` itself blocks
+automated fetches (403/timeout on every direct request), so every claim
+below is cross-checked against eBay's own OpenAPI-generated reference,
+mirrored via the generated PHP SDK docs at
+`github.com/zVPS/ebay-sell-fulfillment-php-client` and
+`github.com/zVPS/ebay-sell-inventory-php-client` (built from eBay's own
+spec, field-for-field) plus eBay's public OAuth scope list. **Confirmed
+correct, no change needed:** the OAuth token endpoint and refresh-token
+grant shape, all three read endpoint paths and query parameters
+(`GET /sell/fulfillment/v1/order`, `GET /sell/inventory/v1/inventory_item`,
+`POST .../shipping_fulfillment`), every scope string, and every response
+field this connector reads (`orders[].orderId/creationDate/orderFulfillmentStatus/
+orderPaymentStatus/cancelStatus.cancelState/pricingSummary.total.value|currency/
+lineItems[].lineItemId`, `inventoryItems[].sku/product.title/availability.
+shipToLocationAvailability.quantity`).
+
+**Two real discrepancies found and corrected, with new tests:**
+1. `createShippingFulfillment` returns its `fulfillmentId` in the HTTP
+   `Location` response header on a 201 (a possibly-empty JSON body), not as
+   a body field — `ebay.ts`'s request layer was refactored
+   (`performEbayApiRequest`, exposing `status`/`data`/`location`) and
+   `submitFulfilmentUpdate` now reads the id from the header's last path
+   segment. Corrected against documentation; still untested live, since
+   this step is read-only by instruction.
+2. `getInventoryItems`' documented limit is 1-100, distinct from
+   `getOrders`' 1-1000 — `fetchListings` now clamps to 100 rather than
+   risking an eBay-side validation error on an uncapped caller-supplied
+   limit.
+
+**Also corrected while in there:** error responses are now parsed for
+eBay's own `{ errors: [{ errorId, message, longMessage }] }` envelope
+(confirmed via the official `Error` model) instead of surfacing only a
+bare HTTP status — this is what lets a future real failure be classified
+precisely (AUTH_FAILED vs PERMISSION_INSUFFICIENT vs a genuine surface
+mismatch) instead of a generic "request failed." An empty response body
+(the real shape of a 201 with no content) is now parsed as success rather
+than crashing on `JSON.parse('')`.
+
+**Credential check — the reason this stopped here:** no `.env`/`.env.local`
+file and no `EBAY_*` environment variable exists anywhere in this
+environment (checked directly, values never printed). Per the brief's own
+instruction ("if credentials are missing, stop and tell me exactly what I
+need to provide or configure"), live testing (Sections 4-7 of the brief)
+did not proceed. `.env.example` was expanded with the exact, doc-verified
+steps to obtain each value: `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` from a
+**Production** (not Sandbox) keyset at `developer.ebay.com/my/keys`, and
+`EBAY_REFRESH_TOKEN` via that keyset's one-time "Get a User Token"
+consent flow — the long-lived refresh token, never the short-lived access
+token also returned by that flow.
+
+**Security checks performed (brief §9):** no `console.*` call anywhere in
+`ebay.ts`; every error path (`describeEbayError`, the network-failure
+catch block) surfaces only eBay's own response body or a generic JS error
+message — never the client secret, refresh token, or access token, which
+are never interpolated into any string this module produces.
+`EBAY_CLIENT_SECRET`/`EBAY_REFRESH_TOKEN` are not `NEXT_PUBLIC_`-prefixed,
+so Next.js never bundles them client-side — the same mechanism (not a
+per-file `server-only` import) every other connector's secrets already
+rely on. `fetchOrders`' `raw: order` field carries the complete eBay order
+payload (buyer name/address are plausibly present in the real API,
+unconfirmed since untested) — currently held only in memory per call and
+never persisted, since order ingestion is not wired to Postgres yet
+(§37's own deferral); flagged here as a genuine PII-minimisation
+consideration for whichever later step does wire persistence, not a
+Step 1.5 defect.
+
+**Capability matrix (evidence-based — nothing below is claimed without a
+concrete reason):**
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Authentication | NOT TESTED | No `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`/`EBAY_REFRESH_TOKEN` configured in this environment |
+| Order read | NOT TESTED | Same — `isConfigured()` gate blocks every network call |
+| Listing read | NOT TESTED | Same |
+| Inventory read | NOT TESTED | Same (derived from listing read) |
+| Tracking update | NOT TESTED | Deliberately excluded from this step's live scope even where credentials exist (brief §4) |
+| Refunds | DISABLED | `capabilities.processRefunds: false`, no code path implements it |
+| Purchasing | IMPOSSIBLE | No write/spend path exists anywhere in this connector or codebase |
+| Price writes | DISABLED | `capabilities.writeListings: false`, `updateListingPrice` always returns `not_supported` |
+| Inventory writes | DISABLED | `capabilities.syncInventory: false`, `updateInventory` always returns `not_supported` |
+
+**Overall status: `CONFIGURATION_INCOMPLETE`** — not `AUTH_FAILED` (no
+credentials were ever submitted to eBay to fail), not `LIVE_VERIFIED` (no
+successful authenticated call has occurred), not `API_SURFACE_MISMATCH`
+(the one surface mismatch found was corrected, not left standing).
+
+**Tested:** 5 new tests (eBay error-envelope parsing, empty-body-as-success
+handling, and `submitFulfilmentUpdate` reading the fulfillment id from the
+`Location` header end-to-end) — 1268 total, up from 1263, all passing.
+`npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run db:verify`
+(73 tables, no new migration this step) all clean.
+
+**Exact next step:** provide `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` (a
+**Production** keyset at `developer.ebay.com/my/keys`) and
+`EBAY_REFRESH_TOKEN` (via that keyset's one-time consent flow, scoped at
+minimum to `sell.fulfillment.readonly`, `sell.inventory.readonly`, and
+`sell.fulfillment`) — see `.env.example` for the full walkthrough. Once
+set (never pasted into chat), Step 1.5 resumes: a real authenticated
+`getConnectionHealth()` call, then `fetchOrders`/`fetchListings` against
+the real account, updating the capability matrix and overall status from
+evidence, before Step 2 (order ingestion, notifications, purchasing UI)
+begins.
+
+## 39. Next step
 
 The two real options remaining, per `docs/MILESTONES.md`: (1) **close the
 three gaps §36 lists above** — UI status, harness extension, and (whenever
