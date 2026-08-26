@@ -299,23 +299,30 @@ describe('8. Product mapping', () => {
       status: 'ACTIVE',
       variants: { edges: [{ node: { id: 'gid://shopify/ProductVariant/1', price: '19.99', inventoryQuantity: 42 } }] },
     }
-    const listing = shopifyInternal.mapListing(node)
+    const listing = shopifyInternal.mapListing(node, 'GBP')
     expect(listing.externalId).toBe('gid://shopify/Product/123')
     expect(listing.title).toBe('Bamboo Drawer Dividers')
     expect(listing.status).toBe('active')
     expect(listing.priceMinor).toBe(1999)
     expect(listing.stockQty).toBe(42)
+    expect(listing.currency).toBe('GBP')
+  })
+
+  it('threads the shop currency through as-is, rather than assuming a hardcoded value — found via a real live-verification run against a real product', () => {
+    const node = { id: 'gid://shopify/Product/1', title: 'x', status: 'ACTIVE', variants: { edges: [] } }
+    expect(shopifyInternal.mapListing(node, 'USD').currency).toBe('USD')
+    expect(shopifyInternal.mapListing(node, 'EUR').currency).toBe('EUR')
   })
 
   it('maps DRAFT and ARCHIVED status correctly, and an unrecognised status falls back to archived rather than a guess', () => {
     const base = { id: 'gid://shopify/Product/1', title: 'x', variants: { edges: [] } }
-    expect(shopifyInternal.mapListing({ ...base, status: 'DRAFT' }).status).toBe('draft')
-    expect(shopifyInternal.mapListing({ ...base, status: 'ARCHIVED' }).status).toBe('archived')
-    expect(shopifyInternal.mapListing({ ...base, status: 'SOMETHING_NEW' }).status).toBe('archived')
+    expect(shopifyInternal.mapListing({ ...base, status: 'DRAFT' }, 'GBP').status).toBe('draft')
+    expect(shopifyInternal.mapListing({ ...base, status: 'ARCHIVED' }, 'GBP').status).toBe('archived')
+    expect(shopifyInternal.mapListing({ ...base, status: 'SOMETHING_NEW' }, 'GBP').status).toBe('archived')
   })
 
   it('a product with no variant reports priceMinor 0 and stockQty null, never a fabricated number', () => {
-    const listing = shopifyInternal.mapListing({ id: 'gid://shopify/Product/1', title: 'x', status: 'ACTIVE', variants: { edges: [] } })
+    const listing = shopifyInternal.mapListing({ id: 'gid://shopify/Product/1', title: 'x', status: 'ACTIVE', variants: { edges: [] } }, 'GBP')
     expect(listing.priceMinor).toBe(0)
     expect(listing.stockQty).toBeNull()
   })
@@ -329,7 +336,10 @@ describe('8. Product mapping', () => {
     const { restore } = mockFetchSequence([
       tokenResponse(),
       new Response(JSON.stringify({
-        data: { products: { edges: [{ node: { id: 'gid://shopify/Product/1', title: 'Widget', status: 'ACTIVE', variants: { edges: [{ node: { id: 'v1', price: '9.99', inventoryQuantity: 5 } }] } } }] } },
+        data: {
+          shop: { currencyCode: 'EUR' },
+          products: { edges: [{ node: { id: 'gid://shopify/Product/1', title: 'Widget', status: 'ACTIVE', variants: { edges: [{ node: { id: 'v1', price: '9.99', inventoryQuantity: 5 } }] } } }] },
+        },
       }), { status: 200 }),
     ])
     try {
@@ -339,6 +349,9 @@ describe('8. Product mapping', () => {
         expect(result.value.records).toHaveLength(1)
         expect(result.value.records[0].title).toBe('Widget')
         expect(result.value.records[0].priceMinor).toBe(999)
+        // Currency comes from the same request's real shop field, not a
+        // hardcoded literal — found via a real live-verification run.
+        expect(result.value.records[0].currency).toBe('EUR')
       }
     } finally {
       restore()

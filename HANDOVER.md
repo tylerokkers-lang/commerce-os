@@ -3297,18 +3297,98 @@ capability. eBay remains untouched and `CONFIGURATION_INCOMPLETE`.
 Anthropic remains untouched and billing-gated. No write capability was
 exercised, attempted, or enabled at any point.
 
-## 48. Next step
+## 48. Shopify field-mapping verification against a real product, and a trace through the rest of the pipeline
 
-**Shopify Read-Only is now genuinely live-verified for connectivity.**
-The one honest remaining gap (§47): no real product/order/inventory
-record has yet been fetched and mapped, since the connected store is
-currently empty. If/when the store has at least one real product or
-order, re-running the same live-verification sequence once more would
-additionally prove the field-mapping logic (`mapListing`,
-`mapOrderStatus`, inventory quantity summing) against genuine Shopify
-data, closing that gap — optional, not blocking, since the mapping
-logic already has full unit-test coverage (§44) against realistic
-fixture shapes.
+**Context:** the user manually created one real product in the live
+Shopify store (unblocked writes were explicitly declined for me to
+perform — see the tail of §47's conversation; the user created it
+themselves in the Shopify admin UI instead) and asked for the §47 gap
+to be closed: verify the connector's field mapping against a real
+product, then trace it as far as the current (non-demo) implementation
+allows. Verification used the same temporary, read-only Vitest
+approach as every prior live-verification session (deleted immediately
+after the run; every query in the temporary file was a GraphQL read,
+no mutation field anywhere; no credential value ever logged).
+
+**Field-mapping result — every field the connector currently captures
+maps correctly against the real product:**
+
+| Field | REAL Shopify value | Commerce-OS mapped value | Correct? |
+|---|---|---|---|
+| Product ID | `gid://shopify/Product/…` | `externalId`/`channelProductRef` | YES |
+| Title | "Commerce-OS Test Product Alpha" | `title` | YES |
+| Status | `ACTIVE` | `status: 'active'` | YES |
+| Variant ID | `gid://shopify/ProductVariant/…` | present only inside `raw`, not a first-class field | PARTIAL — see gap below |
+| Price | `29.99` | `priceMinor: 2999` | YES |
+| Inventory quantity | `25` | `stockQty: 25` (via **two independent queries** — `fetchListings`'s per-variant field and `fetchInventory`'s separate `InventoryItem.inventoryLevels` sum — both agreed) | YES |
+| Currency | shop's real `currencyCode` (queried live) | `currency` | **FIXED THIS SESSION** — was hardcoded `'GBP'` literal, not read from the API at all; coincidentally matched this store's real currency, which is how the bug stayed latent. Now threaded through from a real `shop { currencyCode }` field on the same request. |
+
+**Fields Shopify returns that the connector does not currently
+capture at all — a scope gap, not a wrong mapping:** description
+(`descriptionHtml`), vendor, SKU (on the variant), and real
+Shopify-side timestamps (`createdAt`/`updatedAt` — `reportedAt` is
+only this connector's own fetch-time stamp, not Shopify's). All four
+were confirmed present and populated on the real product via an ad-hoc
+read-only inspection query (not part of the connector's own code, used
+only to see what the API actually returns); none of them exist on
+`MarketplaceListingSnapshot` (`src/lib/marketplaces/connectors/types.ts`)
+or in `PRODUCTS_QUERY`. Deliberately not added this session — extending
+the shared canonical listing type is a real design decision (it would
+touch every connector's shape, not just Shopify's) rather than a
+minimum-necessary bug fix, so it was left as an open, flagged gap
+rather than done unprompted.
+
+**The one real bug found and fixed — minimum necessary change:**
+`mapListing()` in
+[`src/lib/marketplaces/connectors/shopify.ts`](src/lib/marketplaces/connectors/shopify.ts)
+hardcoded `currency: 'GBP'`. `PRODUCTS_QUERY` now also requests
+`shop { currencyCode }` in the same request, and `fetchListings()`
+threads that real value through to `mapListing()` as a parameter
+instead. Three regression tests added/updated in
+[`tests/shopify-connector.test.ts`](tests/shopify-connector.test.ts)
+(§8) proving the currency is read from the response, not assumed.
+`tests/orders`/`inventory` mapping are unaffected (orders already read
+a real per-order currency from `totalPriceSet.shopMoney.currencyCode`;
+inventory has no currency field at all). Full suite after the change:
+1341/1341 tests pass (was 1340), `tsc --noEmit` clean, `eslint` clean,
+`next build` clean, `db:verify` clean (73 tables, no migration).
+
+**Pipeline trace — connector → canonical facts → economics →
+analytics → opportunities/recommendations**, established by direct
+code inspection (file:line citations), not assumption:
+
+1. **Connector (`shopify.ts`) → real, live, proven this session.** `fetchListings()`/`fetchInventory()` genuinely reach Shopify and map correctly, per the table above.
+2. **A real, already-wired non-demo code path *does* call the real connector today** — `/api/monitoring/run` → `runDueMonitors` → `marketplaceListingMonitor.run()` (`src/lib/monitoring/monitors/marketplaceMonitor.ts:49`), reached via the real connector registry (not the demo one). But its *only* effect is a read-only price/status diff against our own existing `channel_products` Postgres row (`reconcileListings`), producing a monitoring event/notification on divergence. **The `MarketplaceListingSnapshot`'s own fields (title, currency, stockQty, raw) are never persisted anywhere.**
+3. **Canonical product facts (`FactBundle`, `src/lib/ai/factBundle.ts`) — NOT reachable from Shopify data today.** `FactBundle.products` is built from `getProducts()` (`src/lib/products/repository.ts:13-19`), a direct Postgres read of the `products` table (populated by manual entry/seeding, not by any connector). `fetchListings` is never called anywhere in that file.
+4. **Economics/profitability (`src/lib/profitability/index.ts`, `channels.ts`) — NOT reachable from Shopify data today.** The live caller, `profitabilityMonitor.run()`, reads `sellingPrice` from `channel_products.price_minor` (`src/lib/automation/facts.ts:80-87`) — a Postgres column written only by *our own* price-execution code, never by a connector fetch.
+5. **Analytics (`src/lib/analytics/repository.ts`, `liveAnalyticsFacts.ts`) — NOT reachable from Shopify data today.** `loadProductChannelProfitFacts()` (`liveAnalyticsFacts.ts:151`) reads the same `channel_products.price_minor`/`currency` columns directly from Postgres.
+6. **Opportunities/recommendations (`src/lib/products/opportunities.ts`, `src/lib/ai/actions/recommend.ts`) — NOT reachable; live mode is unimplemented.** `getOpportunities()` (`opportunities.ts:20`) returns `[]` unconditionally outside demo mode; `getIntelligenceSummary()` returns a hardcoded all-zero summary. There is no live implementation to reach at all, so this is not a data-flow gap so much as a genuinely unbuilt feature.
+
+**In short: the real product is now proven correct at the connector
+boundary (steps 1–2), and proven absent everywhere past it (steps
+3–6).** Nothing between "a connector fetch happens" and "a canonical
+product record/economics figure/analytics number/opportunity exists"
+has ever been built — this was true before this session and remains
+true after it; no code was added to bridge that gap, since doing so
+(wiring real ingestion into `channel_products`/`products`) is the
+`orders/ingestion.ts` → Postgres write-path candidate already
+identified and deliberately deferred in §43 as its own non-trivial
+milestone, not a minimum-necessary fix for this verification task.
+
+## 49. Next step
+
+**Shopify Read-Only is now field-mapping-verified against a real
+product (§48).** Two smaller, optional candidates fell out of that
+verification, neither blocking: (1) `MarketplaceListingSnapshot`
+(`src/lib/marketplaces/connectors/types.ts`) has no `sku`/`vendor`/
+`description`/real-timestamp fields — all four are confirmed present
+on real Shopify products but currently uncaptured; extending the
+shared canonical type touches every connector, so this needs its own
+decision rather than a silent addition. (2) The `products` Postgres
+table already has `sku`/`description` columns (`brand`, not `vendor`)
+that nothing currently populates from a live connector fetch — see the
+pipeline trace in §48 for why (no ingestion path exists past the
+connector boundary at all yet).
 
 **The one genuinely unblocked, non-trivial code candidate (§43): order
 ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is

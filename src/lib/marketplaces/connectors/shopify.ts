@@ -267,6 +267,7 @@ interface ShopQueryResult {
 
 const PRODUCTS_QUERY = `
   query($first: Int!) {
+    shop { currencyCode }
     products(first: $first) {
       edges {
         node {
@@ -282,6 +283,7 @@ const PRODUCTS_QUERY = `
   }
 `
 interface ProductsQueryResult {
+  shop: { currencyCode: string }
   products: {
     edges: readonly {
       node: {
@@ -300,7 +302,16 @@ const PRODUCT_STATUS_MAP: Record<string, MarketplaceListingSnapshot['status']> =
   ARCHIVED: 'archived',
 }
 
-function mapListing(node: ProductsQueryResult['products']['edges'][number]['node']): MarketplaceListingSnapshot {
+/**
+ * `currency` used to be a hardcoded `'GBP'` literal rather than a real
+ * Shopify value — found via a live-verification run against a real
+ * product: it happened to match this store's actual currency by
+ * coincidence, not because it was ever actually read from the API. A
+ * product's price has no currency of its own in Shopify's model (only the
+ * shop does), so it is threaded through from the same request's `shop`
+ * field rather than queried per-product.
+ */
+function mapListing(node: ProductsQueryResult['products']['edges'][number]['node'], currency: string): MarketplaceListingSnapshot {
   const variant = node.variants.edges[0]?.node
   return {
     externalId: node.id,
@@ -308,7 +319,7 @@ function mapListing(node: ProductsQueryResult['products']['edges'][number]['node
     title: node.title,
     status: PRODUCT_STATUS_MAP[node.status] ?? 'archived',
     priceMinor: variant ? Math.round(Number(variant.price) * 100) : 0,
-    currency: 'GBP',
+    currency,
     stockQty: variant?.inventoryQuantity ?? null,
     reportedAt: new Date().toISOString(),
     raw: node as unknown as Record<string, unknown>,
@@ -448,7 +459,8 @@ export class ShopifyConnector implements MarketplaceConnector {
     const result = await graphqlRequest<ProductsQueryResult>(creds, PRODUCTS_QUERY, { first: options.limit })
     if (!result.ok) return result
 
-    const records = result.value.products.edges.map((edge) => mapListing(edge.node))
+    const currency = result.value.shop.currencyCode
+    const records = result.value.products.edges.map((edge) => mapListing(edge.node, currency))
     return ok({ records, requestsMade: 1, warnings: [] })
   }
 
