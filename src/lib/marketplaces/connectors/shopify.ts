@@ -112,6 +112,22 @@ function readEnv(name: string): string | undefined {
   return value && value.trim().length > 0 ? value.trim() : undefined
 }
 
+/**
+ * `SHOPIFY_STORE_DOMAIN` is documented as the bare hostname
+ * (`your-store.myshopify.com`), but a scheme-prefixed value
+ * (`https://your-store.myshopify.com`, with or without a trailing slash)
+ * is an extremely easy, common mistake — pasting the store's URL from a
+ * browser address bar rather than just the domain. Normalised here rather
+ * than left to fail: this connector always builds its own `https://`
+ * prefix (`https://${storeDomain}/...`), so a doubled scheme would
+ * otherwise resolve DNS for the literal hostname "https" and fail with a
+ * confusing `ENOTFOUND` — found and diagnosed via a real live-verification
+ * run, not a hypothetical. A bare hostname is never altered.
+ */
+function normalizeStoreDomain(value: string): string {
+  return value.replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+}
+
 interface ShopifyCredentials {
   storeDomain: string
   clientId: string
@@ -120,12 +136,12 @@ interface ShopifyCredentials {
 }
 
 function credentials(): ShopifyCredentials | null {
-  const storeDomain = readEnv('SHOPIFY_STORE_DOMAIN')
+  const rawStoreDomain = readEnv('SHOPIFY_STORE_DOMAIN')
   const clientId = readEnv('SHOPIFY_CLIENT_ID')
   const clientSecret = readEnv('SHOPIFY_CLIENT_SECRET')
   const apiVersion = readEnv('SHOPIFY_API_VERSION')
-  if (!storeDomain || !clientId || !clientSecret || !apiVersion) return null
-  return { storeDomain, clientId, clientSecret, apiVersion }
+  if (!rawStoreDomain || !clientId || !clientSecret || !apiVersion) return null
+  return { storeDomain: normalizeStoreDomain(rawStoreDomain), clientId, clientSecret, apiVersion }
 }
 
 /**
@@ -525,4 +541,4 @@ export class ShopifyConnector implements MarketplaceConnector {
 export const shopifyConnector = new ShopifyConnector()
 
 /** Exposed for unit tests that cannot make real network or OAuth calls. */
-export const __internal = { credentials, getAccessToken, graphqlRequest, mapListing, mapOrderStatus }
+export const __internal = { credentials, getAccessToken, graphqlRequest, mapListing, mapOrderStatus, normalizeStoreDomain }

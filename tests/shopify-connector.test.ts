@@ -54,6 +54,38 @@ describe('1. Configuration detection', () => {
   })
 })
 
+describe('1b. Store domain normalisation (found via a real live-verification run)', () => {
+  it('a bare hostname is left unchanged', () => {
+    expect(shopifyInternal.normalizeStoreDomain('a-store.myshopify.com')).toBe('a-store.myshopify.com')
+  })
+
+  it('strips a leading https:// scheme — the exact mistake a real .env.local run surfaced', () => {
+    expect(shopifyInternal.normalizeStoreDomain('https://a-store.myshopify.com')).toBe('a-store.myshopify.com')
+  })
+
+  it('strips a leading http:// scheme too', () => {
+    expect(shopifyInternal.normalizeStoreDomain('http://a-store.myshopify.com')).toBe('a-store.myshopify.com')
+  })
+
+  it('strips a trailing slash', () => {
+    expect(shopifyInternal.normalizeStoreDomain('https://a-store.myshopify.com/')).toBe('a-store.myshopify.com')
+  })
+
+  it('credentials() applies the normalisation, so every request built from it uses a clean hostname', () => {
+    const original = { ...process.env }
+    process.env.SHOPIFY_STORE_DOMAIN = 'https://scheme-prefixed.myshopify.com'
+    process.env.SHOPIFY_CLIENT_ID = 'id'
+    process.env.SHOPIFY_CLIENT_SECRET = 'secret'
+    process.env.SHOPIFY_API_VERSION = '2026-04'
+    try {
+      const creds = shopifyInternal.credentials()
+      expect(creds?.storeDomain).toBe('scheme-prefixed.myshopify.com')
+    } finally {
+      process.env = original
+    }
+  })
+})
+
 describe('2. Client-credentials token exchange: request construction', () => {
   it('POSTs grant_type=client_credentials with client_id/client_secret as a form body to /admin/oauth/access_token', async () => {
     const { restore, urls, bodies } = mockFetchSequence([tokenResponse()])

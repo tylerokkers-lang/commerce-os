@@ -3118,7 +3118,84 @@ look for that.
 
 eBay confirmed untouched, still `CONFIGURATION_INCOMPLETE`.
 
-## 45. Next step
+## 45. Shopify Read-Only live verification — real connectivity confirmed, one code fix, blocked on app installation
+
+Real `SHOPIFY_*` credentials were supplied in `.env.local`. Verification
+ran the real, unmodified `shopifyConnector` end to end (no bespoke
+request code) via a temporary, deleted-after-use test file — never
+printing any credential value, only presence booleans, structural
+evidence, and Shopify's own error text (which itself never echoes back a
+secret).
+
+**A real bug found and fixed, discovered only by running against a real
+account:** the first run failed with `ENOTFOUND https` — DNS resolution
+literally attempting to look up the hostname "https". Diagnosed (without
+ever printing the credential value) by checking its *shape*:
+`SHOPIFY_STORE_DOMAIN` had been set including the `https://` scheme
+prefix, which `credentials()` then doubled into `https://https://...`
+when building the token-endpoint URL. `shopify.ts` now normalises this
+(`normalizeStoreDomain` — strips a leading `http(s)://` and any trailing
+slash) rather than assuming a clean hostname. 5 new tests
+(`tests/shopify-connector.test.ts`) cover the exact mistake found. 1338
+tests total, up from 1333 (all passing). `npx tsc --noEmit`, `npm run
+lint`, `npm run build`, `npm run db:verify` (73 tables, no new migration)
+all clean.
+
+**After the fix, the connector reached the real Shopify server** —
+confirmed by a real, specific HTTP 400 response from Shopify itself
+(`Oauth error app_not_installed`), a completely different failure mode
+from the DNS error, proving genuine network connectivity and a correctly
+-formed token-exchange request. This is Shopify's own honest answer:
+the app (identified by the configured client ID/secret) has not been
+installed on the store named by `SHOPIFY_STORE_DOMAIN` — step 5 of the
+Dev Dashboard setup (§44/the chat report's own instructions) was not yet
+completed, or the app was installed on a different store, or the app and
+store are not in the same Shopify organisation (a hard requirement for
+the client-credentials grant). This is not a code defect — the connector
+correctly made a real request and correctly reported a real failure
+rather than fabricating success.
+
+**A second, separate, unresolved configuration issue found:** the
+configured `SHOPIFY_API_VERSION` value does not match a version-string
+shape (`YYYY-MM`, e.g. `2026-04`) — confirmed by a structural check only,
+its actual value was never read into this report. Not fixed here: unlike
+the domain-prefix mistake, there is no universally-correct normalisation
+to guess at — the real, current API version must come from the Dev
+Dashboard itself. Needs correcting before the next verification attempt
+regardless of the app-installation fix above.
+
+**Capability matrix (evidence-based):**
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Configuration | VERIFIED | All 4 required env vars present; `isConfigured()` true |
+| Authentication | ATTEMPTED, FAILED | Real HTTP 400 from Shopify's own token endpoint — `app_not_installed` |
+| Shop identity | NOT TESTED | Authentication did not succeed |
+| Products | NOT TESTED | Blocked on authentication |
+| Orders | NOT TESTED | Blocked on authentication |
+| Inventory | NOT TESTED | Blocked on authentication |
+| Fulfilments | NOT TESTED | Blocked on authentication |
+| Write capabilities | DISABLED (unchanged) | No write method was called during verification; all remain structurally `not_supported` |
+
+**LIVE_VERIFIED: NO.**
+
+eBay confirmed untouched, still `CONFIGURATION_INCOMPLETE`. Anthropic
+remains separately gated by its own billing status (§ earlier). No PII
+was ever fetched or persisted — verification never reached a real order
+read.
+
+## 46. Next step
+
+**Immediate: two Shopify setup items, both requiring the user's own
+action in the Dev Dashboard, not code.** (1) Install the app on the
+correct store — Dev Dashboard → the app → Home → Install app → select
+the same store `SHOPIFY_STORE_DOMAIN` names, confirming the app and
+store are in the same organisation. (2) Correct `SHOPIFY_API_VERSION` to
+a real current version string from the Dev Dashboard (e.g. `2026-04`),
+not the placeholder value currently set. Once both are fixed, re-run the
+same live-verification sequence — no further code changes are expected
+to be needed for that to reach `LIVE_VERIFIED: YES`, since the token
+endpoint is now confirmed genuinely reachable.
 
 **The one genuinely unblocked, non-trivial code candidate (§43): order
 ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is
