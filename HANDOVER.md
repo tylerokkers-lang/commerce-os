@@ -3184,18 +3184,71 @@ remains separately gated by its own billing status (§ earlier). No PII
 was ever fetched or persisted — verification never reached a real order
 read.
 
-## 46. Next step
+## 46. Shopify Read-Only live verification — attempt 2, app now installed, store domain still misconfigured (a different value this time)
 
-**Immediate: two Shopify setup items, both requiring the user's own
-action in the Dev Dashboard, not code.** (1) Install the app on the
-correct store — Dev Dashboard → the app → Home → Install app → select
-the same store `SHOPIFY_STORE_DOMAIN` names, confirming the app and
-store are in the same organisation. (2) Correct `SHOPIFY_API_VERSION` to
-a real current version string from the Dev Dashboard (e.g. `2026-04`),
-not the placeholder value currently set. Once both are fixed, re-run the
-same live-verification sequence — no further code changes are expected
-to be needed for that to reach `LIVE_VERIFIED: YES`, since the token
-endpoint is now confirmed genuinely reachable.
+**Context:** §45/§46 left two open items — app not installed, and
+`SHOPIFY_API_VERSION` looking malformed. The user has since installed
+the app and re-verification was run again (same temporary
+Vitest-based approach as §45: no plain Node script, since `shopify.ts`
+needs the `@/` alias; deleted immediately after the run; no credential
+value was ever asserted on, logged to this document, or pasted into
+chat).
+
+**`SHOPIFY_API_VERSION` is now fixed** — it resolves to a real
+`YYYY-MM`-shaped version string. That half of §46's "next step" is
+done.
+
+**`SHOPIFY_STORE_DOMAIN` is now wrong in a different way.** Structural
+inspection (boolean shape checks only, never the raw value) showed it
+still has a leading scheme prefix — but this time the underlying host
+is not the store's own domain at all. The token-exchange request URL
+that resulted revealed (only in the local error message inside the
+test run, never printed here or in chat) that the configured value is
+a Shopify **Admin UI theme-editor URL** — the browser address you land
+on when editing a theme (host `admin.shopify.com`, path shape
+`/store/{handle}/themes/{id}/editor`) — not the Admin **API** domain,
+which must be `{handle}.myshopify.com`. These are two different hosts
+Shopify exposes for two different purposes; the client-credentials
+token endpoint only exists on the `.myshopify.com` host. This is the
+same underlying mistake class as §45 (pasting a URL from the browser
+address bar instead of the bare API domain) but a different source
+page, so `normalizeStoreDomain()`'s scheme-stripping does not (and
+should not) paper over it — there is no safe way to derive the correct
+`{handle}.myshopify.com` value by pattern-matching an admin.shopify.com
+URL, so this was correctly left for the user to fix rather than guessed
+at in code.
+
+**Result: `AUTHENTICATION = FAILED`, `LIVE_VERIFIED = NO` again**, for
+a genuinely different reason than §45 (data misconfiguration, not an
+uninstalled app or a code defect). No code changes were made or needed
+this run. Full capability table:
+
+| Capability | Status |
+|---|---|
+| Configuration (4 env vars present) | YES |
+| Authentication (token exchange) | FAILED — malformed request URL from a wrong store-domain value |
+| Shop identity | NOT TESTED (blocked on authentication) |
+| Products | NOT TESTED |
+| Orders | NOT TESTED |
+| Inventory | NOT TESTED |
+| Fulfilments (read-side) | NOT TESTED |
+| Write capabilities structurally disabled | YES (confirmed, unaffected by the above) |
+
+## 47. Next step
+
+**Immediate: fix `SHOPIFY_STORE_DOMAIN` in `.env.local`.** It must be
+the store's bare Admin API domain — `{your-store-handle}.myshopify.com`
+— with no `https://` prefix and no path. The easiest reliable source:
+Dev Dashboard → the app → API access (or Overview) page, which lists
+the exact Admin API host for the installed store; alternatively, from
+Shopify admin, Settings → General shows the store's own
+`.myshopify.com` domain directly. Do not copy this from the browser's
+address bar while inside any other admin page (theme editor, product
+pages, apps, etc.) — none of those URLs are the API domain. Once
+corrected, re-run the same live-verification sequence — no further code
+changes are expected to be needed, since both `SHOPIFY_API_VERSION` and
+app installation are now confirmed correct, and the token endpoint is
+confirmed genuinely reachable once the domain is right.
 
 **The one genuinely unblocked, non-trivial code candidate (§43): order
 ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is
