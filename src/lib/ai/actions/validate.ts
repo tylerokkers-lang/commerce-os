@@ -4,13 +4,24 @@ import { loadProductChannelProfitFacts, toPriceCostInput } from '@/lib/analytics
 import { buildProductChannelProfitAnalytics } from '@/lib/analytics/profitAnalytics'
 import { isKnown } from '@/lib/analytics/types'
 import { assessPriceChangePolicy } from '@/lib/automation/priceAutomation'
+import { assessCampaignActionPolicy, type CampaignActionType } from '@/lib/automation/advertisingAutomation'
 import { getAutomationSettings } from '@/lib/automation/settings'
+import { loadFreshCampaignFacts, loadConnectionStatus } from '@/lib/automation/handlers/advertisingApprovalExecutor'
 import type { SessionContext } from '@/lib/security/session'
+import type { FactBundle } from '../types'
 import { EXECUTABLE_ACTION_TYPES, type ComplianceStatusLabel, type LabelledFact, type ProposedAction, type RawActionIntent } from './types'
 
-/** Only what this module actually reads off a `FactBundle` — deliberately narrow so `propose.ts` can supply a freshly-refetched compliance snapshot at approval-request time without rebuilding a whole bundle. */
+/**
+ * Only what this module actually reads off a `FactBundle` — deliberately
+ * narrow so `propose.ts` can supply a freshly-refetched compliance
+ * snapshot at approval-request time without rebuilding a whole bundle.
+ * `advertisingCampaigns` (Milestone 22) widens this from its original
+ * price-only scope, but both real callers (`propose.ts`, `ai/repository.ts`)
+ * already pass a full `FactBundle`, which structurally satisfies it.
+ */
 export interface ComplianceContext {
   complianceIssues: readonly { productId: string; channel: string; verdict: string }[]
+  advertisingCampaigns: FactBundle['advertisingCampaigns']
 }
 
 /**
@@ -57,6 +68,7 @@ function invalid(intent: RawActionIntent, reason: string): ProposedAction {
     targetLabel: target.label,
     channel: intent.channel,
     newPriceMinor: null,
+    provider: null, externalAccountId: null, externalCampaignId: null, proposedDailyBudgetMinor: null, campaignClassification: null,
     currentState: [], proposedState: [],
     reason,
     supportingFacts: [],
@@ -141,6 +153,7 @@ async function validateUpdatePrice(session: SessionContext, intent: RawActionInt
     actionType: 'UPDATE_PRICE',
     targetEntityType: 'product', targetEntityId: matchedProductId, targetLabel: matchedProductTitle, channel: intent.channel,
     newPriceMinor,
+    provider: null, externalAccountId: null, externalCampaignId: null, proposedDailyBudgetMinor: null, campaignClassification: null,
     currentState, proposedState,
     reason: assessment.policy.reason,
     supportingFacts,
@@ -157,6 +170,118 @@ async function validateUpdatePrice(session: SessionContext, intent: RawActionInt
   }
 }
 
+const CAMPAIGN_ACTION_TYPE_MAP: Record<'PAUSE_CAMPAIGN' | 'INCREASE_BUDGET' | 'DECREASE_BUDGET', CampaignActionType> = {
+  PAUSE_CAMPAIGN: 'pause_campaign', INCREASE_BUDGET: 'increase_ad_budget', DECREASE_BUDGET: 'decrease_ad_budget',
+}
+
+/**
+ * Milestone 22 — `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET`,
+ * mirroring `validateUpdatePrice` above exactly: re-resolve everything
+ * live rather than trust the chat turn's cached `FactBundle` figures,
+ * call the one real domain policy engine, never invent a mapping.
+ *
+ * Reuses `advertisingApprovalExecutor.ts`'s own `loadFreshCampaignFacts`/
+ * `loadConnectionStatus` — the exact same live reads that function's own
+ * execution-time revalidation performs — rather than a second
+ * implementation of "how fresh is this campaign's data." `roas: null` and
+ * no `metricsSnapshot` match `CampaignActionRequest`'s own documented
+ * anticipation of exactly this chat-driven path (see that module's
+ * comment): a real numeric ROAS is not obtainable here without re-parsing
+ * `FactBundle`'s display-string metrics, which this codebase never does.
+ *
+ * `assessCampaignActionPolicy` never returns `allow_automatic` for any
+ * input (see that module's own comment) — unlike price changes, no
+ * `automationLevel` override is needed here to enforce "never auto-applies."
+ */
+async function validateCampaignAction(session: SessionContext, intent: RawActionIntent, bundle: ComplianceContext): Promise<ProposedAction> {
+  if (!intent.matchedCampaignKey || !intent.matchedCampaignName || !intent.channel) {
+    return invalid(intent, 'No campaign was matched for this action.')
+  }
+  const campaign = bundle.advertisingCampaigns.find((c) => c.campaignKey === intent.matchedCampaignKey)
+  if (!campaign) return invalid(intent, `${intent.matchedCampaignName} could not be found in the current campaign data.`)
+  if (!campaign.provider || !campaign.externalAccountId) {
+    return invalid(intent, `${campaign.campaignName}'s advertising platform is not known — this data was not synced from a real, identified connector, so it cannot be acted on through chat. Review on /advertising instead.`)
+  }
+
+  // `loadFreshCampaignFacts`/`loadConnectionStatus` are live-only,
+  // service-role Supabase reads with no demo branch — the same reason
+  // `validateUpdatePrice` above guards demo mode before its own live read.
+  if (session.isDemo) {
+    return invalid(intent, 'Demo mode has no live campaign/connection data to assess this action against — connect Supabase to try this for real.')
+  }
+
+  const actionType = CAMPAIGN_ACTION_TYPE_MAP[intent.actionType as 'PAUSE_CAMPAIGN' | 'INCREASE_BUDGET' | 'DECREASE_BUDGET']
+
+  let proposedDailyBudgetMinor: number | null = null
+  if (actionType !== 'pause_campaign') {
+    if (intent.requestedPriceMinor === null && intent.requestedPricePct === null) {
+      return invalid(intent, 'A budget change needs a specific amount — try "by 10%" or "to £30/day".')
+    }
+    if (campaign.dailyBudgetMinor === null && intent.requestedPricePct !== null) {
+      return invalid(intent, `${campaign.campaignName} has no known current daily budget to apply a percentage change against — try a specific amount instead.`)
+    }
+    proposedDailyBudgetMinor = intent.requestedPriceMinor ?? Math.round((campaign.dailyBudgetMinor ?? 0) * (1 + intent.requestedPricePct! / 100))
+    if (proposedDailyBudgetMinor <= 0) return invalid(intent, 'The requested budget is not a valid positive amount.')
+  }
+
+  const fresh = await loadFreshCampaignFacts(session.orgId, intent.channel, campaign.provider, campaign.externalAccountId, campaign.externalCampaignId)
+  const connectionStatus = await loadConnectionStatus(session.orgId, campaign.provider)
+  const settings = await getAutomationSettings(session)
+
+  const request = {
+    actionType,
+    provider: campaign.provider as never,
+    externalAccountId: campaign.externalAccountId,
+    externalCampaignId: campaign.externalCampaignId,
+    campaignName: campaign.campaignName,
+    classification: (campaign.classification || null) as never,
+    currentDailyBudgetMinor: fresh?.currentDailyBudgetMinor ?? campaign.dailyBudgetMinor,
+    proposedDailyBudgetMinor,
+    isPaused: fresh?.isPaused ?? campaign.isPaused,
+    connectionStatus,
+    dataAgeHours: fresh?.dataAgeHours ?? null,
+    roas: null,
+  }
+
+  const assessment = assessCampaignActionPolicy(request, settings)
+
+  const currentState: LabelledFact[] = [
+    { category: 'fact', label: 'Current state', value: request.isPaused ? 'Paused' : 'Active' },
+    ...(request.currentDailyBudgetMinor !== null
+      ? [{ category: 'fact' as const, label: 'Current daily budget', value: `${request.currentDailyBudgetMinor} minor units` }]
+      : []),
+  ]
+  const proposedState: LabelledFact[] = actionType === 'pause_campaign'
+    ? [{ category: 'calculated', label: 'Proposed state', value: 'Paused' }]
+    : [{ category: 'calculated', label: 'Proposed daily budget', value: `${proposedDailyBudgetMinor} minor units` }]
+  const supportingFacts: LabelledFact[] = assessment.policy.requirements.map((r) => ({
+    category: 'calculated' as const, label: r.label, value: `${r.satisfied ? 'OK' : 'NOT MET'} — ${r.detail}`,
+  }))
+
+  const outcome = assessment.policy.outcome === 'block' ? 'blocked' : 'requires_approval'
+  const compliance: ComplianceStatusLabel = 'unknown' // Compliance assessment does not cover advertising campaigns — the same 'unknown' REVIEW_CAMPAIGN already reports for this axis.
+
+  return {
+    id: `propose:${intent.actionType.toLowerCase()}:${campaign.campaignKey}:${Date.now()}`,
+    actionType: intent.actionType,
+    targetEntityType: 'advertising_campaign', targetEntityId: campaign.campaignKey, targetLabel: campaign.campaignName, channel: intent.channel,
+    newPriceMinor: null,
+    provider: campaign.provider, externalAccountId: campaign.externalAccountId, externalCampaignId: campaign.externalCampaignId,
+    proposedDailyBudgetMinor, campaignClassification: campaign.classification || null,
+    currentState, proposedState,
+    reason: assessment.policy.reason,
+    supportingFacts,
+    risk: 'A campaign action may affect traffic, sales and ad spend — not modelled here beyond the daily budget cap itself.',
+    complianceStatus: compliance,
+    confidence: request.currentDailyBudgetMinor !== null && request.dataAgeHours !== null ? 'high' : 'low',
+    outcome,
+    policyReasons: assessment.policy.requirements.filter((r) => !r.satisfied).map((r) => r.detail),
+    requiresApproval: outcome === 'requires_approval',
+    executable: true,
+    approvalId: null,
+  }
+}
+
 const REVIEW_ONLY_REASONS: Partial<Record<RawActionIntent['actionType'], string>> = {
   CREATE_LISTING: 'Creating a new listing needs lifecycle stage, supplier capability and a full compliance assessment resolved together — this chat does not yet assemble all three for an arbitrary product on demand. Review on /products and /compliance.',
   PAUSE_LISTING: 'Pausing a listing runs through the same publication-readiness engine as publishing — not yet wired to an arbitrary chat-initiated target in this milestone. Review on /automation.',
@@ -164,21 +289,11 @@ const REVIEW_ONLY_REASONS: Partial<Record<RawActionIntent['actionType'], string>
   REVIEW_ADVERTISING: 'No advertising connector exists in this codebase yet (Milestone 10/11) — there is no live spend data to act on.',
   REVIEW_SUPPLIER: 'Supplier review is a manual judgement call — see /suppliers for the full scoring detail.',
   REVIEW_PRODUCT: 'Review this product directly — see /products for full detail.',
-  // Milestone 15 built a real AdvertisingProvider connector architecture
-  // (sync + a controlled, approval-gated execution pipeline —
-  // `advertising/connectors/`, `automation/advertisingExecution.ts`) and no
-  // platform is actually connected/configured in this environment — the
-  // same "architecture exists, nothing is live yet" state every marketplace
-  // connector is already in. These three remain chat-`not_executable`
-  // deliberately, for a narrower reason than "no connector exists": routing
-  // them for real would mean threading which ad platform a campaign came
-  // from through `advertisingAnalytics.ts`'s `CampaignIdentity` into the
-  // chat `FactBundle`, which this milestone did not do, to keep the
-  // chat-intent surface unchanged while the new execution pipeline is
-  // still unverified against a live platform. See HANDOVER.md.
-  PAUSE_CAMPAIGN: 'Pausing a campaign through chat is not wired up yet — even though a real advertising connector architecture now exists, no platform is connected in this environment, and chat does not yet know which platform a given campaign runs on. Review on /advertising instead.',
-  INCREASE_BUDGET: 'Changing a campaign budget through chat is not wired up yet, for the same reason pausing is not — review on /advertising instead.',
-  DECREASE_BUDGET: 'Changing a campaign budget through chat is not wired up yet, for the same reason pausing is not — review on /advertising instead.',
+  // PAUSE_CAMPAIGN/INCREASE_BUDGET/DECREASE_BUDGET graduated to real,
+  // policy-evaluated proposals in Milestone 22 (`validateCampaignAction`
+  // below) — no longer listed here. A campaign of unknown provenance
+  // (no `provider` on its `FactBundle` entry) still honestly falls back
+  // to `invalid`, never a fabricated review-only reason.
 }
 
 function reviewOnly(intent: RawActionIntent, bundle: ComplianceContext): ProposedAction {
@@ -189,6 +304,7 @@ function reviewOnly(intent: RawActionIntent, bundle: ComplianceContext): Propose
     actionType: intent.actionType,
     targetEntityType: target.type, targetEntityId: target.id, targetLabel: target.label, channel: intent.channel,
     newPriceMinor: null,
+    provider: null, externalAccountId: null, externalCampaignId: null, proposedDailyBudgetMinor: null, campaignClassification: null,
     currentState: [], proposedState: [],
     reason: REVIEW_ONLY_REASONS[intent.actionType] ?? 'Not currently executable through this chat.',
     supportingFacts: [],
@@ -212,6 +328,7 @@ function validateEscalation(intent: RawActionIntent, bundle: ComplianceContext):
     actionType: intent.actionType,
     targetEntityType: target.type, targetEntityId: target.id, targetLabel: target.label, channel: intent.channel,
     newPriceMinor: null,
+    provider: null, externalAccountId: null, externalCampaignId: null, proposedDailyBudgetMinor: null, campaignClassification: null,
     currentState: [], proposedState: [],
     reason: `Flag ${target.label} for the owner's attention.`,
     supportingFacts: [],
@@ -230,6 +347,10 @@ export async function validateActionIntent(session: SessionContext, intent: RawA
   if (!EXECUTABLE_ACTION_TYPES.includes(intent.actionType)) return reviewOnly(intent, bundle)
 
   if (intent.actionType === 'UPDATE_PRICE') return validateUpdatePrice(session, intent, bundle)
+
+  if (intent.actionType === 'PAUSE_CAMPAIGN' || intent.actionType === 'INCREASE_BUDGET' || intent.actionType === 'DECREASE_BUDGET') {
+    return validateCampaignAction(session, intent, bundle)
+  }
 
   // REQUEST_APPROVAL / REVIEW_CAMPAIGN.
   return validateEscalation(intent, bundle)

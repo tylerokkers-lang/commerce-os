@@ -78,10 +78,13 @@ describe('classifyDecisionType: review-only and informational proposals never re
     for (const type of EXECUTABLE_ACTION_TYPES) expect(PROPOSED_ACTION_TYPES).toContain(type)
   })
 
-  it('review-only chat action types (PAUSE_CAMPAIGN, INCREASE_BUDGET, DECREASE_BUDGET, etc.) are excluded from EXECUTABLE_ACTION_TYPES', () => {
+  it('review-only chat action types (CREATE_LISTING, PAUSE_LISTING, etc.) are excluded from EXECUTABLE_ACTION_TYPES', () => {
     expect(NON_EXECUTABLE_TYPES).toEqual(
-      expect.arrayContaining(['CREATE_LISTING', 'PAUSE_LISTING', 'REVIEW_SUPPLIER', 'REVIEW_PRODUCT', 'ADJUST_INVENTORY_THRESHOLD', 'REVIEW_ADVERTISING', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET']),
+      expect.arrayContaining(['CREATE_LISTING', 'PAUSE_LISTING', 'REVIEW_SUPPLIER', 'REVIEW_PRODUCT', 'ADJUST_INVENTORY_THRESHOLD', 'REVIEW_ADVERTISING']),
     )
-    expect(NON_EXECUTABLE_TYPES).not.toEqual(expect.arrayContaining(['UPDATE_PRICE', 'REQUEST_APPROVAL', 'REVIEW_CAMPAIGN']))
+    // Milestone 22 — PAUSE_CAMPAIGN/INCREASE_BUDGET/DECREASE_BUDGET graduated to real, dispatchable decision types; no longer review-only.
+    expect(NON_EXECUTABLE_TYPES).not.toEqual(
+      expect.arrayContaining(['UPDATE_PRICE', 'REQUEST_APPROVAL', 'REVIEW_CAMPAIGN', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET']),
+    )
   })
 })

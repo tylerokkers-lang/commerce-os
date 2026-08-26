@@ -25,7 +25,9 @@ describe('ProposedActionType vocabulary is closed and exact', () => {
     for (const t of EXECUTABLE_ACTION_TYPES) expect(PROPOSED_ACTION_TYPES).toContain(t)
   })
 
-  it('exactly UPDATE_PRICE, REQUEST_APPROVAL and REVIEW_CAMPAIGN are executable today — every other type is review-only, deliberately, not by omission', () => {
-    expect([...EXECUTABLE_ACTION_TYPES].sort()).toEqual(['REQUEST_APPROVAL', 'REVIEW_CAMPAIGN', 'UPDATE_PRICE'])
+  it('exactly UPDATE_PRICE, REQUEST_APPROVAL, REVIEW_CAMPAIGN, PAUSE_CAMPAIGN, INCREASE_BUDGET and DECREASE_BUDGET are executable today (Milestone 22) — every other type is review-only, deliberately, not by omission', () => {
+    expect([...EXECUTABLE_ACTION_TYPES].sort()).toEqual(
+      ['DECREASE_BUDGET', 'INCREASE_BUDGET', 'PAUSE_CAMPAIGN', 'REQUEST_APPROVAL', 'REVIEW_CAMPAIGN', 'UPDATE_PRICE'].sort(),
+    )
   })
 })

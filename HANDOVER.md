@@ -2639,7 +2639,104 @@ verification run — no real Amazon Ads credentials exist in this
 environment, so `runAndRecordProviderVerification`'s new Amazon-Ads-aware
 branch has never executed against a real report.
 
-## 40. Next step
+## 40. Milestone 22 (Chat-Executable Campaign Actions) — closing the last documented chat/advertising gap, no credentials required
+
+Requested as "the next unblocked milestone," with eBay deliberately held at
+`CONFIGURATION_INCOMPLETE` pending developer-supplied credentials (§38) and
+Amazon Ads live verification blocked on credentials this environment does
+not have (§39). Inspection (a foreground research pass, not code changes
+first) found this was the one substantial, genuinely-unblocked gap left:
+`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` were chat-recognised
+(`intentExtraction.ts` already matched them against real campaigns) but
+always `not_executable` — `validate.ts` routed them straight to a
+review-only reason before ever consulting a domain engine.
+
+**A materially better starting point than HANDOVER previously documented.**
+§31/§40's own framing ("threading `CampaignIdentity`'s `provider` through
+`FactBundle`... would need") undersold how much already existed:
+`CampaignIdentity` already carried `provider`/`externalAccountId`
+(Milestone 16); `automation/advertisingAutomation.ts`'s
+`assessCampaignActionPolicy` (Milestone 15) was fully built and
+structurally can never auto-permit a spend change, for any input; most
+importantly, `automation/handlers/advertisingApprovalExecutor.ts`'s
+`executeApprovedCampaignAction` — the full execution-time revalidation,
+capability-gate, and connector-submission chain — was **already wired into
+`approvalWorkflow.ts`'s `approveDecision`** via `executionDispatch.ts`'s
+`classifyDecisionType`. The gap was narrower than documented: nothing
+upstream of that chain had ever produced a real `pause_campaign`/
+`increase_ad_budget`/`decrease_ad_budget` `ai_decisions` row for it to act
+on. This milestone closes exactly that, and touches none of the
+already-complete execution machinery.
+
+**What was built**, entirely in `src/lib/ai/`:
+- `FactBundle.advertisingCampaigns` (`ai/types.ts`) gained
+  `externalCampaignId`/`provider`/`externalAccountId`/`dailyBudgetMinor` —
+  raw identity, never re-derived from the existing display-string fields
+  (`spend`/`roas`/etc.) — mapped straight from `CampaignIdentity` in
+  `factBundle.ts`'s one existing `advertisingCampaigns` line.
+- `EXECUTABLE_ACTION_TYPES` (`ai/actions/types.ts`) gained all three
+  types. `ProposedAction` gained `provider`/`externalAccountId`/
+  `externalCampaignId`/`proposedDailyBudgetMinor`/`campaignClassification` —
+  the same "structured value, never re-parsed from a formatted string"
+  discipline `newPriceMinor` already established for price changes.
+- `validate.ts`'s new `validateCampaignAction` mirrors `validateUpdatePrice`
+  exactly: resolves the matched campaign from the bundle, refuses to act
+  when its `provider`/`externalAccountId` is unknown (a hand-entered/demo/
+  pre-Milestone-15 row) rather than guessing, blocks in demo mode (the
+  same live-read-with-no-demo-branch reason `validateUpdatePrice` already
+  documents), computes the proposed budget from the user's stated
+  percentage or absolute amount, then calls the real
+  `assessCampaignActionPolicy` — reusing `advertisingApprovalExecutor.ts`'s
+  own exported `loadFreshCampaignFacts`/`loadConnectionStatus` rather than
+  a second implementation of "how fresh is this data." Unlike price
+  changes, no `automationLevel: 'assisted'` override is needed:
+  `assessCampaignActionPolicy` has no code path that can ever return
+  `allow_automatic`, for any settings.
+- `propose.ts`'s `decisionType`/`title` mapping extended with the three
+  new types (`pause_campaign`/`increase_ad_budget`/`decrease_ad_budget` —
+  the exact strings `executionDispatch.ts`'s `ADVERTISING_DECISION_TYPES`
+  already expects), and `actionPayload.inputFacts` now carries the five
+  structured advertising fields `dispatchApprovedExecution` requires
+  before it will dispatch a campaign decision at all.
+
+**Not touched, deliberately**: `advertisingAutomation.ts`,
+`advertisingExecution.ts`, `advertisingApprovalExecutor.ts`,
+`executionDispatch.ts`, `approvalWorkflow.ts` — every one of these was
+already correct and already wired; this milestone only builds the missing
+upstream half that gives them something real to receive.
+
+**Tested:** 5 existing test files updated for the new required fields/
+vocabulary (`chat-action-vocabulary`, `execution-dispatch`,
+`chat-campaign-intent`, `chat-advertising`, `chat-recommend`) — 1280 tests
+total, unchanged count (no new dedicated test file: `validateCampaignAction`
+lives entirely in `validate.ts`, `server-only` and untestable in Vitest,
+the same established limitation `validateUpdatePrice` already carries;
+`buildFactBundle`'s new field mapping is a direct, type-checked assignment
+with no existing `factBundle.test.ts` precedent to extend, consistent with
+every other field in that function). `npx tsc --noEmit`, `npm run lint`,
+`npm run build`, `npm run db:verify` (73 tables, no new migration — no
+schema change was needed) all clean.
+
+**Not live-verified:** no real Amazon Ads/Meta/Google/TikTok credentials
+exist in this environment, and this environment's dev-server single-
+instance lock was held by another session throughout, so no browser
+check confirms a real chat-originated campaign proposal reaching
+`/approvals` end to end. Confirmed via `tsc`/tests/build only, the same
+disclosed limitation as §39.
+
+**Risk posture unchanged and re-confirmed:** `assessCampaignActionPolicy`
+never returns `allow_automatic` for any settings/automation level — a
+chat-originated campaign action can only ever reach `blocked` or
+`requires_approval`, exactly like every other execution path this
+codebase has ever built. No automatic provider write exists anywhere in
+this change.
+
+**Milestone:** 22 — the next genuinely unblocked increment after
+Milestones 20/21's credential-gated stopping points, per the user's own
+instruction to continue only where no developer approval/credentials are
+required.
+
+## 41. Next step
 
 The two real options remaining, per `docs/MILESTONES.md`: (1) **the one
 gap §36/§39 still leave open** — an actual live verification run, which
@@ -2652,11 +2749,12 @@ credentials exist, run `verificationCheck.ts`'s `runAdvertisingVerificationHarne
 first (read-only, safe) before ever considering
 `writeVerification.ts`'s `runWriteVerification` against a genuine
 sandbox/test campaign — never against a real, live-spending one.
-`ai/actions/validate.ts`'s `EXECUTABLE_ACTION_TYPES` and
-`REVIEW_ONLY_REASONS` are exactly where `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
-`DECREASE_BUDGET` would graduate to chat-executable, once `CampaignIdentity`'s
-`provider` is threaded through `FactBundle` — never a parallel proposal
-mechanism.
+`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` graduated to
+chat-executable in §40 (Milestone 22) — `EXECUTABLE_ACTION_TYPES`,
+`FactBundle.advertisingCampaigns`' identity fields, and `validateCampaignAction`
+are all real now, reusing `advertisingApprovalExecutor.ts`'s already-wired
+execution path rather than a parallel proposal mechanism. Not yet
+live-verified — see §40's own "not live-verified" note.
 
 Five smaller, genuine loose ends worth picking up opportunistically rather
 than as their own milestone: (1) a live-Supabase-backed test harness does
@@ -2673,12 +2771,13 @@ CEO — the structural safety guarantees (§28/§29/§30/§31) hold either way,
 but whether the model's live answers are actually good in practice is
 unverified in this environment; (4) a real Supabase project should be
 exercised end-to-end for `requestActionApproval` -> `/approvals` ->
-`approveDecision`, for product, `REVIEW_CAMPAIGN`, and (once wired)
+`approveDecision`, for product, `REVIEW_CAMPAIGN`, and (now built, §40)
 budget/pause proposals alike, before relying on any of them for a real
 business; (5) `ai/actions/recommend.ts`'s `campaignRecommendations`
-deliberately never generates a `scale_opportunity` recommendation — the
-same `CampaignIdentity`-through-`FactBundle` threading this section's
-option (2) would need also unblocks that. When international expansion is
+deliberately never generates a `scale_opportunity` recommendation — a
+separate, narrower gap than the one §40 closed (this one is about which
+recommendations `recommend.ts` chooses to *surface*, not whether a
+campaign action can execute once proposed) and still open. When international expansion is
 eventually revisited (the *other* "Milestone 15" — see §31's numbering
 note), read Milestone 9's section first — the market model, FX
 intelligence, country-aware compliance delegation and expansion engine it

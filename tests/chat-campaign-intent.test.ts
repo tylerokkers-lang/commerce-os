@@ -11,16 +11,17 @@ import type { FactBundle } from '@/lib/ai/types'
  * `CAMPAIGN_ACTION_TYPES` branch, which matches against
  * `bundle.advertisingCampaigns` instead of `bundle.products`. `validate.ts`
  * itself is `server-only` and cannot be imported into Vitest at all in this
- * project (see that module's callers for the established pattern) — the
- * "PAUSE_CAMPAIGN/INCREASE_BUDGET/DECREASE_BUDGET are honestly
- * not_executable, REVIEW_CAMPAIGN reaches requires_approval" behaviour is
- * verified live via the browser instead, not here.
+ * project (see that module's callers for the established pattern) — since
+ * Milestone 22, `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` reach
+ * a real, policy-evaluated `requires_approval`/`blocked`/`invalid` outcome
+ * exactly like `REVIEW_CAMPAIGN`/`UPDATE_PRICE` already did; that behaviour
+ * is verified live via the browser instead of here.
  */
 
 const CAMPAIGNS: FactBundle['advertisingCampaigns'] = [
-  { campaignKey: 'amazon_uk:camp-1', campaignName: 'Summer Sale Blitz', channel: 'amazon_uk', isPaused: false, spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — no revenue', acosPct: 'unavailable — no revenue', classification: 'wasted_spend', severity: 'critical', reasons: [] },
-  { campaignKey: 'shopify:camp-2', campaignName: 'Evergreen Brand Awareness', channel: 'shopify', isPaused: false, spend: '£100.00', attributedRevenue: '£600.00', roas: '6.00', acosPct: '16.7%', classification: 'scale_opportunity', severity: 'info', reasons: [] },
-  { campaignKey: 'amazon_uk:camp-3', campaignName: 'Sale', channel: 'amazon_uk', isPaused: false, spend: '£50.00', attributedRevenue: '£150.00', roas: '3.00', acosPct: '33.3%', classification: 'healthy', severity: 'info', reasons: [] }, // deliberately a substring of "Summer Sale Blitz" to test ambiguity
+  { campaignKey: 'amazon_uk:camp-1', campaignName: 'Summer Sale Blitz', channel: 'amazon_uk', isPaused: false, spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — no revenue', acosPct: 'unavailable — no revenue', classification: 'wasted_spend', severity: 'critical', reasons: [], externalCampaignId: 'camp-1', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 5000 },
+  { campaignKey: 'shopify:camp-2', campaignName: 'Evergreen Brand Awareness', channel: 'shopify', isPaused: false, spend: '£100.00', attributedRevenue: '£600.00', roas: '6.00', acosPct: '16.7%', classification: 'scale_opportunity', severity: 'info', reasons: [], externalCampaignId: 'camp-2', provider: 'meta_ads', externalAccountId: 'acct-2', dailyBudgetMinor: 3000 },
+  { campaignKey: 'amazon_uk:camp-3', campaignName: 'Sale', channel: 'amazon_uk', isPaused: false, spend: '£50.00', attributedRevenue: '£150.00', roas: '3.00', acosPct: '33.3%', classification: 'healthy', severity: 'info', reasons: [], externalCampaignId: 'camp-3', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 1500 }, // deliberately a substring of "Summer Sale Blitz" to test ambiguity
 ]
 
 describe('extractActionIntent: campaign-vocabulary factual grounding', () => {

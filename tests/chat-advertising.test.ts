@@ -125,14 +125,14 @@ describe('buildOfflineAnswer: advertising section', () => {
   }
 
   it('a wasted-spend campaign is surfaced by name with its classification, never silently omitted', () => {
-    const bundle = bundleWith([{ campaignKey: 'amazon_uk:camp-1', campaignName: 'Wasteful Campaign', channel: 'amazon_uk', isPaused: false, spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — x', acosPct: 'unavailable — x', classification: 'wasted_spend', severity: 'critical', reasons: ['x'] }])
+    const bundle = bundleWith([{ campaignKey: 'amazon_uk:camp-1', campaignName: 'Wasteful Campaign', channel: 'amazon_uk', isPaused: false, spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — x', acosPct: 'unavailable — x', classification: 'wasted_spend', severity: 'critical', reasons: ['x'], externalCampaignId: 'camp-1', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 5000 }])
     const answer = buildOfflineAnswer(bundle, 'Which campaigns are wasting the most money?')
     expect(answer).toContain('Wasteful Campaign')
     expect(answer).toContain('WASTED_SPEND')
   })
 
   it('an all-healthy set of campaigns says so explicitly, never omitting the section as if there were no data', () => {
-    const bundle = bundleWith([{ campaignKey: 'x', campaignName: 'Good Campaign', channel: 'shopify', isPaused: false, spend: '£100.00', attributedRevenue: '£500.00', roas: '5.00', acosPct: '20.0%', classification: 'healthy', severity: 'info', reasons: [] }])
+    const bundle = bundleWith([{ campaignKey: 'x', campaignName: 'Good Campaign', channel: 'shopify', isPaused: false, spend: '£100.00', attributedRevenue: '£500.00', roas: '5.00', acosPct: '20.0%', classification: 'healthy', severity: 'info', reasons: [], externalCampaignId: 'x', provider: 'meta_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 3000 }])
     const answer = buildOfflineAnswer(bundle, 'What is my advertising ROAS?')
     expect(answer).toContain('healthy')
   })

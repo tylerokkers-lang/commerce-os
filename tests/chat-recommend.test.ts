@@ -107,6 +107,7 @@ describe('buildRecommendations: advertising campaigns (Milestone 14)', () => {
       campaignKey: 'amazon_uk:camp-1', campaignName: 'Wasteful Campaign', channel: 'amazon_uk', isPaused: false,
       spend: '£280.00', attributedRevenue: '£0.00', roas: 'unavailable — no revenue', acosPct: 'unavailable — no revenue',
       classification: 'wasted_spend', severity: 'critical', reasons: ['Spent with zero conversions.'],
+      externalCampaignId: 'camp-1', provider: 'amazon_ads', externalAccountId: 'acct-1', dailyBudgetMinor: 5000,
       ...overrides,
     }
   }

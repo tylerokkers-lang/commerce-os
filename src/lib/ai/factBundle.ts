@@ -149,6 +149,8 @@ export function buildFactBundle(input: {
       spend: moneyMetric(c.spend), attributedRevenue: moneyMetric(c.attributedRevenue),
       roas: ratioMetric(c.roas), acosPct: pctMetric(c.acosPct),
       classification: classification.classification, severity: classification.severity, reasons: classification.reasons,
+      externalCampaignId: c.identity.externalId, provider: c.identity.provider, externalAccountId: c.identity.externalAccountId,
+      dailyBudgetMinor: c.identity.dailyBudgetMinor,
     })),
     advertisingScorecard: input.advertisingIntelligence && input.advertisingIntelligence.scorecard.totalCampaigns > 0
       ? {

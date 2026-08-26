@@ -97,6 +97,19 @@ export interface FactBundle {
     campaignKey: string; campaignName: string; channel: string; isPaused: boolean
     spend: string; attributedRevenue: string; roas: string; acosPct: string
     classification: string; severity: string; reasons: readonly string[]
+    /**
+     * Milestone 22 — the raw identity `automation/advertisingAutomation.ts`'s
+     * `CampaignActionRequest` needs to actually act on this campaign
+     * (`PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET`), never derived
+     * from the display strings above. `provider`/`externalAccountId` are
+     * `null` for a campaign of unknown provenance (hand-entered/demo/
+     * pre-Milestone-15 data) — chat-driven execution honestly refuses to
+     * act on those rather than guessing a platform.
+     */
+    externalCampaignId: string
+    provider: string | null
+    externalAccountId: string | null
+    dailyBudgetMinor: number | null
   }[]
   advertisingScorecard: { overall: string; totalCampaigns: number; totalSpend: string; overallRoas: string; tacosPct: string } | null
 }

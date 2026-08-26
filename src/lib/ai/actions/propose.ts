@@ -61,11 +61,21 @@ export async function proposeAction(session: SessionContext, userMessage: string
   // trail nor from `advertising/monitor.ts`'s own campaign reviews, even
   // though both decision types dispatch identically today (both are pure
   // escalations — see `executionDispatch.ts`'s `ESCALATION_DECISION_TYPES`).
+  // Milestone 22 — `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` map
+  // onto `executionDispatch.ts`'s `ADVERTISING_DECISION_TYPES` exactly,
+  // the same three strings `advertising/monitor.ts`'s own campaign
+  // recommendations already use for this domain.
   const decisionType = validated.actionType === 'UPDATE_PRICE'
     ? 'update_price'
     : validated.actionType === 'REVIEW_CAMPAIGN'
       ? 'review_campaign'
-      : 'request_approval'
+      : validated.actionType === 'PAUSE_CAMPAIGN'
+        ? 'pause_campaign'
+        : validated.actionType === 'INCREASE_BUDGET'
+          ? 'increase_ad_budget'
+          : validated.actionType === 'DECREASE_BUDGET'
+            ? 'decrease_ad_budget'
+            : 'request_approval'
 
   const { id } = await proposeApproval({
     orgId: session.orgId,
@@ -76,7 +86,11 @@ export async function proposeAction(session: SessionContext, userMessage: string
       ? `Update price: ${validated.targetLabel}`
       : validated.actionType === 'REVIEW_CAMPAIGN'
         ? `Review campaign: ${validated.targetLabel}`
-        : validated.reason,
+        : validated.actionType === 'PAUSE_CAMPAIGN'
+          ? `Pause campaign: ${validated.targetLabel}`
+          : validated.actionType === 'INCREASE_BUDGET' || validated.actionType === 'DECREASE_BUDGET'
+            ? `Change budget: ${validated.targetLabel}`
+            : validated.reason,
     detail: validated.reason,
     reasoning: `Proposed via Commerce Intelligence chat: "${userMessage}". ${validated.reason}`,
     confidence: validated.confidence === 'high' ? 0.9 : validated.confidence === 'medium' ? 0.6 : 0.3,
@@ -89,12 +103,22 @@ export async function proposeAction(session: SessionContext, userMessage: string
       entityType: validated.targetEntityType,
       entityId: validated.targetEntityId,
       reason: validated.reason,
-      // `productTitle`/`newPriceMinor` (Milestone 16) are the structured
-      // values `automation/handlers/priceApprovalExecutor.ts` needs at
-      // execution time — `currentState`/`proposedState` are formatted
-      // display strings for the chat UI only, never re-parsed for this.
+      // `productTitle`/`newPriceMinor` (Milestone 16) and
+      // `provider`/`externalAccountId`/`externalCampaignId`/`campaignName`/
+      // `classification`/`proposedDailyBudgetMinor` (Milestone 22) are the
+      // structured values `automation/handlers/priceApprovalExecutor.ts`/
+      // `advertisingApprovalExecutor.ts` need at execution time —
+      // `currentState`/`proposedState` are formatted display strings for
+      // the chat UI only, never re-parsed for this. `dispatchApprovedExecution`
+      // (`approvalWorkflow.ts`) requires the four advertising identity
+      // fields to be present before it will even attempt to dispatch a
+      // campaign decision — `validateCampaignAction` never reaches
+      // `requires_approval` without all four already resolved.
       inputFacts: {
         channel: validated.channel, productTitle: validated.targetLabel, newPriceMinor: validated.newPriceMinor,
+        provider: validated.provider, externalAccountId: validated.externalAccountId, externalCampaignId: validated.externalCampaignId,
+        campaignName: validated.targetLabel, classification: validated.campaignClassification,
+        proposedDailyBudgetMinor: validated.proposedDailyBudgetMinor,
         currentState: validated.currentState, proposedState: validated.proposedState,
       },
     },

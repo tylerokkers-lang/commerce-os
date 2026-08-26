@@ -20,20 +20,23 @@ import type { ChannelKey } from '@/lib/core/domain'
  */
 
 /**
- * The finite, closed vocabulary. Three are backed by a real deterministic
+ * The finite, closed vocabulary. Six are backed by a real deterministic
  * domain engine and a real path into the existing approval system —
  * `UPDATE_PRICE` (`profitability/channels.ts` + `automation/priceAutomation.ts`'s
- * policy check), `REQUEST_APPROVAL`, and (Milestone 14) `REVIEW_CAMPAIGN`
- * (both pure escalations — the same `request_approval` automation action
- * type Milestone 9's expansion engine already uses for "flag this for the
- * owner, nothing to execute"). The rest are recognised — so a real user
- * intent is never silently dropped — but this milestone does not yet
- * assemble the full input a genuine domain engine for them would need
- * (lifecycle stage, resolved supplier capability, a full
- * `ComplianceAssessment`, an inventory-threshold config path, or — for
- * `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/`DECREASE_BUDGET` — a real advertising
- * platform connector to actually change a live budget/pause state, which
- * does not exist in this codebase); they are always `executable: false`,
+ * policy check), `REQUEST_APPROVAL` and `REVIEW_CAMPAIGN` (both pure
+ * escalations — the same `request_approval` automation action type
+ * Milestone 9's expansion engine already uses for "flag this for the
+ * owner, nothing to execute"), and (Milestone 22) `PAUSE_CAMPAIGN`/
+ * `INCREASE_BUDGET`/`DECREASE_BUDGET` (`automation/advertisingAutomation.ts`'s
+ * `assessCampaignActionPolicy`, which structurally can never auto-permit a
+ * spend change — see that module's own comment — routed to the real
+ * `advertisingApprovalExecutor.ts` execution path Milestone 16 already
+ * built and wired into `approvalWorkflow.ts`, unchanged by this addition).
+ * The rest are recognised — so a real user intent is never silently
+ * dropped — but this milestone does not yet assemble the full input a
+ * genuine domain engine for them would need (lifecycle stage, resolved
+ * supplier capability, a full `ComplianceAssessment`, an
+ * inventory-threshold config path); they are always `executable: false`,
  * routed to the real page as a review pointer instead of a fake approval.
  */
 export type ProposedActionType =
@@ -57,7 +60,9 @@ export const PROPOSED_ACTION_TYPES: readonly ProposedActionType[] = [
 ]
 
 /** The only types this milestone can actually route into the real approval system. See the module comment above for why the rest cannot yet. */
-export const EXECUTABLE_ACTION_TYPES: readonly ProposedActionType[] = ['UPDATE_PRICE', 'REQUEST_APPROVAL', 'REVIEW_CAMPAIGN']
+export const EXECUTABLE_ACTION_TYPES: readonly ProposedActionType[] = [
+  'UPDATE_PRICE', 'REQUEST_APPROVAL', 'REVIEW_CAMPAIGN', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET',
+]
 
 /** Which vocabulary members target a product (matched against `FactBundle.products`) vs an advertising campaign (matched against `FactBundle.advertisingCampaigns`) — `intentExtraction.ts` uses this to decide which real entity list to match a user's message against. */
 export const CAMPAIGN_ACTION_TYPES: readonly ProposedActionType[] = ['REVIEW_CAMPAIGN', 'PAUSE_CAMPAIGN', 'INCREASE_BUDGET', 'DECREASE_BUDGET']
@@ -152,6 +157,25 @@ export interface ProposedAction {
    * string.
    */
   newPriceMinor: number | null
+  /**
+   * Milestone 22 — present only for `PAUSE_CAMPAIGN`/`INCREASE_BUDGET`/
+   * `DECREASE_BUDGET` (all `null` for every other type, `newPriceMinor`
+   * included). The same "structured value, never re-parsed from a
+   * formatted string" discipline as `newPriceMinor` above:
+   * `automation/handlers/advertisingApprovalExecutor.ts` needs exactly
+   * these at execution time via `ai_decisions.action_payload.inputFacts`,
+   * never derived from `currentState`/`proposedState`'s display strings.
+   * `provider`/`externalAccountId`/`externalCampaignId` come straight from
+   * the matched `FactBundle.advertisingCampaigns` entry — never guessed —
+   * and are `null` together whenever that campaign's provenance is
+   * genuinely unknown (a hand-entered/demo/pre-Milestone-15 row), in which
+   * case this proposal is `invalid`, not `requires_approval`.
+   */
+  provider: string | null
+  externalAccountId: string | null
+  externalCampaignId: string | null
+  proposedDailyBudgetMinor: number | null
+  campaignClassification: string | null
   currentState: readonly LabelledFact[]
   proposedState: readonly LabelledFact[]
   reason: string
