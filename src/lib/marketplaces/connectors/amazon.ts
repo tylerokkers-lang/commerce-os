@@ -258,7 +258,7 @@ export class AmazonConnector implements MarketplaceConnector {
               : 'paid',
       totalMinor: order.OrderTotal ? Math.round(Number(order.OrderTotal.Amount) * 100) : 0,
       currency: order.OrderTotal?.CurrencyCode ?? 'GBP',
-      lineItemRefs: [], // Line items require a separate call per order to the Orders API.
+      lineItems: [], // Line items require a separate call per order to the Orders API — not made here.
       raw: order as unknown as Record<string, unknown>,
     }))
 

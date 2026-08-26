@@ -3,6 +3,8 @@ import 'server-only'
 import { runExecutionRecovery, type ExecutionRecoveryResult } from './recovery'
 import { runAdvertisingSyncForConnectedOrgs, type MultiOrgAdvertisingSyncResult } from '@/lib/advertising/sync'
 import { runCampaignReviewForConnectedOrgs, type MultiOrgCampaignReviewResult } from '@/lib/advertising/monitor'
+import { runOrderIngestionForConnectedOrgs, type OrderIngestionRunResult } from '@/lib/orders/ingestionRun'
+import { runPurchaseWorkflowForConnectedOrgs, type PurchaseWorkflowResult } from '@/lib/orders/purchaseWorkflow'
 import { classifyMaintenanceOutcome, MAINTENANCE_JOB_KEY, MAINTENANCE_LOCK_STALE_AFTER_MS } from './maintenanceHealth'
 import type { AutomationStore, MaintenanceRunRecord } from './store'
 
@@ -24,6 +26,16 @@ import type { AutomationStore, MaintenanceRunRecord } from './store'
  *           |
  *   runCampaignReviewForConnectedOrgs -- OBSERVE -> EVALUATE -> RECOMMEND, never executes
  *           |
+ *   runOrderIngestionForConnectedOrgs -- real order-ingestion write path
+ *           |                             (order-ingestion milestone), writes
+ *           |                             orders/order_items, never a supplier
+ *           |                             or marketplace write
+ *           |
+ *   runPurchaseWorkflowForConnectedOrgs -- resolves a supplier and creates
+ *           |                               the AWAITING_PURCHASE fulfilment +
+ *           |                               notification for newly-paid orders,
+ *           |                               never places a purchase itself
+ *           |
  *   completeMaintenanceRun -- structured summary, Phase 6/9
  *
  * Advertising sync runs before the campaign monitor deliberately (Phase 15)
@@ -31,16 +43,26 @@ import type { AutomationStore, MaintenanceRunRecord } from './store'
  * could obtain — never the other way round, and never blocking: a report
  * still `processing` this cycle simply means no new facts yet, and the
  * monitor's own existing freshness policy (`MAX_CAMPAIGN_DATA_AGE_HOURS`)
- * already refuses to recommend against stale data either way.
+ * already refuses to recommend against stale data either way. Order
+ * ingestion runs before the purchase workflow for the identical reason: a
+ * newly-ingested `'paid'` order should reach the AWAITING_PURCHASE step in
+ * the same cycle it arrives, not the next one.
  *
  * No subsystem call is wrapped in anything that could turn a
  * recommendation into a live execution — `runExecutionRecovery` only ever
  * calls a connector's read-only `verifyListingState`/`verifyCampaignState`,
  * `runAdvertisingSyncForConnectedOrgs` only ever reads (a report request
  * and a report download are both reads of the provider's own reporting
- * data, never a campaign mutation), and `runCampaignReviewForConnectedOrgs`
+ * data, never a campaign mutation), `runCampaignReviewForConnectedOrgs`
  * never imports a connector's write methods at all (see that module's own
- * comment). A recommendation this run creates lands on `/approvals`
+ * comment), `runOrderIngestionForConnectedOrgs` only ever calls a
+ * connector's read-only `fetchOrders`, and `runPurchaseWorkflowForConnectedOrgs`
+ * never calls a supplier's API, a connector's write methods, or anything
+ * that moves money — it only ever creates an internal `'awaiting_supplier'`
+ * fulfilment record and a notification; a fulfilment leaves that status
+ * only via `manualPurchase.ts`'s `recordSupplierPurchase`, called
+ * exclusively from a session-authenticated API route a person triggers
+ * themselves. A recommendation this run creates lands on `/approvals`
  * exactly like a chat-originated one and requires the same human approval
  * before anything executes.
  *
@@ -72,6 +94,8 @@ export type MaintenanceOutcome =
       recovery: ExecutionRecoveryResult
       advertisingSync: MultiOrgAdvertisingSyncResult
       monitoring: MultiOrgCampaignReviewResult
+      orderIngestion: OrderIngestionRunResult
+      purchaseWorkflow: PurchaseWorkflowResult
     }
 
 export async function runMaintenance(store: AutomationStore, triggeredBy: 'scheduler' | 'manual'): Promise<MaintenanceOutcome> {
@@ -116,21 +140,44 @@ export async function runMaintenance(store: AutomationStore, triggeredBy: 'sched
     }
   }
 
+  let orderIngestion: OrderIngestionRunResult
+  let orderIngestionThrew = false
+  try {
+    orderIngestion = await runOrderIngestionForConnectedOrgs()
+  } catch (error) {
+    orderIngestionThrew = true
+    orderIngestion = {
+      channelsChecked: 0, ordersFetched: 0, created: 0, statusChanged: 0, statusChangeBlocked: 0,
+      alreadyIngested: 0, rejected: 0, errors: [error instanceof Error ? error.message : String(error)], createdOrderIds: [],
+    }
+  }
+
+  let purchaseWorkflow: PurchaseWorkflowResult
+  let purchaseWorkflowThrew = false
+  try {
+    purchaseWorkflow = await runPurchaseWorkflowForConnectedOrgs()
+  } catch (error) {
+    purchaseWorkflowThrew = true
+    purchaseWorkflow = { ordersChecked: 0, fulfilmentsCreated: 0, ordersWithNoSupplierAvailable: 0, errors: [error instanceof Error ? error.message : String(error)] }
+  }
+
   const status = classifyMaintenanceOutcome([
     { threw: recoveryThrew, errorCount: recovery.errors.length },
     { threw: advertisingSyncThrew, errorCount: advertisingSync.errors.length },
     { threw: monitoringThrew, errorCount: monitoring.totals.errors.length },
+    { threw: orderIngestionThrew, errorCount: orderIngestion.errors.length },
+    { threw: purchaseWorkflowThrew, errorCount: purchaseWorkflow.errors.length },
   ])
 
-  const allErrors = [...recovery.errors, ...advertisingSync.errors, ...monitoring.totals.errors]
+  const allErrors = [...recovery.errors, ...advertisingSync.errors, ...monitoring.totals.errors, ...orderIngestion.errors, ...purchaseWorkflow.errors]
 
   await store.completeMaintenanceRun(lock.runId, {
     status,
-    itemsProcessed: recovery.candidatesFound + advertisingSync.accountsChecked + monitoring.totals.campaignsEvaluated,
-    itemsFailed: recovery.failed + recovery.unknown + advertisingSync.reportsFailed + monitoring.totals.errors.length,
+    itemsProcessed: recovery.candidatesFound + advertisingSync.accountsChecked + monitoring.totals.campaignsEvaluated + orderIngestion.ordersFetched + purchaseWorkflow.ordersChecked,
+    itemsFailed: recovery.failed + recovery.unknown + advertisingSync.reportsFailed + monitoring.totals.errors.length + orderIngestion.rejected + purchaseWorkflow.errors.length,
     decisionsCreated: monitoring.totals.recommendationsCreated,
     error: allErrors.length > 0 ? allErrors.join('; ') : null,
-    summary: { triggeredBy, recovery, advertisingSync, monitoring },
+    summary: { triggeredBy, recovery, advertisingSync, monitoring, orderIngestion, purchaseWorkflow },
   })
 
   const finishedAt = new Date().toISOString()
@@ -143,5 +190,7 @@ export async function runMaintenance(store: AutomationStore, triggeredBy: 'sched
     recovery,
     advertisingSync,
     monitoring,
+    orderIngestion,
+    purchaseWorkflow,
   }
 }

@@ -74,7 +74,7 @@ export function demoShopifyOrders(): readonly MarketplaceOrderSnapshot[] {
     status: 'paid',
     totalMinor: fromMajor(seed.price).minor,
     currency: 'GBP',
-    lineItemRefs: [seed.sku],
+    lineItems: [{ externalId: `${seed.sku}-li-1`, sku: seed.sku, quantity: 1, unitPriceMinor: fromMajor(seed.price).minor }],
     raw: { sku: seed.sku },
   }))
 }
@@ -111,14 +111,14 @@ export function demoAmazonOrders(): readonly MarketplaceOrderSnapshot[] {
     status: 'paid',
     totalMinor: fromMajor(seed.price).minor,
     currency: 'GBP',
-    lineItemRefs: [seed.sku],
+    lineItems: [{ externalId: `${seed.sku}-li-1`, sku: seed.sku, quantity: 1, unitPriceMinor: fromMajor(seed.price).minor }],
     raw: { sku: seed.sku },
   }))
 }
 
 export function demoAmazonFees(): readonly MarketplaceFeeSnapshot[] {
   return demoAmazonOrders().map((order) => {
-    const seed = PRODUCT_SEEDS.find((s) => s.sku === order.lineItemRefs[0])
+    const seed = PRODUCT_SEEDS.find((s) => s.sku === order.lineItems[0]?.sku)
     const referralPct = seed?.category === 'Electronics' ? 8 : 15
     return {
       externalOrderId: order.externalId,
@@ -161,7 +161,7 @@ export function demoEbayOrders(): readonly MarketplaceOrderSnapshot[] {
     status: 'paid',
     totalMinor: fromMajor(seed.price).minor,
     currency: 'GBP',
-    lineItemRefs: [seed.sku],
+    lineItems: [{ externalId: `${seed.sku}-li-1`, sku: seed.sku, quantity: 1, unitPriceMinor: fromMajor(seed.price).minor }],
     raw: { sku: seed.sku },
   }))
 }

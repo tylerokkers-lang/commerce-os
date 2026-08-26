@@ -8,7 +8,7 @@ const BASE_INPUT: OrderPipelineInput = {
   orderId: 'test-order-1',
   ingestion: {
     channel: 'shopify',
-    snapshot: { externalId: 'ext-1', placedAt: new Date().toISOString(), status: 'paid', totalMinor: 3000, currency: 'GBP', lineItemRefs: ['SKU-A'], raw: {} },
+    snapshot: { externalId: 'ext-1', placedAt: new Date().toISOString(), status: 'paid', totalMinor: 3000, currency: 'GBP', lineItems: [{ externalId: 'li-1', sku: 'SKU-A', quantity: 1, unitPriceMinor: 3000 }], raw: {} },
     existing: null,
     allLineItemsResolved: true,
     lineItemsTotalMinor: 3000,

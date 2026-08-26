@@ -365,7 +365,7 @@ describe('9. Order mapping', () => {
     id: 'gid://shopify/Order/1', createdAt: '2026-08-01T00:00:00Z', cancelledAt: null,
     displayFinancialStatus: 'PAID', displayFulfillmentStatus: 'UNFULFILLED',
     totalPriceSet: { shopMoney: { amount: '25.50', currencyCode: 'GBP' } },
-    lineItems: { edges: [{ node: { id: 'gid://shopify/LineItem/1' } }] },
+    lineItems: { edges: [{ node: { id: 'gid://shopify/LineItem/1', sku: 'SKU-A', quantity: 2, originalUnitPriceSet: { shopMoney: { amount: '12.75' } } } }] },
   }
 
   it('a paid, unfulfilled order maps to paid', () => {
@@ -376,7 +376,7 @@ describe('9. Order mapping', () => {
     expect(shopifyInternal.mapOrderStatus({ ...baseOrder, displayFinancialStatus: 'PENDING' })).toBe('pending')
   })
 
-  it('fetchOrders() end to end maps totalMinor, currency and lineItemRefs correctly', async () => {
+  it('fetchOrders() end to end maps totalMinor, currency and lineItems correctly', async () => {
     const original = { ...process.env }
     process.env.SHOPIFY_STORE_DOMAIN = CREDS.storeDomain
     process.env.SHOPIFY_CLIENT_ID = CREDS.clientId
@@ -392,7 +392,7 @@ describe('9. Order mapping', () => {
       if (result.ok) {
         expect(result.value.records[0].totalMinor).toBe(2550)
         expect(result.value.records[0].currency).toBe('GBP')
-        expect(result.value.records[0].lineItemRefs).toEqual(['gid://shopify/LineItem/1'])
+        expect(result.value.records[0].lineItems).toEqual([{ externalId: 'gid://shopify/LineItem/1', sku: 'SKU-A', quantity: 2, unitPriceMinor: 1275 }])
         expect(result.value.records[0].externalId).toBe('gid://shopify/Order/1')
       }
     } finally {

@@ -79,7 +79,7 @@ interface ScenarioConfig {
 }
 
 function buildScenario(config: ScenarioConfig): DemoOrderScenario {
-  const seed = seedFor(config.snapshot.lineItemRefs[0])
+  const seed = seedFor(config.snapshot.lineItems[0]?.sku ?? '')
   const fulfillingSignals = config.supplierCandidates.find((c) => c.id === config.fulfillingSupplierId)?.signals
 
   const input: OrderPipelineInput = {

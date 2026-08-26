@@ -227,7 +227,7 @@ describe('job handler registry', () => {
     const facts = createInMemoryFactsLoader()
     const input: OrderPipelineInput = {
       orderId: 'order-3',
-      ingestion: { channel: 'shopify', snapshot: { externalId: 'ext-3', placedAt: new Date().toISOString(), status: 'paid', totalMinor: 3000, currency: 'GBP', lineItemRefs: ['SKU-A'], raw: {} }, existing: null, allLineItemsResolved: true, lineItemsTotalMinor: 3000 },
+      ingestion: { channel: 'shopify', snapshot: { externalId: 'ext-3', placedAt: new Date().toISOString(), status: 'paid', totalMinor: 3000, currency: 'GBP', lineItems: [{ externalId: 'li-1', sku: 'SKU-A', quantity: 1, unitPriceMinor: 3000 }], raw: {} }, existing: null, allLineItemsResolved: true, lineItemsTotalMinor: 3000 },
       lineEconomics: { sellingPrice: fromMajor(30), supplierUnitCost: fromMajor(9), supplierShipping: fromMajor(2), channelFee: fromMajor(0), paymentFee: fromMajor(0.75), quantity: 1, vatRatePct: 20 },
       marginThreshold: { minNetMarginPct: 10 },
       stock: { onHandQty: 100, reservedQty: 10 },

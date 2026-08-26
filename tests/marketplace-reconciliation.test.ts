@@ -92,7 +92,7 @@ describe('order reconciliation', () => {
   it('detects an order status discrepancy', () => {
     const discrepancies = reconcileOrders(
       [{ externalId: 'ord-1', status: 'paid', recordedAt: '2026-08-23T00:00:00Z' }],
-      [{ externalId: 'ord-1', placedAt: '2026-08-22T00:00:00Z', status: 'cancelled', totalMinor: 1000, currency: 'GBP', lineItemRefs: [], raw: {} }],
+      [{ externalId: 'ord-1', placedAt: '2026-08-22T00:00:00Z', status: 'cancelled', totalMinor: 1000, currency: 'GBP', lineItems: [], raw: {} }],
     )
     expect(discrepancies).toHaveLength(1)
     expect(discrepancies[0].field).toBe('order_status')
@@ -101,7 +101,7 @@ describe('order reconciliation', () => {
   it('matches on the marketplace order id, not on our own internal id', () => {
     const discrepancies = reconcileOrders(
       [{ externalId: 'ord-1', status: 'paid', recordedAt: '2026-08-23T00:00:00Z' }],
-      [{ externalId: 'ord-999', placedAt: '2026-08-22T00:00:00Z', status: 'cancelled', totalMinor: 1000, currency: 'GBP', lineItemRefs: [], raw: {} }],
+      [{ externalId: 'ord-999', placedAt: '2026-08-22T00:00:00Z', status: 'cancelled', totalMinor: 1000, currency: 'GBP', lineItems: [], raw: {} }],
     )
     expect(discrepancies).toHaveLength(0)
   })

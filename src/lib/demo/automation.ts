@@ -288,7 +288,7 @@ function scenario6(): OrderScenario {
         status: 'paid',
         totalMinor: Math.round(seed.price * 100),
         currency: 'GBP',
-        lineItemRefs: [seed.sku],
+        lineItems: [{ externalId: `${seed.sku}-li-1`, sku: seed.sku, quantity: 1, unitPriceMinor: Math.round(seed.price * 100) }],
         raw: {},
       },
       existing: null,

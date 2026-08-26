@@ -3375,20 +3375,206 @@ true after it; no code was added to bridge that gap, since doing so
 identified and deliberately deferred in §43 as its own non-trivial
 milestone, not a minimum-necessary fix for this verification task.
 
-## 49. Next step
+## 49. Milestone: real order ingestion + manual-purchase lifecycle
 
-**Shopify Read-Only is now field-mapping-verified against a real
-product (§48).** Two smaller, optional candidates fell out of that
-verification, neither blocking: (1) `MarketplaceListingSnapshot`
+**Context.** §43/§48 both identified the same gap: `orders/pipeline.ts`'s
+own doc comment always said "a caller with real connectors and real
+database access executes it," but that caller never existed —
+`planOrderIngestion` had zero write-path callers anywhere, and
+`orders/repository.ts` returned `[]` in live mode with the comment "no
+order has ever actually been ingested." This milestone builds that
+caller, plus the AWAITING_PURCHASE state and manual-purchase workflow
+the user's operating model requires: they remain the person who
+purchases from the supplier; Commerce-OS never purchases automatically.
+Planned via `EnterPlanMode` and approved before implementation.
+
+**What already existed, reused as-is:** the full Postgres schema
+(`orders`/`order_items`/`fulfilments`/`shipments`/`payments`/`refunds`/
+`order_status_transitions`/`fulfilment_status_transitions`, all from
+Milestone 5, `idempotency_key` + unique constraints already in place —
+**`fulfilment_status` already had an `'awaiting_supplier'` value**,
+which *is* the AWAITING_PURCHASE state; no new enum value needed
+anywhere); the pure decision logic (`orders/validation.ts`'s
+`validateOrder`, `orders/ingestion.ts`'s `planOrderIngestion` — which
+already took `allLineItemsResolved`/`lineItemsTotalMinor` params
+clearly anticipating a resolver that was never built —
+`orders/lifecycle.ts`'s `planOrderTransition`,
+`fulfilment/lifecycle.ts`'s `planFulfilmentTransition`/
+`allFulfilmentsComplete`, `fulfilment/selection.ts`'s
+`chooseFulfilmentSupplier`); `notifications/create.ts`'s
+`createNotification`; `audit/index.ts`'s `recordAudit`; the
+select-then-insert-then-catch-23505 idempotency idiom
+`automation/actions.ts`'s `createAutomationAction` already uses; and
+`automation/maintenance.ts`'s `runMaintenance` as the one canonical
+cross-org orchestration seam (mirroring `advertising/sync.ts`'s
+`runAdvertisingSyncForConnectedOrgs` per-connected-channel iteration
+shape).
+
+**What was actually built — 10 new files:**
+
+*Pure logic* (`src/lib/orders/`, no I/O, fully unit-tested):
+`lineItemResolution.ts` (SKU → `product_variants` resolution, the
+resolver `allLineItemsResolved`/`lineItemsTotalMinor` always
+anticipated), `supplierResolution.ts` (assembles real
+`supplier_products`/`suppliers` rows into `chooseFulfilmentSupplier`'s
+existing candidate shape — never re-implements ranking),
+`purchaseEconomics.ts` (actual-vs-estimated variance, `null` never
+fabricated when no estimate exists), `ingestionPlan.ts`'s
+`planOrderWrite` and `purchasePlan.ts`'s `planPurchaseWorkflow` +
+`estimateCostForSupplier` (the pure decision layers, split out of
+their server-only executors below for exactly the same reason
+`advertising/syncPlan.ts`/`sync.ts` are split — `import 'server-only'`
+cannot be imported into Vitest at all, confirmed empirically when the
+first version of this milestone's tests threw `Cannot find package
+'server-only'`; every maintenance-phase orchestrator in this codebase
+already follows this split, which is why none of them have direct
+tests either).
+
+*Server-only executors* (`import 'server-only'`, thin — fetch what the
+plan needs, execute whatever plan comes back): `ingestionRun.ts`'s
+`runOrderIngestionForConnectedOrgs` (real connector `fetchOrders()` →
+SKU resolution → `planOrderWrite` → writes `orders`/`order_items`/
+`order_status_transitions`, or audits+notifies on rejection/blocked
+status change, never writes an invalid or unresolved order),
+`purchaseWorkflow.ts`'s `runPurchaseWorkflowForConnectedOrgs`
+(resolves suppliers for newly-`'paid'` orders lacking a fulfilment →
+`planPurchaseWorkflow` → creates `fulfilments` rows in
+`'awaiting_supplier'` + notifies), `manualPurchase.ts`'s
+`recordSupplierPurchase` (the only way a fulfilment ever leaves
+`'awaiting_supplier'` — always called from a session-authenticated API
+route), `shipmentTracking.ts`'s `recordShipment`/`recordDelivery`
+(writes `shipments`, cascades the order to `'delivered'` only once
+`allFulfilmentsComplete` is genuinely true across every fulfilment).
+
+*Wiring:* `automation/maintenance.ts` gained a 4th and 5th phase
+(`orderIngestion`, `purchaseWorkflow`), run in that order for the same
+freshest-facts reason advertising sync runs before the campaign
+monitor — no new cron route. Three new session-authenticated API
+routes: `POST /api/fulfilments/[id]/purchase`,
+`.../ship`, `.../deliver` — each checks `session.isDemo` first and
+refuses with an honest error, matching `ai/actions/propose.ts`'s
+established demo-mode guard. `audit/index.ts` gained exactly two new
+`AuditAction` values (`ORDER_INGESTION_REJECTED`,
+`ORDER_STATUS_CHANGE_BLOCKED`) — everything else reused the existing
+Orders/Suppliers action groups. `MarketplaceOrderSnapshot.lineItemRefs:
+string[]` became `lineItems: MarketplaceOrderLineItem[]`
+(`{externalId, sku, quantity, unitPriceMinor}`) across all 6
+connectors: Shopify's real, live-verified `ORDERS_QUERY` now requests
+`sku`/`quantity`/`originalUnitPriceSet` (field names confirmed against
+Shopify's own GraphQL docs before writing the query, not guessed);
+Amazon stays honestly empty (`lineItems: []`, same pre-existing
+"requires a separate call per order" limitation, unconfigured in this
+environment); eBay's mapping was upgraded to use `sku`/`quantity`/
+`lineItemCost` it already fetches (confirmed via eBay's own docs that
+`lineItemCost` is the line's *total*, not per-unit, and divided by
+quantity accordingly) — eBay was never called live this session and
+remains `CONFIGURATION_INCOMPLETE`.
+
+**Deliberate scope cuts, matching "smallest complete increment":**
+`supplier_orders`/`supplier_order_items` (no FK to `orders`, shaped for
+consolidated/bulk purchase orders) were left untouched — `fulfilments`
+already models one-supplier-purchase-per-order at the right
+granularity, and reusing it meant **zero schema migration was needed
+anywhere in this milestone** (confirmed: `db:verify` still reports 73
+tables). No customer/address ingestion — Shopify's connector
+deliberately never fetches buyer PII, and `orders.customer_id` etc. are
+nullable FKs, left `null`. No new UI page — the workflow is
+*operational* via the three API routes; a polished operator UI is the
+natural next candidate. `fulfilment/submission.ts`'s
+`assessFulfilmentSubmission` (whose `'supervised'`/`'autonomous'`
+automation levels both permit auto-submit) is **never called anywhere
+in this milestone** — supplier "submission" is always the explicit,
+user-triggered `recordSupplierPurchase` call, regardless of automation
+level, per the user's explicit requirement stated mid-planning: *"Do
+not allow a real Shopify order to trigger any automatic supplier
+purchase, supplier API order, inventory purchase, payment, or
+marketplace write. The only automatic action after order ingestion
+should be creating the internal AWAITING_PURCHASE state and notifying
+me."*
+
+**Exact data-flow now proven (by direct code path, not assumption):**
+Shopify → `fetchOrders()` (real, live-verified for connectivity;
+re-verified after the `sku`/`quantity` query enrichment — a real 200
+GraphQL response, 0 orders since the connected store still has none) →
+`planOrderWrite` (SKU resolution, validation, idempotency decision) →
+real `orders`/`order_items` write → `planPurchaseWorkflow` (supplier
+resolution) → real `fulfilments` row in `'awaiting_supplier'` +
+notification → `recordSupplierPurchase` (session-authenticated,
+human-triggered only) → real cost recorded, `orders.cogs_minor`/
+`supplier_shipping_minor` recomputed from actual fulfilment costs →
+`recordShipment`/`recordDelivery` → real `shipments` row, order
+cascades to `'delivered'` once every fulfilment is complete. Because
+this milestone writes real `orders`/`order_items` rows for the first
+time ever, the **pre-existing** `analytics/liveAnalyticsFacts.ts`'s
+`loadOrgSalesFacts` (which already queried `orders`/`order_items`/
+`refunds` directly, always returning zero rows before) now has a real
+row to find the moment a real order is ingested — **no analytics code
+was touched this milestone; it was already correctly wired, just
+waiting for real data.**
+
+**Tests:** 5 new pure-module test files
+(`order-line-item-resolution.test.ts`,
+`order-supplier-resolution.test.ts`, `order-purchase-economics.test.ts`,
+`order-ingestion-plan.test.ts`, `order-purchase-plan.test.ts`) covering
+every scenario the milestone required: duplicate-order idempotency
+(re-ingesting an unchanged order plans a no-op), missing SKU/product
+(plans a rejection, never a create), missing supplier
+(`no_supplier_available`, never a fabricated fulfilment), a status
+change our own state machine disallows (blocked, never forced
+through), the AWAITING_PURCHASE state reached correctly (including
+multi-supplier grouping and the partial-resolution case), and
+actual-vs-estimated economics (including the zero-estimate and
+missing-offer `null` cases). Plus 5 existing test files updated for the
+`lineItems` reshape. Full suite: **1373/1373 pass** (was 1341),
+`tsc --noEmit` clean, `eslint` clean, `next build` clean (3 new routes
+registered), `db:verify` clean — **still 73 tables, confirming no
+migration was needed.**
+
+**Live verification:** Shopify's real `fetchOrders()` re-verified
+read-only after the query change — genuine connectivity confirmed, 0
+orders (store still empty), so SKU-resolution-against-a-real-order
+remains unverified until the store has a real order, exactly like
+§48's product field-mapping gap. eBay's mapping change was never
+exercised live — still `CONFIGURATION_INCOMPLETE`, untouched
+credentials/auth/write-capability. Anthropic untouched, billing-gated.
+
+**Remaining, genuinely infrastructure-gated blockers:** none for the
+code itself — everything gated only on real data (a real order arriving,
+or `supplier_products` rows existing for the products that sell), never
+on missing credentials or missing code.
+
+**Security/safety checks performed:** no credential value printed,
+logged, or pasted into chat/HANDOVER.md at any point (only structural
+booleans, as every prior live-verification session this cycle);
+`git diff` scope confirmed exactly the files this milestone intended to
+touch, nothing else; eBay's diff confirmed to be only the line-item
+type mapping, capability descriptor byte-for-byte unchanged; Shopify's
+capability descriptor and every write method's `not_supported` stub
+unchanged — confirmed structurally incapable of writing, same as every
+prior Shopify-Read-Only session; `informax-site` confirmed untouched
+(`HEAD` still `2bf3d8a`, only the pre-existing `.claude/launch.json`
+diff); every new write path gated by `session.isDemo`/tenant-scoped
+`org_id` filters/existing capability and lifecycle-transition guards;
+no code path anywhere calls a supplier API, a marketplace write method,
+or anything that moves money.
+
+## 50. Next step
+
+Two smaller, optional candidates carried over from §48/§49, neither
+blocking: (1) `MarketplaceListingSnapshot`
 (`src/lib/marketplaces/connectors/types.ts`) has no `sku`/`vendor`/
-`description`/real-timestamp fields — all four are confirmed present
-on real Shopify products but currently uncaptured; extending the
-shared canonical type touches every connector, so this needs its own
-decision rather than a silent addition. (2) The `products` Postgres
-table already has `sku`/`description` columns (`brand`, not `vendor`)
-that nothing currently populates from a live connector fetch — see the
-pipeline trace in §48 for why (no ingestion path exists past the
-connector boundary at all yet).
+`description`/real-timestamp fields — confirmed present on real
+Shopify products but currently uncaptured; extending the shared
+canonical type touches every connector, so this needs its own decision
+rather than a silent addition. (2) An operator UI for the
+AWAITING_PURCHASE queue and recording a purchase/shipment — the three
+API routes built this milestone make the workflow operational, but
+there is no page yet; the natural next increment once the backend has
+been exercised against at least one real order. (3) Once the connected
+Shopify store has a real order (and `supplier_products` rows for its
+products), re-running maintenance would prove the entire pipeline end
+to end against real data for the first time — currently only provable
+against the demo connector and the pure decision layer.
 
 **The one genuinely unblocked, non-trivial code candidate (§43): order
 ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is

@@ -256,7 +256,7 @@ interface RawEbayOrder {
   orderPaymentStatus?: string
   cancelStatus?: { cancelState?: string }
   pricingSummary?: { total?: { value?: string; currency?: string } }
-  lineItems?: readonly { lineItemId: string }[]
+  lineItems?: readonly { lineItemId: string; sku?: string; quantity?: number; lineItemCost?: { value?: string } }[]
 }
 
 function mapEbayOrderStatus(order: RawEbayOrder): MarketplaceOrderSnapshot['status'] {
@@ -343,7 +343,22 @@ export class EbayConnector implements MarketplaceConnector {
       status: mapEbayOrderStatus(order),
       totalMinor: order.pricingSummary?.total?.value ? Math.round(Number(order.pricingSummary.total.value) * 100) : 0,
       currency: order.pricingSummary?.total?.currency ?? 'GBP',
-      lineItemRefs: (order.lineItems ?? []).map((li) => li.lineItemId),
+      // Never called live this session — eBay remains CONFIGURATION_INCOMPLETE
+      // — but sku/quantity/cost are already present on the same response
+      // this connector fetches, so mapping them is a structural correctness
+      // fix, not new API surface. `lineItemCost` is documented as the
+      // line's TOTAL (unit price x quantity), not a per-unit price, so it
+      // is divided by quantity here to match `unitPriceMinor`'s contract.
+      lineItems: (order.lineItems ?? []).map((li) => {
+        const quantity = li.quantity ?? 0
+        const totalMinor = li.lineItemCost?.value ? Math.round(Number(li.lineItemCost.value) * 100) : 0
+        return {
+          externalId: li.lineItemId,
+          sku: li.sku ?? null,
+          quantity,
+          unitPriceMinor: quantity > 0 ? Math.round(totalMinor / quantity) : 0,
+        }
+      }),
       raw: order as unknown as Record<string, unknown>,
     }))
 

@@ -105,13 +105,28 @@ export interface MarketplaceInventorySnapshot {
   reportedAt: string
 }
 
+/**
+ * One line item on a marketplace order, as reported by the marketplace
+ * itself — not yet resolved against our own catalogue. `sku` is `null`
+ * when the connector's read call does not return one at all (never a
+ * guess); resolution against `product_variants.sku` happens downstream in
+ * `orders/lineItemResolution.ts`, which is the only place a `null` here
+ * becomes a real product/variant id or an honest "unresolved."
+ */
+export interface MarketplaceOrderLineItem {
+  externalId: string
+  sku: string | null
+  quantity: number
+  unitPriceMinor: number
+}
+
 export interface MarketplaceOrderSnapshot {
   externalId: string
   placedAt: string
   status: 'pending' | 'paid' | 'fulfilled' | 'cancelled' | 'refunded'
   totalMinor: number
   currency: string
-  lineItemRefs: readonly string[]
+  lineItems: readonly MarketplaceOrderLineItem[]
   /**
    * Fraud/risk status, where the connector's API surface reports one.
    * Undefined — not 'low' — when the connector does not fetch this at all,

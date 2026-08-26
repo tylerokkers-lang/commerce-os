@@ -387,7 +387,9 @@ const ORDERS_QUERY = `
           displayFinancialStatus
           displayFulfillmentStatus
           totalPriceSet { shopMoney { amount currencyCode } }
-          lineItems(first: 50) { edges { node { id } } }
+          lineItems(first: 50) {
+            edges { node { id sku quantity originalUnitPriceSet { shopMoney { amount } } } }
+          }
         }
       }
     }
@@ -403,7 +405,9 @@ interface OrdersQueryResult {
         displayFinancialStatus: string | null
         displayFulfillmentStatus: string | null
         totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }
-        lineItems: { edges: readonly { node: { id: string } }[] }
+        lineItems: {
+          edges: readonly { node: { id: string; sku: string | null; quantity: number; originalUnitPriceSet: { shopMoney: { amount: string } } } }[]
+        }
       }
     }[]
   }
@@ -508,11 +512,18 @@ export class ShopifyConnector implements MarketplaceConnector {
         status: mapOrderStatus(node),
         totalMinor: Math.round(Number(node.totalPriceSet.shopMoney.amount) * 100),
         currency: node.totalPriceSet.shopMoney.currencyCode,
-        // Only the line item's own id is kept — Shopify's GraphQL line item
-        // carries buyer-adjacent fields (custom attributes, discount
+        // Only id/sku/quantity/unit price are kept — Shopify's GraphQL line
+        // item carries buyer-adjacent fields (custom attributes, discount
         // allocations) this connector has no use for and does not request,
         // per the "do not request unnecessary customer PII" instruction.
-        lineItemRefs: node.lineItems.edges.map((li) => li.node.id),
+        // `sku` reads null, never invented, when Shopify itself has none set
+        // on the variant.
+        lineItems: node.lineItems.edges.map((li) => ({
+          externalId: li.node.id,
+          sku: li.node.sku,
+          quantity: li.node.quantity,
+          unitPriceMinor: Math.round(Number(li.node.originalUnitPriceSet.shopMoney.amount) * 100),
+        })),
         raw: node as unknown as Record<string, unknown>,
       }
     })

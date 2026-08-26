@@ -36,7 +36,8 @@ export interface IngestionDecision {
   suggestedStatusChange: { from: OrderStatus; to: OrderStatus } | null
 }
 
-const MARKETPLACE_TO_ORDER_STATUS: Record<MarketplaceOrderSnapshot['status'], OrderStatus> = {
+/** Exported so a real write path (`orders/ingestionRun.ts`) can compute the initial `orders.status` value on `create` without duplicating this mapping. */
+export const MARKETPLACE_TO_ORDER_STATUS: Record<MarketplaceOrderSnapshot['status'], OrderStatus> = {
   pending: 'pending',
   paid: 'paid',
   fulfilled: 'fulfilled',
@@ -58,7 +59,7 @@ export function planOrderIngestion(input: IngestOrderInput): IngestionDecision {
     externalId: input.snapshot.externalId,
     totalMinor: input.snapshot.totalMinor,
     currency: input.snapshot.currency,
-    lineItemCount: input.snapshot.lineItemRefs.length,
+    lineItemCount: input.snapshot.lineItems.length,
     allLineItemsResolved: input.allLineItemsResolved,
     lineItemsTotalMinor: input.lineItemsTotalMinor,
   })

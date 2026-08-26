@@ -68,7 +68,7 @@ function snapshot(over: Partial<MarketplaceOrderSnapshot> = {}): MarketplaceOrde
     status: 'paid',
     totalMinor: 3000,
     currency: 'GBP',
-    lineItemRefs: ['SKU-A'],
+    lineItems: [{ externalId: 'li-1', sku: 'SKU-A', quantity: 1, unitPriceMinor: 3000 }],
     raw: {},
     ...over,
   }
@@ -85,7 +85,7 @@ describe('order ingestion', () => {
 
   it('rejects an order that fails validation before ever considering duplication', () => {
     const decision = planOrderIngestion({
-      channel: 'shopify', snapshot: snapshot({ lineItemRefs: [] }), existing: null,
+      channel: 'shopify', snapshot: snapshot({ lineItems: [] }), existing: null,
       allLineItemsResolved: true, lineItemsTotalMinor: 0,
     })
     expect(decision.outcome).toBe('rejected')
