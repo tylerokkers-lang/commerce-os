@@ -2989,7 +2989,136 @@ build`, `npm run db:verify` (73 tables, no new migration) all clean.
 approval, capability-gate, purchasing, or write-path code touched;
 `MANUAL_PURCHASE_MODE` and every existing safety gate are unaffected.
 
-## 44. Next step
+## 44. Milestone Shopify-Read-Only — REST/static-token connector migrated to GraphQL + client-credentials
+
+Requested explicitly ahead of eBay (still `CONFIGURATION_INCOMPLETE`, pending
+developer approval) — an inspection-first pass (no code changed) determined
+the existing Shopify connector's REST/static-token approach was genuinely
+obsolete, not merely undertested, confirmed against Shopify's current
+developer documentation before writing anything:
+- The entire REST Admin API was deprecated 2024-10-01; critical
+  product/variant endpoints (exactly what this connector called) began
+  failing for new setups 2025-02-01, with annual sunset waves continuing
+  through 2026. New organisations can only use GraphQL for custom apps as
+  of 2025-04-01.
+- Static "custom app" tokens (`SHOPIFY_ADMIN_ACCESS_TOKEN`) were removed
+  from the Shopify admin UI entirely as of 2026-01-01 — there was
+  genuinely no static token left to obtain for a new setup.
+
+**This migrates the existing connector in place** (`shopify.ts`) — no
+parallel connector, no duplicated marketplace architecture, same
+registration in `registry.ts`, same `MarketplaceConnector` interface,
+same `channel_key` value. Auth now uses the client credentials grant —
+the documented flow for a server-side app acting on stores in your own
+Shopify organisation (never usable for another merchant's store, exactly
+this connector's actual use case) — the same shape `amazonAds.ts`/`ebay.ts`
+already use for their own OAuth exchanges in this codebase: `client_id`/
+`client_secret` exchanged for a short-lived token (24h), never cached
+across calls, matching the same known, deliberate inefficiency those two
+connectors already carry.
+
+**Credentials changed:** `SHOPIFY_ADMIN_ACCESS_TOKEN` is gone everywhere
+it was declared — the real connector, `core/env.ts`'s `/integrations`
+descriptor, and the not-yet-built `research/providers/registry.ts`
+"our own store" research-provider descriptor (same store, kept
+consistent even though unimplemented). Now: `SHOPIFY_STORE_DOMAIN`,
+`SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `SHOPIFY_API_VERSION`.
+
+**Request layer rewritten from REST to GraphQL**, targeting
+`/admin/api/{version}/graphql.json`. Every failure mode handled and
+labelled distinctly, never folded into "it worked": HTTP auth failure
+(401/403), HTTP throttling (429), a genuine `Throttled` GraphQL error
+arriving inside an HTTP 200 (confirmed via Shopify's own documented
+example — this API can throttle without a 429 at all), a populated
+`errors` array on an otherwise-`data`-bearing response (treated as a
+total failure, never trusting Shopify's own partial-error responses as
+complete data), empty response bodies, and malformed (non-JSON) bodies.
+
+**Capability descriptor made genuinely truthful, per the brief's own
+explicit target** — `readListings`/`ingestOrders`/`syncInventory: true`;
+`writeListings`/`updateFulfilment`/`processRefunds`/`readFees`/
+`webhooks`/`verifyWrites`: all `false`. This is a structural gate, not a
+convention: `automation/priceExecution.ts` checks
+`capabilities.writeListings` before ever calling `updateListingPrice`, so
+a real Shopify write cannot be reached through the existing execution
+pipeline while the flag is false. Every write method
+(`updateListingPrice`/`updateInventory`/`setListingStatus`/
+`submitFulfilmentUpdate`/`verifyListingState`) additionally returns an
+honest, unconditional `not_supported`-style error itself — belt and
+braces, never merely relying on the flag alone.
+
+**A note on the brief's capability names vs this codebase's actual
+shared type:** the brief described `readProducts`/`readOrders`/
+`readInventory`/`readFulfilments`/`writeInventory` — none of these exist
+as field names on the shared `MarketplaceCapabilities` interface
+(`types.ts`), which Amazon, eBay and Shopify all already use unchanged.
+Extending that shared interface would touch all three connectors for a
+Shopify-specific naming preference — out of scope for "upgrade the
+existing connector, do not duplicate architecture." Their intent was
+mapped onto the actual existing fields instead: readProducts →
+`readListings`, readOrders → `ingestOrders`, readInventory →
+`syncInventory` (this codebase's one existing inventory flag — there is
+no read/write split in the shared type; `updateInventory()` is
+unconditionally `not_supported` regardless, so this never implies a
+write capability in practice), readFulfilments → no dedicated flag
+exists since the interface has no separate fetch-fulfilment method;
+Shopify's fulfilment status now flows into `fetchOrders()`'s own
+`MarketplaceOrderSnapshot.status` mapping instead (a `FULFILLED` order
+promotes to `'fulfilled'`, the only place the interface has room for
+fulfilment data at all).
+
+**Read methods rewritten:**
+- `getConnectionHealth()` — a minimal `shop { name }` query, the GraphQL
+  equivalent of the old REST connectivity check.
+- `fetchListings()` — `products` connection query; `ProductStatus`'s
+  uppercase enum (`ACTIVE`/`DRAFT`/`ARCHIVED`) mapped to the interface's
+  lowercase values; `ProductVariant.price`/`inventoryQuantity` used as
+  the listing-level summary figure (confirmed still present in the
+  current API, a legitimate convenience aggregate, not deprecated).
+- `fetchInventory()` — deliberately a *separate* query from
+  `fetchListings()` (unlike the old REST version, which derived it from
+  the listings read), using the current `InventoryItem`/`InventoryLevel`/
+  `quantities(names: ["available"])` model per the brief's explicit
+  instruction, summed across every returned location rather than only
+  the first.
+- `fetchOrders()` — `orders` connection query; `id` values are full GIDs
+  (e.g. `gid://shopify/Order/123`), stored as `externalId` directly and
+  deliberately — no real Shopify data has ever been synced by this
+  codebase, so there is no legacy numeric-id data to preserve
+  compatibility with. The query requests only order-level id, timestamps,
+  financial/fulfilment status, totals and line-item ids — no
+  customer/email/address field is requested at all, confirmed by a
+  dedicated test asserting the real query string.
+
+**Tested:** 39 new tests (`tests/shopify-connector.test.ts`) covering all
+13 requested categories — configuration detection, token-exchange request
+construction, successful token parsing, authentication failure (both at
+the token endpoint and the GraphQL endpoint), GraphQL HTTP failure
+(500/429/network throw/empty body/malformed body), GraphQL
+application-level errors (including the in-200 `Throttled` case),
+successful shop-query parsing, product mapping, order mapping
+(end-to-end and the fulfilment-priority-order unit tests), inventory
+mapping (multi-location summing), capability truthfulness, and
+secret-never-logged behaviour (the client secret never appears in any
+request URL, GraphQL header, or the connector's own error messages).
+Plus 3 existing test files updated for the new credential/capability
+reality — 1333 total, up from 1294. `npx tsc --noEmit`, `npm run lint`,
+`npm run build`, `npm run db:verify` (73 tables, **no new migration** —
+`channel_key` already had `'shopify'`) all clean.
+
+**IMPLEMENTED:** yes, entirely. **CREDENTIALS_REQUIRED:** yes — no
+`SHOPIFY_*` variables exist in this environment; nothing in this pass
+attempted or could attempt a live call (`isConfigured()` gates every
+method). **LIVE_VERIFIED: NO** — stopped exactly where the brief
+required, before any real Shopify API call. See the chat report for the
+exact Dev Dashboard setup steps and required scopes
+(`read_products`/`read_orders`/`read_inventory`/`read_fulfillments`) —
+not duplicated here since HANDOVER.md is not where the user was told to
+look for that.
+
+eBay confirmed untouched, still `CONFIGURATION_INCOMPLETE`.
+
+## 45. Next step
 
 **The one genuinely unblocked, non-trivial code candidate (§43): order
 ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is

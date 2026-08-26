@@ -86,7 +86,8 @@ export function integrationStatus(): readonly IntegrationCredentials[] {
     ]),
     describe('shopify', 'Shopify', [
       'SHOPIFY_STORE_DOMAIN',
-      'SHOPIFY_ADMIN_ACCESS_TOKEN',
+      'SHOPIFY_CLIENT_ID',
+      'SHOPIFY_CLIENT_SECRET',
       'SHOPIFY_API_VERSION',
     ]),
     describe('amazon', 'Amazon Selling Partner API', [

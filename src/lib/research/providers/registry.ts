@@ -82,11 +82,11 @@ const PLANNED: readonly { descriptor: ProviderDescriptor; reason: string }[] = [
       description:
         'Our own store’s catalogue and performance data, used to find adjacent products to ones already selling well.',
       sourceType: 'official_api',
-      requiredCredentials: ['SHOPIFY_STORE_DOMAIN', 'SHOPIFY_ADMIN_ACCESS_TOKEN', 'SHOPIFY_API_VERSION'],
-      rateLimit: { requestsPerMinute: 40, requestsPerDay: null, minSecondsBetweenRuns: 300 },
+      requiredCredentials: ['SHOPIFY_STORE_DOMAIN', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'SHOPIFY_API_VERSION'],
+      rateLimit: { requestsPerMinute: 20, requestsPerDay: null, minSecondsBetweenRuns: 300 },
       usagePolicy: {
         termsUrl: 'https://www.shopify.com/legal/api-terms',
-        permittedUseNote: 'Reads only our own store, using an access token we issued ourselves.',
+        permittedUseNote: 'Reads only our own store, using a client-credentials token we issued ourselves.',
         respectsRobots: true,
         authenticatedFirstParty: true,
       },

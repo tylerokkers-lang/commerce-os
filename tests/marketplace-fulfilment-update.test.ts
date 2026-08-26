@@ -10,9 +10,10 @@ function update(over: Partial<FulfilmentUpdateInput> = {}): FulfilmentUpdateInpu
 }
 
 describe('marketplace update: fulfilment/tracking push-back', () => {
-  it('the real Shopify connector refuses an update when not configured', async () => {
+  it('the real Shopify connector refuses an update unconditionally this phase (Milestone Shopify-Read-Only) — never merely because it is unconfigured', async () => {
     const result = await shopifyConnector.submitFulfilmentUpdate(update())
     expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('disabled')
   })
 
   it('the real Amazon connector refuses an update when not configured', async () => {
@@ -43,7 +44,11 @@ describe('marketplace update: fulfilment/tracking push-back', () => {
   })
 
   it('both channels declare the capability honestly', () => {
-    expect(shopifyConnector.descriptor.capabilities.updateFulfilment).toBe(true)
+    // Milestone Shopify-Read-Only: the real Shopify connector's write-side
+    // fulfilment (tracking push) is deliberately disabled this phase —
+    // genuinely distinct from Amazon's and both demo connectors', which
+    // still declare it (unchanged by this milestone).
+    expect(shopifyConnector.descriptor.capabilities.updateFulfilment).toBe(false)
     expect(amazonConnector.descriptor.capabilities.updateFulfilment).toBe(true)
     expect(shopifyDemoConnector.descriptor.capabilities.updateFulfilment).toBe(true)
     expect(amazonDemoConnector.descriptor.capabilities.updateFulfilment).toBe(true)

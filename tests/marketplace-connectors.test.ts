@@ -54,7 +54,7 @@ describe('unconfigured state', () => {
 
   it('never claims a real connector is ready without its exact credentials', () => {
     expect(shopifyConnector.descriptor.requiredCredentials).toEqual([
-      'SHOPIFY_STORE_DOMAIN', 'SHOPIFY_ADMIN_ACCESS_TOKEN', 'SHOPIFY_API_VERSION',
+      'SHOPIFY_STORE_DOMAIN', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'SHOPIFY_API_VERSION',
     ])
     expect(amazonConnector.descriptor.requiredCredentials).toEqual([
       'AMAZON_SP_CLIENT_ID', 'AMAZON_SP_CLIENT_SECRET', 'AMAZON_SP_REFRESH_TOKEN', 'AMAZON_SP_MARKETPLACE_ID',
@@ -194,9 +194,18 @@ describe('successful demo connection', () => {
 })
 
 describe('capabilities are declared, not assumed', () => {
-  it('Shopify declares broader write capability than the read-only foundation currently exercises', () => {
-    expect(shopifyConnector.descriptor.capabilities.writeListings).toBe(true)
-    expect(shopifyConnector.descriptor.capabilities.webhooks).toBe(true)
+  it('Shopify (Milestone Shopify-Read-Only) requests only read capability: no write/refund/verify/webhook/fee capability at all this phase', () => {
+    expect(shopifyConnector.descriptor.capabilities).toEqual({
+      readListings: true,
+      writeListings: false,
+      syncInventory: true,
+      ingestOrders: true,
+      updateFulfilment: false,
+      processRefunds: false,
+      readFees: false,
+      webhooks: false,
+      verifyWrites: false,
+    })
   })
 
   it('Amazon correctly declares that seller-submitted refunds are not a supported capability', () => {
