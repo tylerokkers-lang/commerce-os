@@ -203,4 +203,20 @@ export interface AdvertisingConnectorSummary {
   writeVerificationStatus: 'not_tested' | 'verified' | 'failed'
   writeVerifiedAt: string | null
   writeVerificationDetail: string | null
+  /**
+   * Milestone 20, Phase 17/18 — the async report pipeline's own tracked
+   * state (`advertising_connections.report_*`, migration `0031`), `null`
+   * for every provider whose read path is not the async report pipeline
+   * (every provider except `amazon_ads` today). A genuinely separate axis
+   * from `status`/`verificationStatus` above: `reportStatus` can be
+   * `'processing'` while `status` is still honestly `'connected'` — a
+   * report in flight is not a connection failure (see `sync.ts`'s own
+   * comment on why `recordConnectionOutcome` treats it as a success).
+   */
+  reportStatus: string | null
+  reportRequestedAt: string | null
+  reportCompletedAt: string | null
+  reportWindowStart: string | null
+  reportWindowEnd: string | null
+  reportError: string | null
 }

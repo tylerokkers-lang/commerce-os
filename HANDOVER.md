@@ -2547,11 +2547,103 @@ the real account, updating the capability matrix and overall status from
 evidence, before Step 2 (order ingestion, notifications, purchasing UI)
 begins.
 
-## 39. Next step
+## 39. Milestone 20 Step 2 (Reporting Verification Harness Extension & UI Status) — closing two of §36's three deferred gaps
 
-The two real options remaining, per `docs/MILESTONES.md`: (1) **close the
-three gaps §36 lists above** — UI status, harness extension, and (whenever
-real credentials exist) an actual live verification run; or (2) **deploy
+Requested continuation of Milestone 20 from `1736932` (the capability
+registry commit) — inspection found the async reporting pipeline itself
+(migration `0031`, `amazonAdsReporting.ts`, `amazonAdsReportPipeline.ts`,
+`sync.ts`'s per-org failure isolation) was already complete as of `6a77aeb`,
+several commits ahead of the referenced state. Re-implementing it would
+have violated the brief's own "do not restart, replace, or rewrite any
+completed architecture" — so this pass closes the two genuine gaps §36
+explicitly deferred instead: the verification harness extension and the
+UI status surface. (The third — an actual live run — still requires real
+Amazon Ads credentials, which do not exist in this environment; unchanged.)
+
+**Verification harness extension (§36 gap 2):** `advertising/verification.ts`'s
+`runAndRecordProviderVerification` — the function the `/advertising` page's
+"Run read-only verification check" button actually calls — now special-cases
+`platform === 'amazon_ads'` to call `advanceAmazonAdsReportPipeline` (the
+exact same, already-idempotent function the maintenance job uses) instead
+of the generic `fetchCampaigns()`-based check, mirroring `sync.ts`'s own
+`platform === 'amazon_ads'` special-case exactly. A new pure function,
+`verificationCheck.ts`'s `mapAmazonAdsReportPipelineToVerification`, maps
+one call's pipeline outcome onto the existing, cross-provider
+`AdvertisingVerificationStatus` vocabulary (`requested`/`processing` ->
+`read_access_verified`; `completed` with real facts -> `data_retrieval_verified`;
+`failed` -> `failed`) — no second, parallel status enum. Because a single
+pipeline call only ever performs one step (Phase 4's "never more than one
+HTTP round trip"), reaching `data_retrieval_verified` for Amazon Ads
+genuinely requires clicking "verify" again after Amazon has had time to
+process the report — the same "Maintenance Run 1/2/3" async model,
+applied to manual verification clicks instead of scheduled cycles.
+Clicking repeatedly never spams new reports: `advanceAmazonAdsReportPipeline`'s
+own idempotency (Phase 5, already built) applies identically here.
+
+The granular, named-step harness (`runAdvertisingVerificationHarness`,
+Milestone 19 Phase 7 — already existed, but was never wired to any live
+path even for other providers) gained an optional second parameter,
+`amazonAdsReportPipelineResult`, supplied only by a server-only caller;
+when present it branches to `interpretAmazonAdsReportSteps`, producing
+five named steps (`Validate credentials exist` / `Authenticate...` /
+`Report creation` / `Report status lookup` / `Report retrieval` /
+`Report parsing and campaign normalization`) instead of the generic
+`fetchCampaigns()`/`verifyCampaignState()` two steps. `verificationCheck.ts`
+itself still imports nothing from `amazonAdsReportPipeline.ts` at
+runtime — only `import type { AdvanceReportPipelineResult }`, which TypeScript
+erases entirely, so this file remains free of `server-only` and stays
+directly unit-testable, the same discipline this codebase has hit and
+fixed repeatedly for this exact `server-only`-creeping-into-a-pure-module
+failure mode. This granular harness is still not wired into
+`runAndRecordProviderVerification`'s persistence path (there is nowhere
+to persist a `steps[]` array without a schema change, and the single
+`verification_status`/`verification_detail` pair the simple path already
+updates is sufficient for what the UI shows) — an available, tested
+building block, not a dead end, matching "create the correct extension
+point rather than prematurely implementing the whole subsystem."
+
+**UI status (§36 gap 1):** `AdvertisingConnectorSummary` (types.ts),
+`AdvertisingConnectionRecord` (registry.ts) and `getAdvertisingConnectorSummaries`
+(repository.ts) now carry the async pipeline's own tracked state
+(`reportStatus`/`reportRequestedAt`/`reportCompletedAt`/`reportWindowStart`/
+`reportWindowEnd`/`reportError`, straight from `advertising_connections`'
+existing migration-`0031` columns — no new migration) through to
+`/advertising`'s `ConnectorRow`. A new badge renders only when
+`reportStatus` is non-null (every provider except `amazon_ads` today, so
+this never appears for Shopify/Meta/Google/TikTok), literally: "Report:
+not yet requested" / "requested" / "processing" / "completed" / "failed" /
+"expired, will retry" — never "Live", matching the brief's own example
+states and its explicit instruction never to show that word without real
+verification behind it. A `'processing'`/`'requested'` report renders in
+an accent tone, never the negative tone reserved for `'failed'` — nothing
+going wrong is never shown as if something were. The reporting window and
+any report error, when present, render as additional detail lines
+alongside the existing read/write verification detail lines.
+
+**Not visually browser-verified this pass:** another chat's Next.js dev
+server holds this project directory's single-instance lock (`next dev`
+refuses a second instance per directory regardless of port), and this
+session's browser tools cannot reach that other server — confirmed via
+`npx tsc --noEmit`, `npm run build` (the `/advertising` route compiles
+and type-checks with the new JSX) and the full test suite instead; a
+genuine, disclosed gap rather than a fabricated "looks fine" claim.
+
+**Tested:** 12 new tests (`mapAmazonAdsReportPipelineToVerification`'s
+five pipeline states, and the extended harness's five named-step
+scenarios) — 1280 total, up from 1268, all passing. `npx tsc --noEmit`,
+`npm run lint`, `npm run build`, `npm run db:verify` (73 tables, no new
+migration this pass) all clean.
+
+**Still deferred, matching §36's own third item exactly:** an actual live
+verification run — no real Amazon Ads credentials exist in this
+environment, so `runAndRecordProviderVerification`'s new Amazon-Ads-aware
+branch has never executed against a real report.
+
+## 40. Next step
+
+The two real options remaining, per `docs/MILESTONES.md`: (1) **the one
+gap §36/§39 still leave open** — an actual live verification run, which
+needs real Amazon Ads credentials this environment does not have; or (2) **deploy
 for real** — a live Supabase project, a chosen host, `AUTOMATION_CRON_SECRET`
 set, and (if that host is Vercel) `CRON_SECRET` set to the same value so
 `vercel.json`'s cron entry actually authenticates — the one thing no

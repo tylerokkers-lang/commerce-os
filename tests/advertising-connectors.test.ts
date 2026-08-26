@@ -166,7 +166,7 @@ describe('advertisingConnectorSummaries: what /advertising renders', () => {
   })
 
   it('reflects persisted connection state (last sync/error) when supplied, never fabricating it', () => {
-    const connections = new Map([['amazon_ads', { status: 'error' as const, lastSyncAt: '2026-08-24T00:00:00.000Z', lastSuccessAt: null, lastFailureAt: '2026-08-24T00:00:00.000Z', lastError: 'boom', consecutiveFailures: 3, verificationStatus: 'not_tested' as const, verifiedAt: null, verificationDetail: null, writeVerificationStatus: 'not_tested' as const, writeVerifiedAt: null, writeVerificationDetail: null }]])
+    const connections = new Map([['amazon_ads', { status: 'error' as const, lastSyncAt: '2026-08-24T00:00:00.000Z', lastSuccessAt: null, lastFailureAt: '2026-08-24T00:00:00.000Z', lastError: 'boom', consecutiveFailures: 3, verificationStatus: 'not_tested' as const, verifiedAt: null, verificationDetail: null, writeVerificationStatus: 'not_tested' as const, writeVerifiedAt: null, writeVerificationDetail: null, reportStatus: null, reportRequestedAt: null, reportCompletedAt: null, reportWindowStart: null, reportWindowEnd: null, reportError: null }]])
     const summaries = advertisingConnectorSummaries(connections)
     const amazon = summaries.find((s) => s.platform === 'amazon_ads')!
     expect(amazon.status).toBe('error')

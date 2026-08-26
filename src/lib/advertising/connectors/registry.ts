@@ -152,6 +152,12 @@ export interface AdvertisingConnectionRecord {
   writeVerificationStatus: AdvertisingConnectorSummary['writeVerificationStatus']
   writeVerifiedAt: string | null
   writeVerificationDetail: string | null
+  reportStatus: string | null
+  reportRequestedAt: string | null
+  reportCompletedAt: string | null
+  reportWindowStart: string | null
+  reportWindowEnd: string | null
+  reportError: string | null
 }
 
 /** Runtime summary for every registered platform — what `/advertising`'s connections section renders, never a second source of "is this connected." */
@@ -180,6 +186,12 @@ export function advertisingConnectorSummaries(connections: ReadonlyMap<string, A
       writeVerificationStatus: state?.writeVerificationStatus ?? 'not_tested',
       writeVerifiedAt: state?.writeVerifiedAt ?? null,
       writeVerificationDetail: state?.writeVerificationDetail ?? null,
+      reportStatus: state?.reportStatus ?? null,
+      reportRequestedAt: state?.reportRequestedAt ?? null,
+      reportCompletedAt: state?.reportCompletedAt ?? null,
+      reportWindowStart: state?.reportWindowStart ?? null,
+      reportWindowEnd: state?.reportWindowEnd ?? null,
+      reportError: state?.reportError ?? null,
     }
   })
 }

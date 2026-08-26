@@ -105,6 +105,22 @@ const VERIFICATION_LABEL: Record<AdvertisingConnectorSummary['verificationStatus
   end_to_end_sync_verified: 'Verification: end-to-end sync confirmed', failed: 'Verification: failed',
 }
 
+/**
+ * Milestone 20, Phase 18 — the async report pipeline's own tracked state,
+ * `null` (and so never rendered) for every provider whose read path is not
+ * the async report pipeline. Never labelled "Live" — only ever the honest,
+ * literal pipeline state, matching the brief's own example states exactly.
+ * A `'requested'`/`'processing'` report is never shown as an error: it is
+ * genuinely nothing going wrong, just no new data yet this cycle.
+ */
+const REPORT_STATUS_TONE: Record<string, Tone> = {
+  not_requested: 'neutral', requested: 'accent', processing: 'accent', completed: 'positive', failed: 'negative', expired: 'caution',
+}
+const REPORT_STATUS_LABEL: Record<string, string> = {
+  not_requested: 'Report: not yet requested', requested: 'Report: requested', processing: 'Report: processing',
+  completed: 'Report: completed', failed: 'Report: failed', expired: 'Report: expired, will retry',
+}
+
 function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary }) {
   return (
     <li className="px-5 py-3.5">
@@ -122,6 +138,9 @@ function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary })
           <Badge tone={connector.writeVerificationStatus === 'verified' ? 'positive' : connector.writeVerificationStatus === 'failed' ? 'negative' : 'neutral'}>
             Write: {connector.writeVerificationStatus === 'verified' ? 'Verified' : connector.writeVerificationStatus === 'failed' ? 'Failed' : 'Not tested'}
           </Badge>
+          {connector.reportStatus ? (
+            <Badge tone={REPORT_STATUS_TONE[connector.reportStatus] ?? 'neutral'}>{REPORT_STATUS_LABEL[connector.reportStatus] ?? `Report: ${connector.reportStatus}`}</Badge>
+          ) : null}
         </div>
       </div>
       <ul className="mt-2 flex flex-wrap gap-1.5">
@@ -139,6 +158,10 @@ function ConnectorRow({ connector }: { connector: AdvertisingConnectorSummary })
       </div>
       {connector.verificationDetail ? <p className="mt-1.5 text-xs text-ink-subtle">Read verification: {connector.verificationDetail}</p> : null}
       {connector.writeVerificationDetail ? <p className="mt-1 text-xs text-ink-subtle">Write verification: {connector.writeVerificationDetail}</p> : null}
+      {connector.reportWindowStart && connector.reportWindowEnd ? (
+        <p className="mt-1 text-xs text-ink-subtle">Reporting window: {connector.reportWindowStart} to {connector.reportWindowEnd}</p>
+      ) : null}
+      {connector.reportError ? <p className="mt-1 text-xs text-negative">Report error: {connector.reportError}</p> : null}
       {connector.isConfigured ? (
         <form action={verifyProviderConnection} className="mt-2">
           <input type="hidden" name="connectorKey" value={connector.key} />

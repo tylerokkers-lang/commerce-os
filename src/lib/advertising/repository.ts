@@ -20,7 +20,7 @@ export async function getAdvertisingConnectorSummaries(): Promise<readonly Adver
   const supabase = await createServerSupabase()
   const { data } = await supabase
     .from('advertising_connections')
-    .select('provider, status, last_sync_at, last_success_at, last_failure_at, last_error, consecutive_failures, verification_status, verified_at, verification_detail, write_verification_status, write_verified_at, write_verification_detail')
+    .select('provider, status, last_sync_at, last_success_at, last_failure_at, last_error, consecutive_failures, verification_status, verified_at, verification_detail, write_verification_status, write_verified_at, write_verification_detail, report_status, report_requested_at, report_completed_at, report_window_start, report_window_end, report_error')
     .eq('org_id', session.orgId)
 
   const connections = new Map(
@@ -39,6 +39,12 @@ export async function getAdvertisingConnectorSummaries(): Promise<readonly Adver
         writeVerificationStatus: row.write_verification_status as AdvertisingConnectorSummary['writeVerificationStatus'],
         writeVerifiedAt: row.write_verified_at,
         writeVerificationDetail: row.write_verification_detail,
+        reportStatus: row.report_status,
+        reportRequestedAt: row.report_requested_at,
+        reportCompletedAt: row.report_completed_at,
+        reportWindowStart: row.report_window_start,
+        reportWindowEnd: row.report_window_end,
+        reportError: row.report_error,
       },
     ]),
   )

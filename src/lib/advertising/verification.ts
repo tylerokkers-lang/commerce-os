@@ -2,8 +2,10 @@ import 'server-only'
 
 import { createServiceSupabase } from '@/lib/supabase/server'
 import { recordAudit } from '@/lib/audit'
+import { advanceAmazonAdsReportPipeline } from './amazonAdsReportPipeline'
+import type { AmazonAdsConnector } from './connectors/amazonAds'
 import type { AdvertisingProvider } from './connectors/types'
-import { verifyProviderReadOnly, type ProviderVerificationResult } from './verificationCheck'
+import { verifyProviderReadOnly, mapAmazonAdsReportPipelineToVerification, type ProviderVerificationResult } from './verificationCheck'
 
 export type { AdvertisingVerificationStatus, ProviderVerificationResult } from './verificationCheck'
 export { verifyProviderReadOnly } from './verificationCheck'
@@ -25,9 +27,25 @@ export { verifyProviderReadOnly } from './verificationCheck'
  * Runs the check above for one org+platform and persists the result to
  * `advertising_connections` (migration `0028`), auditing the attempt —
  * never silently updates state without a record of when and why.
+ *
+ * Milestone 20, Phase 19 — Amazon Ads' real read path is the async report
+ * pipeline (Milestone 20), not the generic, synchronous `fetchCampaigns()`
+ * every other provider still uses, so its verification must drive that
+ * pipeline instead of the generic check — the same `platform === 'amazon_ads'`
+ * special-case `advertising/sync.ts`'s `runAdvertisingSync` already applies
+ * to the actual maintenance-cycle sync, applied here to a manually-triggered
+ * verification click instead. `advanceAmazonAdsReportPipeline` is the exact
+ * same, already-idempotent function the maintenance job calls — clicking
+ * "verify" repeatedly never spams new Amazon Ads reports (Phase 5), it just
+ * re-checks whatever is already in flight, exactly as a real maintenance
+ * cycle would.
  */
 export async function runAndRecordProviderVerification(orgId: string, connector: AdvertisingProvider): Promise<ProviderVerificationResult> {
-  const result = await verifyProviderReadOnly(connector)
+  const result = !connector.isConfigured()
+    ? { status: 'not_tested' as const, detail: `${connector.descriptor.label} is not configured — nothing to verify yet.` }
+    : connector.descriptor.platform === 'amazon_ads'
+      ? mapAmazonAdsReportPipelineToVerification(await advanceAmazonAdsReportPipeline(orgId, connector as AmazonAdsConnector))
+      : await verifyProviderReadOnly(connector)
   const nowIso = new Date().toISOString()
   const supabase = createServiceSupabase()
 

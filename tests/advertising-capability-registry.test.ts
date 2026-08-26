@@ -137,6 +137,7 @@ function amazonAdsSummary(overrides: Partial<AdvertisingConnectorSummary> = {}):
     lastSyncAt: null, lastSuccessAt: null, lastFailureAt: null, lastError: null, consecutiveFailures: 0,
     verificationStatus: 'not_tested', verifiedAt: null, verificationDetail: null,
     writeVerificationStatus: 'not_tested', writeVerifiedAt: null, writeVerificationDetail: null,
+    reportStatus: null, reportRequestedAt: null, reportCompletedAt: null, reportWindowStart: null, reportWindowEnd: null, reportError: null,
     ...overrides,
   }
 }
