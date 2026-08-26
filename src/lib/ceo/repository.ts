@@ -1,7 +1,7 @@
 import 'server-only'
 
 import { requireSession } from '@/lib/security/session'
-import { getAnalyticsDashboard, type AnalyticsDashboard } from '@/lib/analytics/repository'
+import { getAnalyticsDashboard, buildExecutiveSummary, type AnalyticsDashboard } from '@/lib/analytics/repository'
 import { getMonitoringStatus, type MonitoringStatus } from '@/lib/monitoring/repository'
 import { getAutomationStatus, type AutomationStatus } from '@/lib/automation/repository'
 import { getPendingApprovals } from '@/lib/automation/approvals'
@@ -16,7 +16,7 @@ import { unavailableAdvertisingAnalytics, buildAdvertisingScorecard } from '@/li
 import { unknownDataQualitySummary } from '@/lib/analytics/dataQuality'
 import { getAdvertisingIntelligence, type AdvertisingIntelligence } from '@/lib/analytics/repository'
 import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
-import type { CEOCommandCentre, ExecutiveSummary, RecentActivityItem, ActivityCategory } from './types'
+import type { CEOCommandCentre, RecentActivityItem, ActivityCategory } from './types'
 import type { DomainEventRow } from '@/lib/monitoring/repository'
 import type { AutomationAction } from '@/lib/automation/repository'
 
@@ -140,28 +140,6 @@ export async function getCEOCommandCentre(): Promise<CEOCommandCentre> {
     recentActivity,
     demoScenarios: session.isDemo ? demoCEOScenarios() : [],
     dataSourceFailures,
-  }
-}
-
-function buildExecutiveSummary(analytics: Awaited<ReturnType<typeof getAnalyticsDashboard>>): ExecutiveSummary {
-  const knownMarginChannels = analytics.channels.filter((c) => c.profit.averageNetMarginPct.status === 'calculated' && typeof c.profit.averageNetMarginPct.value === 'number')
-  const knownNetMarginPct = knownMarginChannels.length === 0
-    ? null
-    : Math.round((knownMarginChannels.reduce((sum, c) => sum + (c.profit.averageNetMarginPct.value as number), 0) / knownMarginChannels.length) * 100) / 100
-  const profitDataComplete = analytics.channels.length > 0 && analytics.channels.every((c) => c.profit.productsWithUnknownProfit === 0) && knownNetMarginPct !== null
-
-  return {
-    isDemo: analytics.isDemo,
-    periodLabel: analytics.period.label,
-    revenue: analytics.sales.revenue,
-    netRevenue: analytics.sales.netRevenue,
-    orders: analytics.sales.orders,
-    averageOrderValue: analytics.sales.averageOrderValue,
-    refundsValue: analytics.sales.refundsValue,
-    refundRatePct: analytics.sales.refundRatePct,
-    returnRatePct: analytics.sales.returnRatePct,
-    knownNetMarginPct,
-    profitDataComplete,
   }
 }
 

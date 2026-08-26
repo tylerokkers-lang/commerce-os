@@ -2797,7 +2797,101 @@ advertising credentials exist in this environment, and no private dev
 server was available to browser-check a real chat-originated scale
 recommendation reaching `/approvals`.
 
-## 42. Next step
+## 42. Milestone 24 (Live Business Summary & Daily Report) — reconnecting a stale reporting path to the real intelligence layer
+
+Continuing "next unblocked milestone." The "Next step" loose-ends list
+(§43, below) has four items gated on live infrastructure or credentials,
+and one already closed (§41). Re-inspecting `docs/MILESTONES.md`/
+`HANDOVER.md` against the actual repository turned up something neither
+explicitly tracked: `analytics/repository.ts`'s `getBusinessSummary()`/`getDailyReport()`
+— the Milestone 1 reads powering `/report` and (partially) `/finance` —
+still returned a hardcoded-empty result in live mode unconditionally,
+with a stale comment referencing "Milestone 3" as pending future work.
+Meanwhile Milestone 10/14 had already built a complete, real analytics
+layer (`getAnalyticsDashboard()`, `getAdvertisingIntelligence()`) that
+`/` (the CEO Command Centre) has rendered from for many milestones. Two
+independent, permanently-diverging computations of the same business
+facts — exactly the duplicated-logic pattern `docs/PRINCIPLES.md` warns
+against — with `/report` frozen on the older, dead one.
+
+**What was built:** `getBusinessSummary()` now consumes
+`getAnalyticsDashboard()`/`getAdvertisingIntelligence()` — the same real,
+already-computed revenue/orders/AOV/refund-and-return-rate/ad-spend/ROAS
+figures `/` already shows, honestly unwrapped from their `Metric<T>`
+status (a genuinely-unknown figure still becomes zero/null, never
+fabricated). `contribution`/`estimatedNetProfit` are a currency-safe sum
+across each channel's already-computed `ChannelProfitRollup.knownNetProfit`
+(no business-wide contribution figure existed anywhere as one number —
+this composes existing, real per-channel figures with `money.ts`'s own
+currency-checked `add`, not a new profitability rule).
+`revenueChangePct` reuses the real period-over-period `comparison` the
+sales metric already carries; `contributionChangePct` stays honestly
+`null` — no equivalent per-business comparison exists to report.
+
+**A circular-import obstacle, resolved by relocation, not duplication:**
+`ceo/repository.ts`'s own `buildExecutiveSummary` (a pure function
+already computing everything `getBusinessSummary()` needed) could not be
+imported into `analytics/repository.ts` directly — `ceo/repository.ts`
+already imports `getAnalyticsDashboard`/`getAdvertisingIntelligence` FROM
+`analytics/repository.ts`, so the reverse import would be a genuine
+cycle. Rather than write a second, independently-diverging copy of the
+same computation (the exact anti-pattern this milestone exists to fix),
+`buildExecutiveSummary` was relocated to `analytics/repository.ts` (its
+natural, lower layer — `ceo` already depends on `analytics`, never the
+reverse) and `ceo/repository.ts` now imports it from there, behaviour
+unchanged, both callers sharing one implementation.
+
+`getDailyReport()`'s `complianceIssues`/`approvals` now read from the
+exact same `compliance/repository.ts`/`automation/approvals.ts` functions
+`ceo/repository.ts` itself calls for `/` — never a second verdict.
+`opportunities`/`stockAlerts` now call the real `products/repository.ts`
+functions too; both still honestly return `[]` in this environment (no
+live research provider exists — Milestone 2's own documented limitation),
+but are no longer a second, permanently-frozen hardcoding that could
+never reflect real data even once a provider exists.
+
+**Deliberately not fixed this pass, and why:** `winners`/`losers` remain
+`[]` — the real per-product profit data (`AnalyticsDashboard.topProfitProducts`/
+`lossMakingProducts`, `ProductProfitHighlight[]`) lacks the display
+fields `/report`'s `ProductSummary` cards need (`healthScore`/`trendPct`/
+`unitsSold`/`returnRatePct`/`adSpend`), none of which have a live source
+either — force-fitting the shape with zeros would fabricate facts this
+system has no basis for. `finance`/`getFinanceSummary()` and `cashflow`/
+`getCashflow()` remain genuinely unbuilt — confirmed no other file in
+this codebase computes any live `FinanceSummary` field (invoicing/VAT/
+accounting-sync) or forward-looking payout/commitment timing; both match
+`docs/MILESTONES.md`'s own "Cross-cutting, ongoing" Finance/Payments
+section, correctly left honest rather than faked complete.
+`getChannelSummaries()` (in the same file, also hardcoded `isConnected: false`
+unconditionally) was left untouched — it has zero callers anywhere in
+this codebase today, confirmed by search; fixing genuinely dead code was
+judged out of scope for "implement only what is required." Noted here as
+known, low-priority technical debt rather than silently left unexplained.
+
+**Safety:** this milestone is entirely read-side reporting — no policy,
+approval, capability-gate, purchasing, or write-path code was touched.
+Tenant isolation is unaffected (every underlying call remains
+`requireSession()`-gated and org-scoped, unchanged). No new secrets, no
+new migration, no new persistence path.
+
+**Tested:** no new dedicated tests — `getBusinessSummary()`/`getDailyReport()`
+are `server-only` and were already untestable directly in Vitest before
+this change (confirmed: zero prior test references); `buildExecutiveSummary`
+was equally untestable in its original home (`ceo/repository.ts`, also
+`server-only`) and remains so in its new one — a lateral move, not a
+testability regression, consistent with the same "pure logic embedded in
+a server-only file, verified by inspection" pattern already established
+throughout this codebase for many other functions. 1285 tests unchanged,
+all passing. `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run
+db:verify` (73 tables, no new migration) all clean.
+
+**Not live-verified:** the same standing limitation as §§39-41 — no real
+Supabase project with real order/product/advertising data exists in this
+environment to confirm these real figures against, and another session's
+dev-server lock again prevented a browser check of `/report`/`/finance`.
+Confirmed via `tsc`/build only.
+
+## 43. Next step
 
 The two real options remaining, per `docs/MILESTONES.md`: (1) **the one
 gap §36/§39 still leave open** — an actual live verification run, which

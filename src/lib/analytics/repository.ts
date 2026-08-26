@@ -1,6 +1,7 @@
 import 'server-only'
 
-import { zero } from '@/lib/core/money'
+import { add, zero } from '@/lib/core/money'
+import { isKnown } from '@/lib/analytics/types'
 import type {
   BusinessSummary,
   CashflowProjection,
@@ -14,6 +15,10 @@ import {
   demoDailyReport,
 } from '@/lib/demo/dataset'
 import { requireSession } from '@/lib/security/session'
+import { getComplianceIssues } from '@/lib/compliance/repository'
+import { getPendingApprovals } from '@/lib/automation/approvals'
+import { getOpportunities, getStockAlerts } from '@/lib/products/repository'
+import { getFinanceSummary } from '@/lib/tax/repository'
 
 /**
  * Reporting reads.
@@ -23,33 +28,67 @@ import { requireSession } from '@/lib/security/session'
  * an empty dashboard on day one is the truthful answer.
  */
 
-const EMPTY_SUMMARY: BusinessSummary = {
-  isDemo: false,
-  periodLabel: 'Last 30 days',
-  revenue: zero('GBP'),
-  contribution: zero('GBP'),
-  estimatedNetProfit: zero('GBP'),
-  orders: 0,
-  units: 0,
-  averageOrderValue: zero('GBP'),
-  contributionMarginPct: null,
-  adSpend: zero('GBP'),
-  roas: null,
-  refundRatePct: 0,
-  returnRatePct: 0,
-  cashAvailable: zero('GBP'),
-  revenueChangePct: null,
-  contributionChangePct: null,
-}
-
+/**
+ * Milestone 24 — `getBusinessSummary()` previously returned a
+ * hardcoded-empty `BusinessSummary` in live mode unconditionally, with a
+ * comment referencing "Milestone 3" as future work — stale by many
+ * milestones: `getAnalyticsDashboard()`/`getAdvertisingIntelligence()`
+ * below (Milestone 10/14) already compute every one of these figures for
+ * real from real order/profitability/advertising data, and `/` (the CEO
+ * Command Centre) has rendered them for several milestones. This was a
+ * second, disconnected, permanently-stale reporting path for the exact
+ * same facts — the kind of duplicated business logic
+ * `docs/PRINCIPLES.md` warns against. Fixed by consuming the same
+ * dashboard this file already builds, never a second computation of it.
+ * `getCEOCommandCentre()` itself is not called here — `ceo/repository.ts`
+ * already imports from this file, so importing it back would be a
+ * circular dependency; `buildExecutiveSummary` below is the same pure
+ * function `ceo/repository.ts` uses, relocated to this lower layer so
+ * both callers share one implementation without one importing the other.
+ */
 export async function getBusinessSummary(): Promise<BusinessSummary> {
   const session = await requireSession()
   if (session.isDemo) return demoBusinessSummary()
 
-  // Live aggregation lands in Milestone 3 alongside the Shopify order sync.
-  // Until orders exist there is nothing to aggregate, and inventing a figure
-  // here would be exactly the failure mode this system is meant to avoid.
-  return EMPTY_SUMMARY
+  const [analytics, advertising] = await Promise.all([getAnalyticsDashboard(), getAdvertisingIntelligence()])
+  const es = buildExecutiveSummary(analytics)
+  const currency = analytics.sales.currency
+
+  // A business-wide contribution figure has no single existing source —
+  // `ChannelProfitRollup` only exists per channel. Summed here across
+  // channels with a known figure only, via `money.ts`'s own currency-safe
+  // `add` (every channel's rollup is already normalised to the org's one
+  // base currency, the same assumption `liveAdvertisingFacts.ts` documents
+  // for its own figures) — a straightforward composition of already-real
+  // numbers, never a new profitability rule.
+  const knownChannelProfits = analytics.channels.map((c) => c.profit.knownNetProfit).filter(isKnown)
+  const contribution = knownChannelProfits.length > 0
+    ? knownChannelProfits.reduce((sum, m) => add(sum, m.value), zero(currency))
+    : zero(currency)
+
+  return {
+    isDemo: false,
+    periodLabel: es.periodLabel,
+    revenue: isKnown(es.revenue) ? es.revenue.value : zero(currency),
+    contribution,
+    estimatedNetProfit: contribution,
+    orders: isKnown(es.orders) ? es.orders.value : 0,
+    units: isKnown(analytics.sales.units) ? analytics.sales.units.value : 0,
+    averageOrderValue: isKnown(es.averageOrderValue) ? es.averageOrderValue.value : zero(currency),
+    contributionMarginPct: es.knownNetMarginPct,
+    adSpend: isKnown(advertising.scorecard.totalSpend) ? advertising.scorecard.totalSpend.value : zero(currency),
+    roas: isKnown(advertising.scorecard.overallRoas) ? advertising.scorecard.overallRoas.value : null,
+    refundRatePct: isKnown(es.refundRatePct) ? es.refundRatePct.value : 0,
+    returnRatePct: isKnown(es.returnRatePct) ? es.returnRatePct.value : 0,
+    // No live cash-position source exists yet — genuinely distinct from
+    // `getCashflow()`'s own honest gap below, not fixed by this pass.
+    cashAvailable: zero(currency),
+    revenueChangePct: es.revenue.comparison?.percentChange ?? null,
+    // No per-business-total historical comparison exists for contribution
+    // — only per-channel `ChannelProfitRollup` figures, which carry no
+    // comparison field at all. Never fabricated from the revenue change.
+    contributionChangePct: null,
+  }
 }
 
 export async function getChannelSummaries(): Promise<readonly ChannelSummary[]> {
@@ -328,6 +367,39 @@ function rowsInWindow<T extends { periodDate: string }>(rows: readonly T[], star
   return rows.filter((r) => r.periodDate >= startDate && r.periodDate <= endDate)
 }
 
+/**
+ * The one place `ExecutiveSummary` (`ceo/types.ts`) is built from an
+ * `AnalyticsDashboard` — `ceo/repository.ts` imports this rather than
+ * defining its own copy, and `getBusinessSummary()` above reuses it too,
+ * so both callers agree on the same "best-known net margin across every
+ * channel with a calculated projection" computation. Lives in this file,
+ * not `ceo/repository.ts`, specifically so `getBusinessSummary()` above
+ * can call it without creating a circular import (`ceo/repository.ts`
+ * already depends on this file for `getAnalyticsDashboard`/
+ * `getAdvertisingIntelligence` — the dependency only ever runs one way).
+ */
+export function buildExecutiveSummary(analytics: AnalyticsDashboard) {
+  const knownMarginChannels = analytics.channels.filter((c) => c.profit.averageNetMarginPct.status === 'calculated' && typeof c.profit.averageNetMarginPct.value === 'number')
+  const knownNetMarginPct = knownMarginChannels.length === 0
+    ? null
+    : Math.round((knownMarginChannels.reduce((sum, c) => sum + (c.profit.averageNetMarginPct.value as number), 0) / knownMarginChannels.length) * 100) / 100
+  const profitDataComplete = analytics.channels.length > 0 && analytics.channels.every((c) => c.profit.productsWithUnknownProfit === 0) && knownNetMarginPct !== null
+
+  return {
+    isDemo: analytics.isDemo,
+    periodLabel: analytics.period.label,
+    revenue: analytics.sales.revenue,
+    netRevenue: analytics.sales.netRevenue,
+    orders: analytics.sales.orders,
+    averageOrderValue: analytics.sales.averageOrderValue,
+    refundsValue: analytics.sales.refundsValue,
+    refundRatePct: analytics.sales.refundRatePct,
+    returnRatePct: analytics.sales.returnRatePct,
+    knownNetMarginPct,
+    profitDataComplete,
+  }
+}
+
 export async function getAdvertisingIntelligence(periodKey: PeriodKey = 'last_30_days'): Promise<AdvertisingIntelligence> {
   const session = await requireSession()
   const period = resolvePeriod(periodKey, new Date())
@@ -434,29 +506,58 @@ function buildCampaignIntelligence(
   return results
 }
 
+/**
+ * Milestone 24 — `winners`/`losers`/`complianceIssues`/`opportunities`/
+ * `stockAlerts`/`approvals` were all hardcoded to `[]` in live mode
+ * unconditionally, even though real engines for four of these six exist
+ * elsewhere in this codebase and already power `/` and `/compliance`.
+ * `complianceIssues` and `approvals` now read from the exact same
+ * `compliance/repository.ts`/`automation/approvals.ts` functions
+ * `ceo/repository.ts` itself calls for `/` — never a second compliance or
+ * approval verdict. `opportunities`/`stockAlerts` now call the real
+ * `products/repository.ts` functions too — both still honestly return
+ * `[]` today (no live research provider exists yet; see Milestone 2's own
+ * documented limitation), but are no longer a second, permanently-frozen
+ * hardcoding that would never reflect real data even once a provider
+ * exists.
+ *
+ * `winners`/`losers` remain genuinely unfixed this pass — deliberately,
+ * not an oversight: the real per-product profitability data
+ * (`AnalyticsDashboard.topProfitProducts`/`lossMakingProducts`, both
+ * `ProductProfitHighlight[]`) lacks the display fields `ProductSummary`
+ * needs (`healthScore`/`trendPct`/`unitsSold`/`returnRatePct`/`adSpend`),
+ * none of which have a live source yet either — filling them with `0`/`flat`
+ * to force-fit the shape would fabricate facts this system has no basis
+ * for, exactly what `docs/PRINCIPLES.md` forbids. See `HANDOVER.md` for
+ * this documented as a separate, later gap.
+ *
+ * `finance`/`cashflow` remain genuinely unbuilt — `getFinanceSummary()`/
+ * `getCashflow()` have no real invoicing/VAT/payout-timing engine behind
+ * them yet (confirmed: no other file in this codebase computes any of
+ * `FinanceSummary`'s fields for a live org) — correctly left as
+ * `docs/MILESTONES.md`'s own "Cross-cutting, ongoing" Finance/Payments
+ * section describes, not silently faked to look complete.
+ */
 export async function getDailyReport(): Promise<DailyReport> {
   const session = await requireSession()
   if (session.isDemo) return demoDailyReport()
 
-  const [business, cashflow] = await Promise.all([getBusinessSummary(), getCashflow()])
+  const [business, cashflow, finance, opportunities, stockAlerts, complianceIssues, approvals] = await Promise.all([
+    getBusinessSummary(), getCashflow(), getFinanceSummary(), getOpportunities(), getStockAlerts(), getComplianceIssues(), getPendingApprovals(),
+  ])
+
   return {
     generatedAt: new Date().toISOString(),
     isDemo: false,
     business,
     winners: [],
     losers: [],
-    opportunities: [],
-    stockAlerts: [],
-    complianceIssues: [],
-    finance: {
-      invoicesGenerated: 0, invoicesSent: 0, invoicesFailed: 0, creditNotesIssued: 0,
-      vatRegistered: false, outputVat: zero('GBP'), inputVat: zero('GBP'),
-      estimatedVatDue: zero('GBP'), vatTransactionsNeedingReview: 0,
-      rollingTurnover: zero('GBP'), vatThreshold: zero('GBP'),
-      vatThresholdStatus: 'safe', accountingSyncStatus: 'not_connected', accountingPending: 0,
-    },
+    opportunities,
+    stockAlerts,
+    complianceIssues,
+    finance,
     cashflow,
-    approvals: [],
+    approvals,
   }
 }
 
