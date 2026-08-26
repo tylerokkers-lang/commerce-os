@@ -84,6 +84,14 @@ describe('1b. Store domain normalisation (found via a real live-verification run
       process.env = original
     }
   })
+
+  it('strips a repeated/stacked scheme prefix — the exact mistake a second real live-verification run surfaced', () => {
+    expect(shopifyInternal.normalizeStoreDomain('https://https:https:https://a-store.myshopify.com')).toBe('a-store.myshopify.com')
+  })
+
+  it('strips a repeated scheme prefix regardless of how many times it repeats', () => {
+    expect(shopifyInternal.normalizeStoreDomain('https://https://https://a-store.myshopify.com')).toBe('a-store.myshopify.com')
+  })
 })
 
 describe('2. Client-credentials token exchange: request construction', () => {

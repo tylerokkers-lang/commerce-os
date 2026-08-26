@@ -122,10 +122,18 @@ function readEnv(name: string): string | undefined {
  * prefix (`https://${storeDomain}/...`), so a doubled scheme would
  * otherwise resolve DNS for the literal hostname "https" and fail with a
  * confusing `ENOTFOUND` — found and diagnosed via a real live-verification
- * run, not a hypothetical. A bare hostname is never altered.
+ * run, not a hypothetical.
+ *
+ * A second live-verification run (after the domain was hand-corrected)
+ * found the prefix can also appear *repeated* — e.g.
+ * `https://https:https:https://your-store.myshopify.com`, an accumulation
+ * artifact from more than one manual edit — which a single-occurrence
+ * strip leaves partially intact. The scheme-strip below therefore repeats
+ * until no leading `http(s):` (with or without following slashes) remains,
+ * rather than stripping only once. A bare hostname is never altered.
  */
 function normalizeStoreDomain(value: string): string {
-  return value.replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+  return value.replace(/^(?:https?:\/*)+/i, '').replace(/\/+$/, '')
 }
 
 interface ShopifyCredentials {

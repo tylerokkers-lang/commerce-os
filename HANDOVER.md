@@ -3234,21 +3234,81 @@ this run. Full capability table:
 | Fulfilments (read-side) | NOT TESTED |
 | Write capabilities structurally disabled | YES (confirmed, unaffected by the above) |
 
-## 47. Next step
+## 47. Shopify Read-Only live verification — attempt 3, LIVE_VERIFIED: YES
 
-**Immediate: fix `SHOPIFY_STORE_DOMAIN` in `.env.local`.** It must be
-the store's bare Admin API domain — `{your-store-handle}.myshopify.com`
-— with no `https://` prefix and no path. The easiest reliable source:
-Dev Dashboard → the app → API access (or Overview) page, which lists
-the exact Admin API host for the installed store; alternatively, from
-Shopify admin, Settings → General shows the store's own
-`.myshopify.com` domain directly. Do not copy this from the browser's
-address bar while inside any other admin page (theme editor, product
-pages, apps, etc.) — none of those URLs are the API domain. Once
-corrected, re-run the same live-verification sequence — no further code
-changes are expected to be needed, since both `SHOPIFY_API_VERSION` and
-app installation are now confirmed correct, and the token endpoint is
-confirmed genuinely reachable once the domain is right.
+**Context:** `SHOPIFY_STORE_DOMAIN` was hand-corrected to a bare
+`*.myshopify.com` value per §46's "next step." Re-running the same
+temporary Vitest-based live-verification approach (deleted immediately
+after the run; no credential value ever asserted on, logged to this
+document, or pasted into chat) found the domain now had the right
+*host* but the scheme-prefix was **stacked several times over**
+(`https://https:https:https://{domain}`) — an accumulation artifact
+from more than one manual edit attempt, distinct from §45's single
+prefix and §46's wrong-host mistake. The prior `normalizeStoreDomain()`
+only stripped one leading occurrence, so it left the stacked prefix
+partially intact and the token-exchange URL still failed to parse.
+
+**One minimum-necessary code change was made:**
+`normalizeStoreDomain()` in
+[`src/lib/marketplaces/connectors/shopify.ts`](src/lib/marketplaces/connectors/shopify.ts)
+now strips the leading scheme prefix repeatedly (`/^(?:https?:\/*)+/i`)
+instead of once, so any number of stacked `http(s):`/`http(s)://`
+fragments are removed, not just the first. A bare, already-correct
+hostname is still left byte-for-byte unchanged. Two regression tests
+were added to
+[`tests/shopify-connector.test.ts`](tests/shopify-connector.test.ts)
+(§1b) covering the exact stacked-prefix shape found and a
+three-times-repeated case, for 46 tests total in that file (was 44).
+Full suite re-run after the change: 1340/1340 tests pass (was 1338),
+`tsc --noEmit` clean, `eslint` clean, `next build` clean, `db:verify`
+clean (73 tables, no migration).
+
+**Live verification, re-run after the fix — real evidence, not
+simulated:**
+
+| Capability | Result |
+|---|---|
+| Configuration (4 env vars present) | YES |
+| Authentication (token exchange) | **LIVE_VERIFIED** — real access token returned |
+| Shop identity (`getConnectionHealth`) | **LIVE_VERIFIED** — `status: "connected"`, real `apiVersion` echoed back |
+| Products (`fetchListings`) | **LIVE_VERIFIED (connectivity)** — real 200 GraphQL response, 0 records: the store currently has no products |
+| Orders (`fetchOrders`) | **LIVE_VERIFIED (connectivity)** — real 200 GraphQL response, 0 records: the store currently has no orders |
+| Inventory (`fetchInventory`) | **LIVE_VERIFIED (connectivity)** — real 200 GraphQL response, 0 records, consistent with 0 products |
+| Fulfilments (read-side, via order status) | **LIVE_VERIFIED (connectivity)** — real request succeeded, 0 statuses observed, consistent with 0 orders |
+| Write capabilities structurally disabled | YES (confirmed unaffected — `writeListings`/`updateFulfilment`/`processRefunds` all `false`, `updateListingPrice()` still returns a disabled result) |
+
+The `PRODUCTS_QUERY`/`ORDERS_QUERY`/`INVENTORY_QUERY` GraphQL queries
+carry no restrictive status/date filter that could itself explain an
+empty result (`PRODUCTS_QUERY` has no `status:` filter;
+`fetchOrders({limit})` with no `sinceIso` passes no `query` filter at
+all) — checked directly against the query strings in
+[`shopify.ts`](src/lib/marketplaces/connectors/shopify.ts) before
+concluding this. Zero records is a real, structurally valid empty
+result from a store that genuinely has no products or orders yet, not
+a query bug or a fabricated result. This means the connector's field
+**mapping** logic (`mapListing`/`mapOrderStatus`/inventory
+quantity-summing) has *not* been exercised against a real non-empty
+record this session — only its unit tests (§44) and the successful
+empty-response path have real/live coverage. That is the one remaining
+honest gap.
+
+**`LIVE_VERIFIED: YES`** for connectivity/authentication/every read
+capability. eBay remains untouched and `CONFIGURATION_INCOMPLETE`.
+Anthropic remains untouched and billing-gated. No write capability was
+exercised, attempted, or enabled at any point.
+
+## 48. Next step
+
+**Shopify Read-Only is now genuinely live-verified for connectivity.**
+The one honest remaining gap (§47): no real product/order/inventory
+record has yet been fetched and mapped, since the connected store is
+currently empty. If/when the store has at least one real product or
+order, re-running the same live-verification sequence once more would
+additionally prove the field-mapping logic (`mapListing`,
+`mapOrderStatus`, inventory quantity summing) against genuine Shopify
+data, closing that gap — optional, not blocking, since the mapping
+logic already has full unit-test coverage (§44) against realistic
+fixture shapes.
 
 **The one genuinely unblocked, non-trivial code candidate (§43): order
 ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is
