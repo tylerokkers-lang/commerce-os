@@ -248,3 +248,60 @@ describe('identifier requirements', () => {
     expect(decision.requirements.find((r) => r.key === 'identifiers')?.satisfied).toBe(true)
   })
 })
+
+/**
+ * Milestone: live channel compliance & readiness. The explicit safety
+ * requirement this proves: NOT ASSESSED must never be silently treated as
+ * PASS. `verdict: 'not_assessed'` is constructed directly here (rather than
+ * via `assessCompliance`) so the gate's own handling of that exact value is
+ * tested in isolation, independent of which real-world scenario happens to
+ * produce it today.
+ */
+describe('publicationGate: compliance verdicts other than "pass" always block, including "not_assessed"', () => {
+  const NOT_ASSESSED_COMPLIANCE = {
+    channel: 'shopify' as const,
+    verdict: 'not_assessed' as const,
+    checks: [],
+    blockingReasons: [],
+    reviewReasons: [],
+    remediableBlockers: [],
+    fundamentalBlockers: [],
+    ip: { level: 'low' as const, signals: [], reasons: [], requiresHumanReview: false, summary: 'No IP risk signals.', assessedAt: CLOCK.toISOString() },
+    restrictedCategory: false,
+    requiresDocumentation: false,
+    rulesetVersion: 'test',
+    assessedAt: CLOCK.toISOString(),
+    summary: 'Nothing was actually assessed for this product.',
+    disclaimer: 'This system reports findings, not legal conclusions.',
+  }
+
+  it('"not_assessed" blocks — never an implicit pass', () => {
+    const decision = assessPublicationReadiness(baseInput({ compliance: NOT_ASSESSED_COMPLIANCE }))
+    expect(decision.outcome).toBe('blocked')
+    expect(decision.requirements.find((r) => r.key === 'compliance')?.satisfied).toBe(false)
+  })
+
+  it('"review_required" blocks — never an unconditional SELL/auto-publish', () => {
+    const decision = assessPublicationReadiness(baseInput({ compliance: { ...NOT_ASSESSED_COMPLIANCE, verdict: 'review_required' } }))
+    expect(decision.outcome).toBe('blocked')
+    expect(decision.requirements.find((r) => r.key === 'compliance')?.satisfied).toBe(false)
+  })
+
+  it('"fail" blocks', () => {
+    const decision = assessPublicationReadiness(baseInput({ compliance: { ...NOT_ASSESSED_COMPLIANCE, verdict: 'fail' } }))
+    expect(decision.outcome).toBe('blocked')
+    expect(decision.requirements.find((r) => r.key === 'compliance')?.satisfied).toBe(false)
+  })
+
+  it('"pass" is the only verdict that satisfies the compliance requirement', () => {
+    const decision = assessPublicationReadiness(baseInput({ compliance: { ...NOT_ASSESSED_COMPLIANCE, verdict: 'pass' } }))
+    expect(decision.requirements.find((r) => r.key === 'compliance')?.satisfied).toBe(true)
+  })
+
+  it('`compliance: null` (never assessed at all) is treated identically to an explicit "not_assessed" verdict', () => {
+    const explicit = assessPublicationReadiness(baseInput({ compliance: NOT_ASSESSED_COMPLIANCE }))
+    const nullish = assessPublicationReadiness(baseInput({ compliance: null }))
+    expect(nullish.requirements.find((r) => r.key === 'compliance')?.satisfied).toBe(false)
+    expect(nullish.outcome).toBe(explicit.outcome)
+  })
+})

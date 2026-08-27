@@ -8,6 +8,7 @@ import { requireSession } from '@/lib/security/session'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { zero } from '@/lib/core/money'
 import type { PublicationDecision } from '@/lib/marketplaces/publicationGate'
+import type { ComplianceAssessment } from '@/lib/compliance/rules'
 
 export async function getProducts(): Promise<readonly ProductSummary[]> {
   const session = await requireSession()
@@ -168,6 +169,8 @@ export interface ChannelReadinessRow {
   decisionChangedAt: string | null
   decisionChangedBy: string | null
   readiness: PublicationDecision
+  compliance: ComplianceAssessment | null
+  complianceCaveats: readonly string[]
 }
 
 /**
@@ -208,14 +211,16 @@ export async function getChannelReadinessList(product: ProductDetail): Promise<r
     CHANNELS.map(async (channel) => {
       const row = decisionByChannel.get(channel)
       const decision: ProductDecision = row?.decision ?? 'review'
-      const readiness = await getChannelReadiness(session.orgId, product.id, channel, product.stage as never, product.decision)
+      const result = await getChannelReadiness(session.orgId, product.id, channel, product.stage as never, product.decision)
       return {
         channel,
         decision,
         decisionReason: row?.decision_reason ?? null,
         decisionChangedAt: row?.decision_changed_at ?? null,
         decisionChangedBy: lastActorByChannel.get(channel) ?? null,
-        readiness,
+        readiness: result.readiness,
+        compliance: result.compliance,
+        complianceCaveats: result.complianceCaveats,
       }
     }),
   )

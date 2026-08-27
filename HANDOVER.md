@@ -4119,7 +4119,147 @@ readiness chain, eBay profitability (needs verified fee research), wiring
 `priceExecution.ts` to the channel gate, and threading the real channel
 decision into `productHandlers.ts`'s automated re-check.
 
-## 54. Next step
+## 54. Milestone: live channel compliance & readiness
+
+**Context.** §53's own deferral list named this explicitly: "live compliance
+(`compliance: null` — assembling a real `ComplianceContext`... was out of
+scope)." Inspected first, per instruction: `compliance/rules.ts`'s
+`assessCompliance(channel, ctx)` — a full, already-built compliance engine
+(§14, `RULESET_VERSION = 'compliance-rules@1'`) with exactly the vocabulary
+requested (`ComplianceVerdict = 'pass' | 'review_required' | 'fail' |
+'not_assessed'`, a `disclaimer` field baked in so it never claims legal
+certainty) — was already live-wired at `opportunities/[id]/page.tsx` for
+pre-launch evaluation, but never for a real, already-existing product's
+channel readiness. **No new compliance engine was built** — this milestone
+is entirely about assembling a real `ComplianceContext` from Postgres and
+wiring it into the existing `channelReadiness.ts` assembler, replacing the
+`compliance: null` placeholder.
+
+**Live data confirmed genuinely available, and used:** `products.title/
+description/category/brand` (real columns); `product_identifiers` (a real
+table — real GTIN/UPC/EAN/ISBN records with source/validation); `business_settings.blocked_categories`
+(real column, never read live by any code before this); the supplier
+capability verdict `channelReadiness.ts` already computed for the
+profitability check, reused for `ComplianceContext.supplierCapability`
+rather than recomputed.
+
+**One genuine data gap found and handled honestly, not fabricated —
+plus a real self-correction worth recording:** regulated-category flags
+(`hasBattery`/`isElectrical`/`isChildrensProduct`/`isFoodContact`/
+`isCosmetic`) are not tracked anywhere in this schema — passed as
+`undefined`, which correctly means zero regulated-category document
+requirements are ever triggered, not that they were checked and found
+fine. `getChannelReadiness` returns a `complianceCaveats: readonly
+string[]` array stating this in plain English. **An earlier draft of this
+same milestone wrongly assumed no compliance-document table existed
+either** (`documents: []` always) — a genuine `compliance_documents`
+table (real columns: `doc_type`, `product_id`, `expires_on`) was found on
+closer inspection while gathering facts for the owner's-manual PDF, so it
+was wired in properly instead of leaving the false claim standing:
+`loadComplianceContext` now queries it for real, and the caveat list
+shrank from two items to one, matching what's genuinely still missing.
+
+**How the existing gate already does the right thing, unchanged:**
+`assessPublicationReadiness`'s compliance requirement already checked
+`compliance?.verdict === 'pass'` — strictly, not "not `'fail'`" — so
+wiring a real assessment through means `review_required`/`fail`/
+`not_assessed` all already correctly block, and `NOT ASSESSED` was never
+at risk of being read as an implicit pass. **No gate logic changed.** Five
+new tests make this explicit and permanent (`marketplace-publication-gate.test.ts`):
+`not_assessed` blocks, `review_required` blocks (never an unconditional
+SELL), `fail` blocks, only `pass` satisfies the requirement, and
+`compliance: null` is proven to produce the identical outcome as an
+explicit `not_assessed` verdict.
+
+**UI:** `ChannelDecisionControl.tsx` gained a "Compliance status" panel per
+channel — PASS/REVIEW REQUIRED/BLOCKED/NOT ASSESSED badge, every
+individual check with its own ✓/✕/? symbol and evidence text (reusing
+`ComplianceAssessment.checks` directly, never a second reasoning layer),
+the two data caveats where applicable, and the engine's own `disclaimer`
+verbatim — so the panel can never say more than the engine itself is
+willing to claim. No "fix automatically" button exists or was
+considered — every remedy shown is the check's own `remedy` text, read-only.
+
+**Fixed a real bug found while wiring this:** the supplier-capability
+assessment inside the new compliance-context assembler was hardcoded to
+`assessShopifyCapability(...)` regardless of which channel was actually
+being assessed — caught by re-reading my own draft before running
+anything, not by a test; fixed to reuse the channel-correct capability
+value `channelReadiness.ts` already computes for the profitability check.
+
+**Also found, NOT fixed (out of scope, flagged separately):** a
+pre-existing, reproducible server crash at `opportunities/[id]/page.tsx:180`
+(`Cannot read properties of undefined (reading 'summary')`, an `assessment`
+that can be `undefined` inside a per-channel `.map()`) — confirmed via live
+browser + server logs during this pass's own verification, confirmed
+unrelated (the file was never touched this session, predates this
+milestone). Flagged as a separate background task rather than fixed here,
+per the standing instruction not to make changes beyond what a milestone
+genuinely requires.
+
+**Tested:** 5 new tests, 1462 total (was 1457). `npx tsc --noEmit`,
+`npm run lint`, `npm run build` (no new routes), `npm run db:verify` (76
+tables, **no migration this pass** — no new schema was needed) all clean.
+Verified live in the browser: `/products/[id]` renders correctly in demo
+mode (compliance panel path is behind the same honest "not modelled in
+demo mode" gate as the rest of the channel section, since demo mode has
+no real product/identifier/settings data to assemble from); no console or
+server error traceable to any file this milestone touched. **Not
+live-Postgres-verified against a real product with real identifiers** —
+the same project-wide limitation stated throughout this file.
+
+**Deliberately not touched:** `priceExecution.ts` still only checks the
+product-level decision (unchanged from §53); `productHandlers.ts`'s
+automated re-check still passes `channelDecision: null` (unchanged);
+eBay profitability remains unwired (fee schedule still unverified);
+advertising product-linkage remains undone. None of these were required
+by "assemble live compliance" and extending scope to them was avoided.
+
+**Milestone:** live channel compliance & readiness, closing the specific
+gap §53 named. Genuine remaining compliance work: a UI for actually
+recording regulated-category flags against a product — `compliance_documents`
+is now genuinely read, but nothing in the product UI yet lets an operator
+add a document row to it either, so the read path is real while the write
+path for both remaining gaps stays a future increment.
+
+## 55. Documentation: Commerce OS Owner's Manual (PDF)
+
+Built `docs/Commerce-OS-Owners-Manual.pdf` (39 pages) — a comprehensive,
+factual operator manual covering: executive overview, system map, how the
+system makes decisions, product lifecycle, marketplace integration guide
+(Shopify/Amazon/eBay/Supabase/AI), daily operating instructions,
+button-by-button guide, automation vs. human responsibility, a
+troubleshooting reference ("what to do when something goes wrong"), the
+CEO/owner dashboard guide, security and safety, a current capabilities
+matrix, roadmap, a 45-term glossary, and a real (not hand-typed) alphabetical
+index with genuine page numbers.
+
+**Generated from `docs/generate_owners_manual.py`** — a reportlab Platypus
+script kept alongside the PDF as its maintainable source; re-run it after
+any milestone that changes a status claim in the manual (never hand-edit
+the PDF). It uses reportlab's real `TableOfContents` flowable (genuine,
+clickable, accurately paginated) plus a custom `IndexMark`/`INDEX_TERMS`
+mechanism (mirroring the same notification pattern) for the index, built
+via a two-stage render: stage 1 renders the full document once so every
+index-marked term's real page number is known, stage 2 rebuilds the
+document from scratch (fresh flowable objects — reportlab flowables cache
+internal layout state that isn't safe to reuse across two separate
+doc/canvas builds) with the now-known index entries appended, producing
+the real output file.
+
+**Every status claim in the manual was checked against the actual
+repository during this pass** — including a live inventory of the CEO
+dashboard's real panels (an Explore agent read `src/app/(dashboard)/page.tsx`
+and `src/lib/ceo/repository.ts` directly), and the roadmap section is
+drawn from §55's own "Next step" content below, not invented. Two
+dashboard panels are explicitly documented as wired-but-placeholder for a
+live organisation (`Opportunities` and `Stock` — both return empty/zero
+outside demo mode today) rather than described as live, since they aren't.
+
+Not committed as a rewrite of any functionality — no production code
+changed as part of writing this document.
+
+## 56. Next step
 
 **Done in §53: channel-level decisions**, exactly as described below when
 this was first written — `channel_product_decisions`, the full

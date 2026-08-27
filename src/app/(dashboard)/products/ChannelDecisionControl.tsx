@@ -9,6 +9,24 @@ import { initialDecisionChangeState } from './state'
 import { PRODUCT_DECISIONS } from '@/lib/products/decision'
 import { deriveChannelRecommendation } from '@/lib/marketplaces/channelRecommendation'
 import type { ChannelReadinessRow } from '@/lib/products/repository'
+import type { ComplianceVerdict } from '@/lib/core/domain'
+import type { CheckOutcome } from '@/lib/compliance/rules'
+
+const COMPLIANCE_STATUS_LABELS: Record<ComplianceVerdict, string> = {
+  pass: 'PASS',
+  review_required: 'REVIEW REQUIRED',
+  fail: 'BLOCKED',
+  not_assessed: 'NOT ASSESSED',
+}
+
+const COMPLIANCE_STATUS_TONES: Record<ComplianceVerdict, Tone> = {
+  pass: 'positive',
+  review_required: 'caution',
+  fail: 'negative',
+  not_assessed: 'neutral',
+}
+
+const CHECK_SYMBOL: Record<CheckOutcome, string> = { pass: '✓', fail: '✕', unknown: '?', not_applicable: '–' }
 
 /**
  * The channel-level counterpart to `DecisionControl.tsx` (HANDOVER.md §53's
@@ -57,6 +75,52 @@ export function ChannelDecisionControl({ productId, row, canEdit }: { productId:
             </li>
           ))}
         </ul>
+      </div>
+
+      <div className="border-t border-border px-5 py-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Compliance status</p>
+          <Badge tone={row.compliance ? COMPLIANCE_STATUS_TONES[row.compliance.verdict] : 'neutral'}>
+            {row.compliance ? COMPLIANCE_STATUS_LABELS[row.compliance.verdict] : 'NOT ASSESSED'}
+          </Badge>
+        </div>
+        {row.compliance ? (
+          <>
+            <p className="mt-1 text-sm text-ink-muted">{row.compliance.summary}</p>
+            <ul className="mt-3 space-y-1.5">
+              {row.compliance.checks.map((check) => (
+                <li key={check.key} className="flex items-start gap-2 text-xs">
+                  <span aria-hidden className={check.outcome === 'pass' ? 'text-positive' : check.outcome === 'fail' ? 'text-negative' : 'text-ink-subtle'}>
+                    {CHECK_SYMBOL[check.outcome]}
+                  </span>
+                  <span>
+                    <span className="font-medium">{check.label}:</span>{' '}
+                    <span className="text-ink-muted">{check.evidence}</span>
+                    {check.remedy ? <span className="text-ink-subtle"> — {check.remedy}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {row.complianceCaveats.length > 0 ? (
+              <div className="mt-3 rounded-lg border border-border px-3 py-2">
+                <p className="text-xs font-medium text-ink-subtle">Checks this system cannot yet perform</p>
+                <ul className="mt-1 space-y-1">
+                  {row.complianceCaveats.map((caveat) => (
+                    <li key={caveat} className="flex items-start gap-2 text-xs text-ink-subtle">
+                      <span aria-hidden>?</span>
+                      <span>{caveat}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <p className="mt-3 text-xs text-ink-subtle">{row.compliance.disclaimer}</p>
+          </>
+        ) : (
+          <p className="mt-1 text-sm text-ink-muted">
+            Compliance information incomplete — this product could not be assessed (no product record found to check against).
+          </p>
+        )}
       </div>
 
       <div className="border-t border-border px-5 py-3">
