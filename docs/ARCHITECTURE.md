@@ -61,7 +61,10 @@ src/lib/
   audit/         append-only action log
   profitability/ the cost model everything else defers to
   demo/          the simulated business
-  products/      catalogue, lifecycle, identifiers
+  products/      catalogue, lifecycle, identifiers, opportunity scoring,
+                 decisions; intelligence/ (quality/risk/capital/pricing/
+                 recommendation engines + the assembler that persists
+                 them — see below)
   suppliers/     supplier scoring, redundancy, connectors
   compliance/    per-channel gate reads
   marketplaces/  connectors (Shopify/Amazon), reconciliation, publication gate
@@ -85,7 +88,13 @@ src/lib/
                  queue, business health scorecard — see below
   ai/            the Commerce Intelligence chat — fact bundling, prompt
                  construction, guardrails, the model provider — see below
-  amazon/ shopify/ pricing/ invoices/ accounting/ research/
+  shopify/       the Storefront API connector for the headless storefront
+                 (`storefront.ts`) — deliberately separate from
+                 `marketplaces/connectors/shopify.ts`'s Admin API
+                 connector: different credential, different API surface,
+                 structurally unable to read orders/customers or write
+                 products
+  amazon/ pricing/ invoices/ accounting/ research/
 ```
 
 The remaining empty directories are deliberate: they are the seams later

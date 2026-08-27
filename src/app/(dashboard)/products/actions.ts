@@ -3,9 +3,51 @@
 import { revalidatePath } from 'next/cache'
 import { executeDecisionChange } from '@/lib/products/decisionExecutor'
 import { executeChannelDecisionChange } from '@/lib/products/channelDecisionExecutor'
+import { computeProductIntelligence } from '@/lib/products/intelligence/assemble'
 import { requireWriteAccess } from '@/lib/security/session'
 import type { ChannelKey, ProductDecision } from '@/lib/core/domain'
 import type { DecisionChangeState } from './state'
+
+export interface IntelligenceActionState {
+  status: 'idle' | 'ok' | 'error'
+  message?: string
+}
+
+export const initialIntelligenceState: IntelligenceActionState = { status: 'idle' }
+
+/**
+ * Recomputes a product's intelligence (quality/risk/opportunity/capital/
+ * recommendation) on demand — the only UI-facing trigger for
+ * `computeProductIntelligence` (`@/lib/products/intelligence/assemble.ts`).
+ * Nothing runs this automatically yet; every recalculation here is a
+ * deliberate, attributable action, recorded as `actor.type: 'user'` in
+ * both `product_intelligence_history` and the audit log.
+ */
+export async function recalculateProductIntelligence(
+  _previous: IntelligenceActionState,
+  formData: FormData,
+): Promise<IntelligenceActionState> {
+  const session = await requireWriteAccess()
+  const productId = String(formData.get('productId') ?? '')
+
+  if (session.isDemo) {
+    return { status: 'error', message: 'Demo mode has no database, so product intelligence cannot be calculated against real data.' }
+  }
+
+  const result = await computeProductIntelligence(session.orgId, productId, 'manual_recalculation', {
+    type: 'user',
+    userId: session.userId,
+    label: session.email,
+  })
+
+  if (!result) {
+    return { status: 'error', message: 'Product not found.' }
+  }
+
+  revalidatePath(`/products/${productId}`)
+
+  return { status: 'ok', message: `Recalculated: ${result.recommendation.replace(/_/g, ' ')}.` }
+}
 
 /**
  * Changes a product's operator-controlled Commerce-OS decision — mirrors

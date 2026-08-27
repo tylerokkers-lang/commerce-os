@@ -41,6 +41,22 @@ registry): that is a closed, pure-TypeScript set, not a changing fact, so
 it lives in code (`src/lib/markets/catalog.ts`) rather than the database —
 only genuinely changing facts got migrations.
 
+The product intelligence milestone (0037/0038) added 3 new tables —
+`product_risk_scores`, `product_intelligence`, `product_intelligence_history`
+— after checking first: `product_scores` and `product_health` (both from
+Milestone 1's `0002`/`0008`) already existed with exactly the
+score/band/components/weights_version shape needed for opportunity and
+quality scoring respectively, and had never been written to by any
+application code. Only risk scoring (which had no existing home) and the
+final assembled recommendation (which references, rather than copies,
+the three score rows behind it) genuinely needed new tables. Also added:
+seven new `business_settings` columns (`min_quality_score`,
+`max_risk_score`, `target_net_margin_pct`, `advertising_allowance_pct`,
+`available_operating_capital_minor`, `cash_buffer_minor`,
+`max_supplier_cost_minor`) — the three capital columns are nullable with
+no default on purpose (see 0037's own comment): an unset value means
+"not yet configured", never zero or unlimited.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

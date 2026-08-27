@@ -4373,7 +4373,173 @@ clean.
   **not started.** None of it was invented or stubbed to look further
   along than it is.
 
-## 57. Next step
+## 57. Milestone: Product Intelligence — enrichment, quality/risk/opportunity scoring, capital-aware ranking, deterministic recommendation (Phase 4 of the customer-facing store)
+
+**Audit first, per the brief's own instruction.** Before writing anything,
+read `products/scoring.ts` (a complete, already-tested 19-component
+`scoreOpportunity` engine — missing signals excluded and renormalised,
+never defaulted; hard caps on high IP/regulatory risk), `profitability/index.ts`
+(`calculateProfitability`/`assessProfitabilityGate` — already computes
+`cashRequiredPerUnit`, break-even price, the full cost breakdown), and the
+schema. Two real, load-bearing findings changed the whole design:
+`product_scores` (0002) and `product_health` (0008) already existed with
+exactly the score/band/components/weights_version shape this milestone
+needed for opportunity and quality scoring, and neither had ever been
+written to by any application code — confirmed by grepping `src/` and
+finding zero references outside `database.types.ts`. Writing to them
+instead of inventing two new tables is the single biggest "don't
+duplicate" decision this milestone made.
+
+**What genuinely had no home and got built new:**
+- `src/lib/products/intelligence/qualityScore.ts` — Product Quality Score,
+  the exact Images(20)/Description(20)/Specifications(20)/Variants(15)/
+  Supplier data(15)/Shipping data(10) breakdown the brief's own example
+  gives. Persists to `product_health`.
+- `src/lib/products/intelligence/riskScore.ts` — a standalone Risk Score,
+  deliberately NOT folded into the opportunity score (which already
+  weighs ipRisk/regulatoryRisk/returnRisk/supplierReliability as
+  *market*-opportunity inputs — a different question from "how risky is
+  this specific product to carry"). New `product_risk_scores` table
+  (0037), mirroring `product_scores`/`product_health`'s exact shape.
+  Higher = more risk here, the inverse convention from its two siblings —
+  called out explicitly in the migration and the module doc comment so
+  it's never silently mixed up.
+- `src/lib/products/intelligence/capitalRanking.ts` — capital-aware
+  ranking. `capitalRequirementMinor` is `Profitability.cashRequiredPerUnit`,
+  never a new cost formula. `capitalEfficiencyScore` is contribution per
+  pound of capital tied up, which is what actually makes a £4-cost/£15
+  -sale product rank above a £100-cost/£180-sale one despite the smaller
+  absolute profit — proven directly against the brief's own Product
+  A/Product B example in `tests/product-capital-ranking.test.ts`.
+  `available_operating_capital_minor`/`cash_buffer_minor` are new,
+  nullable `business_settings` columns (0037) — null means "not
+  configured", reported as its own honest status, never coerced to zero
+  or treated as unlimited.
+- `src/lib/products/intelligence/pricingEngine.ts` — `recommended_price`/
+  `minimum_viable_price`. Deliberately not a second cost formula: this
+  binary-searches the real `calculateProfitability` for the smallest
+  price that clears a target net margin, run repeatedly rather than
+  algebraically re-derived (the exact case a hand-rolled inverse formula
+  is easy to get subtly wrong, and `calculateProfitability` is cheap pure
+  arithmetic, so ~15-20 iterations costs nothing).
+- `src/lib/products/intelligence/recommendation.ts` — the deterministic
+  STRONG_CANDIDATE/CANDIDATE/REVIEW_REQUIRED/LOW_PRIORITY/DO_NOT_SELL
+  ladder, in the brief's own stated order: profitability failure or no
+  supplier → DO_NOT_SELL; failed or not-yet-assessed compliance → REVIEW_
+  REQUIRED; quality below the configured minimum or risk above the
+  configured maximum → REVIEW_REQUIRED; insufficient or poor-efficiency
+  capital → LOW_PRIORITY; opportunity below the minimum → LOW_PRIORITY;
+  otherwise CANDIDATE, or STRONG_CANDIDATE once the opportunity score
+  clears a second, higher threshold. A fixed ordered ladder, never a
+  weighted sum, and nothing in it is AI-influenced — the same "AI cannot
+  override a deterministic gate" principle every other gate in this
+  codebase already holds to.
+- `src/lib/products/intelligence/enrichment.ts` — normalises whatever
+  real facts exist (Storefront API data preferred over the local
+  `products` row, never both silently merged in a way that hides which
+  source won) into one honestly-gapped `NormalizedProductFacts` view.
+  `parseWeightToGrams` exists for a future raw-supplier-feed source (see
+  "prepared for DSers" below) and is directly tested against the brief's
+  own "0.5 kg / 500g / 500 g" example — nothing in this milestone's
+  actual data path (real `products` rows, or the Shopify Storefront API's
+  own structured numeric prices) ever exercises it as a live caller yet,
+  stated plainly in the module comment rather than left to look wired up.
+- `src/lib/products/intelligence/assemble.ts` — the one orchestrator.
+  Loads the product's Shopify `channel_products` row (price, external
+  GID), the assigned supplier + `supplier_products` offer, and — new —
+  fetches that product's own images/description/variants live from the
+  Shopify **Storefront** API by GID (`getProductById`, added to
+  `src/lib/shopify/storefront.ts` this milestone: the Storefront and
+  Admin APIs share one GID namespace, so the GID the Admin connector
+  already stores in `channel_products.external_id` works directly,
+  needing no product handle at all). Reuses `getChannelReadiness` for
+  compliance (never re-derives `ComplianceContext`), reuses
+  `buildChannelProfiles`/`calculateProfitability`/`assessProfitabilityGate`
+  for real cost numbers, reuses `scoreSupplier` for reliability, reuses
+  `scoreOpportunity`. Writes `product_health`, `product_scores`,
+  `product_risk_scores`, upserts `product_intelligence` (pointing at the
+  three rows just written, never copying their breakdowns), inserts into
+  `product_intelligence_history`, and records one `PRODUCT_SCORED` audit
+  entry — an `AuditAction` value that has existed since Milestone 1,
+  reserved for exactly this, unused by any code until now.
+
+**Settings** (0037, wired through `automation/settingsTypes.ts` and
+`automation/settings.ts` — the one existing settings reader, extended,
+never a second one): `min_quality_score` (default 60), `max_risk_score`
+(default 70), `target_net_margin_pct` (default 35), `advertising_allowance_pct`
+(default 15, the assumed ad cost per unit fed into `calculateProfitability`
+as `adSpendPerUnit` until a real campaign has real data), plus the three
+nullable capital columns. `min_gross_margin_pct`/`min_opportunity_score`
+had existed on `business_settings` since Milestone 1's `0001_core.sql`
+but — like `maxDailyAdSpendMinor`/`maxAutoAdIncreasePct` before them —
+were never read into `AutomationSettings` until this milestone; wired in
+alongside the new fields rather than left for a future "also fix this"
+pass. Settings page gained a new "Product intelligence and capital" card
+with all seven new fields.
+
+**UI:** a "Product intelligence" panel on `/products/[id]`
+(`ProductIntelligencePanel.tsx`) — quality/risk/opportunity score cards
+with their real component breakdowns, the capital section (requirement,
+efficiency, simultaneous orders fundable, warnings), recommended and
+minimum viable price, the full profitability cost breakdown, and a
+"Recalculate" button wired to a new Server Action
+(`recalculateProductIntelligence` in `products/actions.ts`) — the only
+UI-facing trigger for `computeProductIntelligence`; nothing runs it
+automatically. Demo mode shows the same honest "not modelled — needs real
+data" empty state the channel decisions section already established,
+rather than fabricated scores.
+
+**No new HTTP API route.** `docs/API.md`'s own stated scope is "the two
+routes under `src/app/api/`" — everything else in this codebase is Server
+Components/Server Actions, deliberately undocumented there because it
+isn't a REST surface. Product intelligence is an internal admin
+operation with no external caller, so it follows that existing pattern
+(`products/actions.ts` + `products/intelligence/repository.ts`) rather
+than inventing a `/api/products/intelligence` route nothing would call.
+
+**Tested:** 54 new tests across 6 files (quality, risk, capital, pricing,
+recommendation, enrichment) — 1532 total (was 1478). Every category the
+brief listed is covered: profitable/unprofitable/zero-cost/advertising-
+allowance/unreachable-margin pricing; low-cost/high-cost/insufficient/
+sufficient/cash-buffer capital, including the brief's own Product A/B
+example as a direct test; complete/incomplete/missing-images/missing-
+specs quality; high-shipping-risk/high-supplier-risk/high-value/
+compliance-concern risk; and the full recommendation ladder, every rung.
+`npx tsc --noEmit`, `npm run lint`, `npm run build` (4 new routes from the
+prior storefront milestone, none new this one — this milestone added no
+pages, only a panel on an existing page), `npm run db:verify` (79 tables
+→ see below) all clean. **Verified live in the browser** (demo mode, no
+Supabase/Storefront credentials exist): `/settings` renders the new card
+with all seven fields; `/products/[id]` renders the new panel's honest
+"not modelled in demo mode" state; no console errors either place.
+**Not live-verified**: `computeProductIntelligence` end-to-end against a
+real product — no live Supabase project or Shopify Storefront API token
+exists in this environment, so the assembler is proven only through its
+pure sub-engines' unit tests, `tsc`, and code inspection, never a real
+Recalculate click against real data.
+
+**Migration:** `0037_product_intelligence.sql` / `0038_rls_product_intelligence.sql`
+— 79 tables (was 76). `product_recommendation` enum; `product_risk_scores`
+(new); `product_intelligence`/`product_intelligence_history` (new,
+current-state + append-only, exactly the `channel_product_decisions`/
+`channel_decision_transitions` precedent); seven new `business_settings`
+columns. `product_scores`/`product_health`'s own schemas are completely
+unchanged — this milestone only finally writes to them.
+
+**Deliberately not built, per the brief's own explicit instructions:**
+DSers or any raw supplier feed beyond Shopify (still correctly `PLANNED`
+in `suppliers/connectors/registry.ts`); automatic publishing; automatic
+supplier purchasing from a recommendation; a "full supplier marketplace."
+`recommendProduct`'s output is advisory only — nothing writes
+`product_decision`/`channel_product_decisions` from it, matching how
+`channelRecommendation.ts`'s SELL/WATCH/HOLD/REVIEW/REMOVE output is
+advisory to the same two decision tables. An "approve/reject recommendation"
+API was explicitly requested but not built as a separate mechanism: the
+existing product/channel decision controls already are that human call,
+and building a second one would fork "the operator's real decision" into
+two competing places — noted as a deliberate scope decision, not a gap.
+
+## 58. Next step
 
 **Done in §53: channel-level decisions**, exactly as described below when
 this was first written — `channel_product_decisions`, the full

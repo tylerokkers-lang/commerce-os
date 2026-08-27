@@ -363,6 +363,26 @@ export async function getProductByHandle(handle: string): Promise<Result<Storefr
   return ok(mapProductFull(result.value.product))
 }
 
+/**
+ * Looks a product up by its Shopify GID (`gid://shopify/Product/…`) rather
+ * than its storefront handle. Shopify's GID space is shared between the
+ * Admin and Storefront APIs, so this is how product-intelligence code
+ * (`src/lib/products/intelligence`) enriches a product using the same
+ * `channel_products.external_id` the Admin connector already stored —
+ * without needing that product's public handle at all.
+ */
+export async function getProductById(id: string): Promise<Result<StorefrontProduct | null, string>> {
+  const query = `
+    query ProductById($id: ID!) {
+      product(id: $id) { ${PRODUCT_FULL_FRAGMENT} }
+    }
+  `
+  const result = await storefrontGraphql<{ product: RawProductFull | null }>(query, { id })
+  if (!result.ok) return result
+  if (!result.value.product) return ok(null)
+  return ok(mapProductFull(result.value.product))
+}
+
 export type CollectionSort = 'BEST_SELLING' | 'PRICE' | 'TITLE' | 'CREATED'
 
 export async function getCollectionByHandle(

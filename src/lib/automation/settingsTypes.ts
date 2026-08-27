@@ -44,6 +44,26 @@ export interface AutomationSettings {
    * enforcing on both directions, not a fabricated second threshold.
    */
   maxAutoAdIncreasePct: number
+  /**
+   * Milestone: product intelligence (Phase 4). `min_gross_margin_pct` and
+   * `min_opportunity_score` have existed on `business_settings` since 0001
+   * (reserved for exactly this) but were never read by any analysis code
+   * until now — the same "wire in something that already existed" pattern
+   * as `maxDailyAdSpendMinor`/`maxAutoAdIncreasePct` above.
+   */
+  minGrossMarginPct: number
+  minOpportunityScore: number
+  /** New this milestone (0037) — see that migration for why each is nullable. */
+  minQualityScore: number
+  maxRiskScore: number
+  targetNetMarginPct: number
+  advertisingAllowancePct: number
+  /** Cash actually available to fund supplier purchases — null until the owner sets it. Never assumed unlimited or zero. */
+  availableOperatingCapitalMinor: number | null
+  /** Reserve that capital-efficiency calculations must never treat as spendable. */
+  cashBufferMinor: number | null
+  /** A hard ceiling on supplier unit cost, if the owner has set one. Null means no ceiling is configured. */
+  maxSupplierCostMinor: number | null
 }
 
 /**
@@ -69,6 +89,17 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   maxDailyAdSpendMinor: 5000, // Matches business_settings' own column default (£50).
   minRoas: 3,
   maxAutoAdIncreasePct: 20,
+  minGrossMarginPct: 25,
+  minOpportunityScore: 70,
+  minQualityScore: 60,
+  maxRiskScore: 70,
+  targetNetMarginPct: 35,
+  advertisingAllowancePct: 15,
+  // Demo mode has no real business behind it, so these stay unconfigured —
+  // exactly the honest state a brand-new live org starts in too.
+  availableOperatingCapitalMinor: null,
+  cashBufferMinor: null,
+  maxSupplierCostMinor: null,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

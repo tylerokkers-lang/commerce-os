@@ -2009,6 +2009,78 @@ in `liveSubjects.ts`). Read `docs/MILESTONES.md`'s Milestone 9 section and
 model is designed to extend without a schema redesign; it should not be
 rebuilt.
 
+## Milestone — Headless storefront foundation ✅ complete (Phase 3 of the customer-facing store)
+
+A real, customer-facing storefront at `src/app/(storefront)` (served under
+`/shop/*`), separate from the operator dashboard: Shopify's Storefront API
+for catalogue/cart (`src/lib/shopify/storefront.ts` — a new, deliberately
+separate credential from the Admin API connector, structurally unable to
+read orders/customers or write products), its own scoped design system,
+and real home/collection/product/cart pages. Checkout is always Shopify's
+own hosted checkout via `cart.checkoutUrl` — no payment code exists in
+this codebase. No live Storefront API token exists in this environment,
+so every page correctly renders an honest "store not connected yet" state
+rather than a fabricated product grid. Full detail in `HANDOVER.md` §56.
+
+**Deliberately deferred:** an animated cart drawer (a real cart *page*
+ships instead); collection filters beyond sort (no product tag/metafield
+convention exists yet to filter against honestly); moving the admin
+dashboard off `/` to free up the storefront's own root path (a production
+domain-split decision, not an architecture gap).
+
+## Milestone — Product Intelligence: enrichment, quality, risk, capital and a deterministic recommendation ✅ complete (Phase 4 of the customer-facing store)
+
+Turns a raw, already-imported product into a decision-ready one: "is this
+product actually worth selling?", answered deterministically before any
+publish/channel decision is made. Reuses rather than duplicates: the real
+`calculateProfitability`/`assessProfitabilityGate` engine
+(`@/lib/profitability`) for every cost figure, the existing 19-component
+`scoreOpportunity` engine (`@/lib/products/scoring.ts`) for market
+opportunity, the existing compliance assembler
+(`getChannelReadiness`/`assessCompliance`), and two tables —
+`product_scores` and `product_health` — that already existed with exactly
+the right shape and had never been written to by any code. Two genuinely
+new engines fill the actual gap: a Product Quality Score (data
+completeness, not market fit) and capital-aware ranking (reusing
+`Profitability.cashRequiredPerUnit` as the real per-order cash figure,
+checked against a configurable, nullable `available_operating_capital` —
+never assumed zero or unlimited).
+
+**As built:** `src/lib/products/intelligence/` — `enrichment.ts`
+(normalises raw facts, honestly gapped, never invented), `qualityScore.ts`
+(persists to `product_health`), `riskScore.ts` (new
+`product_risk_scores` table, mirroring the existing two), `capitalRanking.ts`,
+`pricingEngine.ts` (finds `recommended_price`/`minimum_viable_price` by
+binary-searching the *real* profitability engine for a target margin,
+rather than a second pricing formula), `recommendation.ts` (the
+deterministic STRONG_CANDIDATE/CANDIDATE/REVIEW_REQUIRED/LOW_PRIORITY/
+DO_NOT_SELL ladder — profitability and supplier failures are always
+DO_NOT_SELL, a failed or unassessed compliance verdict is always
+REVIEW_REQUIRED, poor capital efficiency is LOW_PRIORITY, and AI has no
+ability to override any of it), and `assemble.ts` (the one orchestrator
+that loads real data — including a live Shopify Storefront API read of
+the product's own images/description/variants via its GID — runs every
+engine, and persists the result). New migration 0037/0038:
+`product_risk_scores`, `product_intelligence` (current state, pointing at
+the three score rows it was computed from rather than copying their
+breakdowns) and `product_intelligence_history` (append-only), plus seven
+new `business_settings` columns (`min_quality_score`, `max_risk_score`,
+`target_net_margin_pct`, `advertising_allowance_pct`, and three nullable
+capital columns), wired into the Settings page. UI: a "Product
+intelligence" panel on the product detail page with a "Recalculate"
+button — a deliberate, attributable action, never scheduled automation.
+`AuditAction` needed no new value: `PRODUCT_SCORED` had existed since
+Milestone 1, reserved for exactly this, unused until now.
+
+**Deliberately out of scope, per the brief:** DSers and any other raw
+supplier feed (already correctly `PLANNED` in
+`suppliers/connectors/registry.ts`, confirmed by inspection rather than
+re-guessed); automatic publishing or supplier purchasing from a
+recommendation; a REST API surface (this is an internal admin operation,
+so it follows this codebase's existing pattern of Server Actions +
+repository reads for internal use, not a new `/api/*` route — no external
+caller needs one yet, see `docs/API.md`).
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

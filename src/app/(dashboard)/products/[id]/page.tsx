@@ -4,8 +4,10 @@ import { Badge, Card, CardHeader, EmptyState, PageHeader } from '@/components/ui
 import { STAGE_LABELS, STAGE_TONES } from '@/lib/constants'
 import { requireSession, canWrite } from '@/lib/security/session'
 import { getProductDetail, getChannelReadinessList } from '@/lib/products/repository'
+import { getProductIntelligence } from '@/lib/products/intelligence/repository'
 import { DecisionControl } from '../DecisionControl'
 import { ChannelDecisionControl } from '../ChannelDecisionControl'
+import { ProductIntelligencePanel } from '../ProductIntelligencePanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +18,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   const channelRows = await getChannelReadinessList(product)
   const canEdit = canWrite(session) && !session.isDemo
+  const intelligence = session.isDemo ? null : await getProductIntelligence(session.orgId, product.id)
 
   return (
     <>
@@ -52,6 +55,22 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       <Card>
         <DecisionControl product={product} canEdit={canEdit} />
       </Card>
+
+      {session.isDemo ? (
+        <Card>
+          <CardHeader title="Product intelligence" description="Is this product actually worth selling?" />
+          <div className="border-t border-border px-5 py-6">
+            <EmptyState
+              title="Not modelled in demo mode"
+              description="Product intelligence needs real cost, supplier and listing data to reason from — demo mode has none of that to show honestly. Connect Supabase to see this populate."
+            />
+          </div>
+        </Card>
+      ) : (
+        <Card>
+          <ProductIntelligencePanel productId={product.id} data={intelligence} canEdit={canEdit} />
+        </Card>
+      )}
 
       <div>
         <h2 className="text-base font-semibold text-ink">Channel decisions</h2>

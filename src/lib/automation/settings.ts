@@ -9,7 +9,7 @@ export type { AutomationSettings } from './settingsTypes'
 export { isCategoryPaused } from './settingsTypes'
 
 const SETTINGS_COLUMNS =
-  'automation_level, automation_paused, automation_paused_at, automation_paused_reason, automation_paused_categories, max_auto_purchase_minor, max_auto_price_change_pct, max_price_movement_per_day_pct, max_auto_refund_minor, max_daily_auto_refund_minor, max_refunds_per_order, max_daily_auto_supplier_spend_minor, max_auto_supplier_switch_cost_increase_pct, min_net_margin_pct, max_daily_ad_spend_minor, min_roas, max_auto_ad_increase_pct'
+  'automation_level, automation_paused, automation_paused_at, automation_paused_reason, automation_paused_categories, max_auto_purchase_minor, max_auto_price_change_pct, max_price_movement_per_day_pct, max_auto_refund_minor, max_daily_auto_refund_minor, max_refunds_per_order, max_daily_auto_supplier_spend_minor, max_auto_supplier_switch_cost_increase_pct, min_net_margin_pct, max_daily_ad_spend_minor, min_roas, max_auto_ad_increase_pct, min_gross_margin_pct, min_opportunity_score, min_quality_score, max_risk_score, target_net_margin_pct, advertising_allowance_pct, available_operating_capital_minor, cash_buffer_minor, max_supplier_cost_minor'
 
 interface SettingsRow {
   automation_level: AutomationSettings['automationLevel']
@@ -29,6 +29,15 @@ interface SettingsRow {
   max_daily_ad_spend_minor: number
   min_roas: number | string
   max_auto_ad_increase_pct: number | string
+  min_gross_margin_pct: number | string
+  min_opportunity_score: number
+  min_quality_score: number
+  max_risk_score: number
+  target_net_margin_pct: number | string
+  advertising_allowance_pct: number | string
+  available_operating_capital_minor: number | null
+  cash_buffer_minor: number | null
+  max_supplier_cost_minor: number | null
 }
 
 function mapSettingsRow(data: SettingsRow): AutomationSettings {
@@ -50,6 +59,15 @@ function mapSettingsRow(data: SettingsRow): AutomationSettings {
     maxDailyAdSpendMinor: data.max_daily_ad_spend_minor,
     minRoas: Number(data.min_roas),
     maxAutoAdIncreasePct: Number(data.max_auto_ad_increase_pct),
+    minGrossMarginPct: Number(data.min_gross_margin_pct),
+    minOpportunityScore: data.min_opportunity_score,
+    minQualityScore: data.min_quality_score,
+    maxRiskScore: data.max_risk_score,
+    targetNetMarginPct: Number(data.target_net_margin_pct),
+    advertisingAllowancePct: Number(data.advertising_allowance_pct),
+    availableOperatingCapitalMinor: data.available_operating_capital_minor,
+    cashBufferMinor: data.cash_buffer_minor,
+    maxSupplierCostMinor: data.max_supplier_cost_minor,
   }
 }
 

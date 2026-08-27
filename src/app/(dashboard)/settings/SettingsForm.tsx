@@ -140,6 +140,22 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
         </div>
       </Card>
 
+      <Card>
+        <CardHeader
+          title="Product intelligence and capital"
+          description="What counts as good enough data, acceptable risk, and how much real cash is actually available to fund supplier purchases. Leave the capital fields blank until you're ready to set a real figure — an unset value is treated as genuinely unknown, never as zero or unlimited."
+        />
+        <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+          <Field label="Minimum quality score" name="min_quality_score" type="number" min="0" max="100" defaultValue={settings.min_quality_score} hint="Below this, a product needs better data before it's reviewed" error={errors.min_quality_score} />
+          <Field label="Maximum risk score" name="max_risk_score" type="number" min="0" max="100" defaultValue={settings.max_risk_score} hint="Above this, a product is flagged for review regardless of margin" error={errors.max_risk_score} />
+          <Field label="Target net margin (%)" name="target_net_margin_pct" type="number" step="0.1" min="0" max="95" defaultValue={settings.target_net_margin_pct} hint="What the pricing engine aims for, above the minimum" error={errors.target_net_margin_pct} />
+          <Field label="Advertising allowance (% of selling price)" name="advertising_allowance_pct" type="number" step="0.1" min="0" max="100" defaultValue={settings.advertising_allowance_pct} hint="Assumed ad cost per unit until a real campaign has real data" error={errors.advertising_allowance_pct} />
+          <Field label="Available operating capital (£)" name="available_operating_capital_major" type="number" step="0.01" min="0" defaultValue={settings.available_operating_capital_minor !== null && settings.available_operating_capital_minor !== undefined ? settings.available_operating_capital_minor / 100 : null} hint="Real cash you can put toward supplier purchases. Leave blank if not yet decided." error={errors.available_operating_capital_minor} />
+          <Field label="Cash buffer (£)" name="cash_buffer_major" type="number" step="0.01" min="0" defaultValue={settings.cash_buffer_minor !== null && settings.cash_buffer_minor !== undefined ? settings.cash_buffer_minor / 100 : null} hint="Reserve that capital calculations never treat as spendable" error={errors.cash_buffer_minor} />
+          <Field label="Maximum supplier unit cost (£)" name="max_supplier_cost_major" type="number" step="0.01" min="0" defaultValue={settings.max_supplier_cost_minor !== null && settings.max_supplier_cost_minor !== undefined ? settings.max_supplier_cost_minor / 100 : null} hint="Optional hard ceiling. Leave blank for no ceiling." error={errors.max_supplier_cost_minor} />
+        </div>
+      </Card>
+
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"

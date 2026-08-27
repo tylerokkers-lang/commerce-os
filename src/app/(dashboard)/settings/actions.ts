@@ -7,6 +7,13 @@ import { requireWriteAccess } from '@/lib/security/session'
 import { createServerSupabase } from '@/lib/supabase/server'
 import type { SettingsFormState } from './state'
 
+/** An empty string means "not set" for these fields — never coerced to 0, which would mean something entirely different (zero capital, not unknown capital). */
+function majorToMinorOrNull(value: FormDataEntryValue | null): number | null {
+  if (value === null || value === '') return null
+  const pounds = Number(value)
+  return Number.isFinite(pounds) ? Math.round(pounds * 100) : null
+}
+
 /**
  * Saves business settings.
  *
@@ -42,6 +49,16 @@ export async function saveBusinessSettings(
     max_auto_ad_increase_pct: formData.get('max_auto_ad_increase_pct'),
     max_delivery_days: formData.get('max_delivery_days'),
     max_return_rate_pct: formData.get('max_return_rate_pct'),
+    min_quality_score: formData.get('min_quality_score'),
+    max_risk_score: formData.get('max_risk_score'),
+    target_net_margin_pct: formData.get('target_net_margin_pct'),
+    advertising_allowance_pct: formData.get('advertising_allowance_pct'),
+    // Pounds in the form, pence in the database, and — unlike every other
+    // money field on this page — genuinely absent rather than zero when the
+    // owner hasn't set a real figure yet (an empty string, not "0").
+    available_operating_capital_minor: majorToMinorOrNull(formData.get('available_operating_capital_major')),
+    cash_buffer_minor: majorToMinorOrNull(formData.get('cash_buffer_major')),
+    max_supplier_cost_minor: majorToMinorOrNull(formData.get('max_supplier_cost_major')),
   })
 
   if (!parsed.success) {

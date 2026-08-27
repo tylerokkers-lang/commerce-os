@@ -880,6 +880,13 @@ export interface Database {
           max_daily_auto_supplier_spend_minor: number
           max_auto_supplier_switch_cost_increase_pct: number
           max_price_movement_per_day_pct: number
+          min_quality_score: number
+          max_risk_score: number
+          target_net_margin_pct: number
+          advertising_allowance_pct: number
+          available_operating_capital_minor: number | null
+          cash_buffer_minor: number | null
+          max_supplier_cost_minor: number | null
         }
         Insert: {
           org_id: string
@@ -934,6 +941,13 @@ export interface Database {
           max_daily_auto_supplier_spend_minor?: number
           max_auto_supplier_switch_cost_increase_pct?: number
           max_price_movement_per_day_pct?: number
+          min_quality_score?: number
+          max_risk_score?: number
+          target_net_margin_pct?: number
+          advertising_allowance_pct?: number
+          available_operating_capital_minor?: number | null
+          cash_buffer_minor?: number | null
+          max_supplier_cost_minor?: number | null
         }
         Update: {
           org_id?: string
@@ -988,6 +1002,13 @@ export interface Database {
           max_daily_auto_supplier_spend_minor?: number
           max_auto_supplier_switch_cost_increase_pct?: number
           max_price_movement_per_day_pct?: number
+          min_quality_score?: number
+          max_risk_score?: number
+          target_net_margin_pct?: number
+          advertising_allowance_pct?: number
+          available_operating_capital_minor?: number | null
+          cash_buffer_minor?: number | null
+          max_supplier_cost_minor?: number | null
         }
         Relationships: [
           {
@@ -3932,6 +3953,187 @@ export interface Database {
           },
         ]
       }
+      product_intelligence: {
+        Row: {
+          id: number
+          org_id: string
+          product_id: string
+          quality_score_id: string
+          opportunity_score_id: string
+          risk_score_id: string
+          capital_requirement_minor: number | null
+          capital_efficiency_score: number | null
+          capital_breakdown: Json
+          profitability_breakdown: Json
+          recommended_price_minor: number | null
+          minimum_viable_price_minor: number | null
+          currency: string
+          recommendation: Database['public']['Enums']['product_recommendation']
+          recommendation_reason: string
+          engine_version: string
+          computed_at: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          product_id: string
+          quality_score_id: string
+          opportunity_score_id: string
+          risk_score_id: string
+          capital_requirement_minor?: number | null
+          capital_efficiency_score?: number | null
+          capital_breakdown: Json
+          profitability_breakdown: Json
+          recommended_price_minor?: number | null
+          minimum_viable_price_minor?: number | null
+          currency?: string
+          recommendation: Database['public']['Enums']['product_recommendation']
+          recommendation_reason: string
+          engine_version: string
+          computed_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          product_id?: string
+          quality_score_id?: string
+          opportunity_score_id?: string
+          risk_score_id?: string
+          capital_requirement_minor?: number | null
+          capital_efficiency_score?: number | null
+          capital_breakdown?: Json
+          profitability_breakdown?: Json
+          recommended_price_minor?: number | null
+          minimum_viable_price_minor?: number | null
+          currency?: string
+          recommendation?: Database['public']['Enums']['product_recommendation']
+          recommendation_reason?: string
+          engine_version?: string
+          computed_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'product_intelligence_opportunity_score_id_fkey'
+            columns: ['opportunity_score_id']
+            isOneToOne: false
+            referencedRelation: 'product_scores'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_intelligence_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_intelligence_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_intelligence_quality_score_id_fkey'
+            columns: ['quality_score_id']
+            isOneToOne: false
+            referencedRelation: 'product_health'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_intelligence_risk_score_id_fkey'
+            columns: ['risk_score_id']
+            isOneToOne: false
+            referencedRelation: 'product_risk_scores'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      product_intelligence_history: {
+        Row: {
+          id: number
+          org_id: string
+          product_id: string
+          quality_score: number
+          opportunity_score: number
+          risk_score: number
+          capital_requirement_minor: number | null
+          capital_efficiency_score: number | null
+          recommendation: Database['public']['Enums']['product_recommendation']
+          recommendation_reason: string
+          trigger: string
+          engine_version: string
+          actor_type: Database['public']['Enums']['actor_type']
+          actor_user_id: string | null
+          actor_label: string | null
+          occurred_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          product_id: string
+          quality_score: number
+          opportunity_score: number
+          risk_score: number
+          capital_requirement_minor?: number | null
+          capital_efficiency_score?: number | null
+          recommendation: Database['public']['Enums']['product_recommendation']
+          recommendation_reason: string
+          trigger: string
+          engine_version: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          occurred_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          product_id?: string
+          quality_score?: number
+          opportunity_score?: number
+          risk_score?: number
+          capital_requirement_minor?: number | null
+          capital_efficiency_score?: number | null
+          recommendation?: Database['public']['Enums']['product_recommendation']
+          recommendation_reason?: string
+          trigger?: string
+          engine_version?: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          occurred_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'product_intelligence_history_actor_user_id_fkey'
+            columns: ['actor_user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_intelligence_history_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_intelligence_history_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       product_performance: {
         Row: {
           id: string
@@ -4128,6 +4330,54 @@ export interface Database {
             columns: ['run_id']
             isOneToOne: false
             referencedRelation: 'research_runs'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      product_risk_scores: {
+        Row: {
+          id: string
+          org_id: string
+          product_id: string
+          score: number
+          band: string
+          components: Json
+          weights_version: string
+          computed_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          product_id: string
+          score: number
+          band: string
+          components: Json
+          weights_version: string
+          computed_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          product_id?: string
+          score?: number
+          band?: string
+          components?: Json
+          weights_version?: string
+          computed_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'product_risk_scores_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_risk_scores_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
             referencedColumns: ['id']
           },
         ]
@@ -5817,6 +6067,7 @@ export interface Database {
       payment_status: 'pending' | 'authorised' | 'captured' | 'failed' | 'refunded' | 'partially_refunded'
       price_change_source: 'connector_sync' | 'manual' | 'demo'
       product_decision: 'add' | 'block' | 'test' | 'watch' | 'hold' | 'remove' | 'review'
+      product_recommendation: 'strong_candidate' | 'candidate' | 'review_required' | 'low_priority' | 'do_not_sell'
       product_stage: 'discovered' | 'researching' | 'supplier_review' | 'compliance_review' | 'approved' | 'testing' | 'proven' | 'scaling' | 'mature' | 'declining' | 'rejected' | 'paused' | 'removed'
       provider_source_type: 'official_api' | 'licensed_dataset' | 'permitted_public' | 'supplier_feed' | 'manual_entry' | 'simulated'
       provider_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'

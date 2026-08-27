@@ -16,7 +16,8 @@ Every org-scoped table has RLS enabled and is asserted by `npm run db:verify`
   `owner`/`admin`, deletable by `owner` only.
 - **History/decision tables** (`audit_logs`, `automation_actions`,
   `automation_jobs`, `ai_decisions`, `automation_runs`, product/supplier
-  scores): **read-only through RLS**. Every write goes through the service
+  scores, `product_risk_scores`, `product_intelligence`,
+  `product_intelligence_history`): **read-only through RLS**. Every write goes through the service
   role in server-side code (`recordAudit`, `createAutomationAction`,
   `enqueueJob`, `proposeApproval`, …), so a member with only read access can
   still *cause* an audit entry or a queued job without being able to forge
@@ -438,6 +439,50 @@ brief asked to cover explicitly.
   `REVIEW_CAMPAIGN` proposal actually reaching `/approvals` in the
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
+
+## What the product intelligence milestone changed here (Phase 4 of the customer-facing store)
+
+Three new tables, all read-only through RLS, service-role write only —
+the identical pattern `product_scores`/`product_health` already used
+(checked in the new `0038_rls_product_intelligence.sql`, mirroring
+`0009`'s model exactly): `product_risk_scores` (append-only, versioned,
+matching its two siblings), `product_intelligence` (current state — no
+insert/update/delete policy exists for it at all, since the assembler
+always writes with the service-role client, which bypasses RLS
+entirely), and `product_intelligence_history` (append-only, `forbid_mutation`
+trigger, same as `channel_decision_transitions`). No org member, however
+privileged their role, can write to any of the three directly — only
+`computeProductIntelligence` (`src/lib/products/intelligence/assemble.ts`)
+can, and it always runs server-side.
+
+New `SHOPIFY_STOREFRONT_ACCESS_TOKEN` credential (the headless storefront
+milestone, immediately prior): unlike every other credential in this
+codebase, this one is a public-safe token by Shopify's own design — it
+grants read-catalogue and cart-write only, cannot read orders or
+customers, and cannot write a product. Every call using it is still made
+server-side in this codebase regardless, for consistency with every other
+integration, even though a client-side call would not itself be a
+credential leak the way a Storefront token could not read anything
+privileged. `.env.example` documents this distinction explicitly so it is
+never confused with the Admin API's genuinely privileged
+`SHOPIFY_CLIENT_SECRET`.
+
+Three new nullable `business_settings` columns
+(`available_operating_capital_minor`, `cash_buffer_minor`,
+`max_supplier_cost_minor`) carry no default — the same "never guess a
+business fact" principle already applied to VAT rate and automation
+limits elsewhere in this file, extended to capital: a `null` reads as
+"not yet configured" throughout `src/lib/products/intelligence`, never
+silently treated as zero (which would make every product look
+unaffordable) or unlimited (which would defeat the feature).
+
+**Not verified**: this milestone adds no new instance of the two
+pre-existing, unverified boundaries (real RLS enforcement under an
+authenticated session; anything requiring a live Supabase project) — no
+live Storefront API token or live Supabase project exists in this
+environment, so `computeProductIntelligence` has only ever been exercised
+through its pure sub-engines' unit tests and code inspection, never
+end-to-end against a real product.
 
 ## What Milestone 13 changed here (Commerce Intelligence — Analyse, Recommend & Propose)
 
