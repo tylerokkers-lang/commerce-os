@@ -3880,6 +3880,28 @@ confirmed structurally unchanged and disabled by a live test run against
 the real connector; `informax-site` untouched (confirmed separately,
 `HEAD` still `2bf3d8a`).
 
+**Re-verification (same session, no code change).** Re-ran the identical
+live verification against `.env.local` a second time, at the user's
+explicit request to move past inspection to proof. Result: **identical**
+— `TOKEN_REFRESH_FAILED`, the same real `invalid_grant — issued to
+another client` rejection from eBay's real Sandbox token endpoint,
+Sandbox environment correctly auto-detected again. A more specific,
+purely structural diagnosis was possible this time (checked without ever
+reading or printing the value): the configured `EBAY_REFRESH_TOKEN` is
+96 characters — it does carry eBay's genuine refresh-token signature
+prefix (`v^1.1#`, confirming it's a real eBay-issued token, not a
+placeholder), but genuine eBay refresh tokens are typically several
+hundred characters long. **This strongly suggests the token was
+truncated during copy-paste into `.env.local`** — a truncated grant
+would produce exactly the `invalid_grant` rejection observed, and is a
+more actionable, likely-fixable explanation than "wrong client" or
+"expired." No code change was made or needed — `tsc`/`eslint`/full
+Vitest suite (1426/1426) re-confirmed clean; nothing to update besides
+this diagnosis. Next step unchanged in kind, refined in specificity:
+re-copy the *complete* refresh token from the Sandbox Developer Portal
+(the full string, not a truncated selection) into `.env.local`, then
+re-run `verifyEbayConnection()`.
+
 ## 52. Next step
 
 **Recommended next milestone from §50: channel-level decisions.** The
