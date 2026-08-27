@@ -1,5 +1,6 @@
 import { isPreLaunch, isTerminal } from '@/lib/products/lifecycle'
 import { decisionBlocksExecution, decisionBlockReason } from '@/lib/products/decisionGate'
+import { channelDecisionBlocksExecution, channelDecisionBlockReason } from '@/lib/products/channelDecision'
 import type { ChannelCapability } from '@/lib/suppliers/scoring'
 import type { ComplianceAssessment } from '@/lib/compliance/rules'
 import type { ChannelKey, ProductDecision, ProductStage } from '@/lib/core/domain'
@@ -50,6 +51,16 @@ export interface PublicationGateInput {
   productStage: ProductStage
   /** The operator's Commerce-OS decision for this product — checked first, ahead of every other requirement (`products/decisionGate.ts`). */
   productDecision: ProductDecision
+  /**
+   * The operator's Commerce-OS decision for THIS channel specifically —
+   * checked second, immediately after the product-wide decision. A product
+   * can be `add` overall while independently `block` on this one channel;
+   * neither decision ever overrides the other (`products/channelDecision.ts`).
+   * `null` when no channel-level decision has ever been set for this
+   * product/channel — defaults to the same "review" the column itself
+   * defaults to, never treated as an implicit pass.
+   */
+  channelDecision: ProductDecision | null
   supplierCapability: ChannelCapability | null
   profitabilityGatePasses: boolean
   profitabilityFailureReason: string | null
@@ -99,20 +110,35 @@ function automationPermitsAutoPublish(level: AutomationLevel): boolean {
 export function assessPublicationReadiness(input: PublicationGateInput): PublicationDecision {
   const lifecycle = lifecycleAllowsListing(input.productStage)
   const decisionBlocked = decisionBlocksExecution(input.productDecision)
+  // No channel decision ever set -> the column's own default ('review'),
+  // never an implicit pass. Reusing the same block-set as the product-level
+  // check: only add/test permit proceeding, per-channel exactly as per-product.
+  const effectiveChannelDecision: ProductDecision = input.channelDecision ?? 'review'
+  const channelDecisionBlocked = channelDecisionBlocksExecution(effectiveChannelDecision)
 
   const requirements: PublicationRequirement[] = [
     {
       // Checked first, ahead of every other requirement — the operator's
-      // own decision is the outermost gate (PRODUCT DECISION -> channel
-      // eligibility -> compliance -> supplier -> profitability ->
+      // own decision is the outermost gate (PRODUCT DECISION -> CHANNEL
+      // DECISION -> lifecycle -> compliance -> supplier -> profitability ->
       // budget/cashflow -> approval -> execution), never something the
-      // other five requirements can override.
+      // other requirements can override.
       key: 'product_decision',
       label: 'Commerce-OS product decision',
       satisfied: !decisionBlocked,
       detail: decisionBlocked
         ? decisionBlockReason(input.productDecision)
         : `Product decision "${input.productDecision}" permits proceeding to the remaining requirements.`,
+    },
+    {
+      // Checked second — a product-wide "add" never overrides a channel
+      // that has been independently blocked, and vice versa.
+      key: 'channel_decision',
+      label: `Commerce-OS ${input.channel} decision`,
+      satisfied: !channelDecisionBlocked,
+      detail: channelDecisionBlocked
+        ? channelDecisionBlockReason(effectiveChannelDecision, input.channel)
+        : `${input.channel} decision "${effectiveChannelDecision}" permits proceeding to the remaining requirements.`,
     },
     {
       key: 'lifecycle',

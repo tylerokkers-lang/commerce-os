@@ -35,6 +35,7 @@ function gateInput(over: Partial<PublicationGateInput> = {}): PublicationGateInp
     channel: 'shopify',
     productStage: 'approved',
     productDecision: 'add',
+    channelDecision: 'add',
     supplierCapability: assessShopifyCapability(goodSupplier),
     profitabilityGatePasses: true,
     profitabilityFailureReason: null,
@@ -88,6 +89,42 @@ describe('publicationGate: product decision is the outermost requirement', () =>
     const result = assessPublicationReadiness(gateInput({ productDecision: 'block' }))
     const failed = result.requirements.filter((r) => !r.satisfied)
     expect(failed.map((r) => r.key)).toEqual(['product_decision'])
+  })
+})
+
+describe('publicationGate: channel decision is checked second, immediately after the product decision', () => {
+  it.each(['watch', 'hold', 'block', 'remove', 'review'] as ProductDecision[])(
+    'a "%s" channel decision blocks listing on that channel even though the product decision itself is "add"',
+    (decision) => {
+      const result = assessPublicationReadiness(gateInput({ productDecision: 'add', channelDecision: decision }))
+      expect(result.outcome).toBe('blocked')
+      const req = result.requirements.find((r) => r.key === 'channel_decision')
+      expect(req?.satisfied).toBe(false)
+      expect(req?.detail).toContain(decision)
+      // The product-level requirement itself still passes — the two gates
+      // are independent, never one overriding the other.
+      expect(result.requirements.find((r) => r.key === 'product_decision')?.satisfied).toBe(true)
+    },
+  )
+
+  it('a product ADD overall with an independently BLOCKed channel is exactly the shape this milestone exists for', () => {
+    const result = assessPublicationReadiness(gateInput({ channel: 'amazon_uk', productDecision: 'add', channelDecision: 'block' }))
+    expect(result.outcome).toBe('blocked')
+    expect(result.requirements.find((r) => r.key === 'channel_decision')?.detail).toContain('amazon_uk')
+  })
+
+  it('null channelDecision (never set) defaults to "review" behaviour — blocked, never an implicit pass', () => {
+    const result = assessPublicationReadiness(gateInput({ channelDecision: null }))
+    expect(result.outcome).toBe('blocked')
+    const req = result.requirements.find((r) => r.key === 'channel_decision')
+    expect(req?.satisfied).toBe(false)
+    expect(req?.detail).toContain('review')
+  })
+
+  it.each(['add', 'test'] as ProductDecision[])('a "%s" channel decision is NOT blocked by the channel gate — still subject to the other requirements', (decision) => {
+    const result = assessPublicationReadiness(gateInput({ channelDecision: decision }))
+    const req = result.requirements.find((r) => r.key === 'channel_decision')
+    expect(req?.satisfied).toBe(true)
   })
 })
 

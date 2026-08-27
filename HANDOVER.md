@@ -4007,10 +4007,136 @@ notification/badge count elsewhere in the dashboard, since that wasn't
 requested and would be scope creep beyond "connect the existing capability
 to a real button."
 
-## 53. Next step
+## 53. Milestone: channel-level decisions + deterministic SELL/WATCH/HOLD/REVIEW/REMOVE recommendations
 
-**Recommended next milestone from §50: channel-level decisions.** The
-product-level decision layer was deliberately built so this can extend
+**Context.** §52's own "Next step" (now §54) explicitly recommended this:
+a product can be `add` overall while independently `block` on one channel
+— two gates a caller may need to check, never one collapsed value.
+Inspected before writing anything: `products/decision.ts`/`decisionGate.ts`/
+`decisionExecutor.ts` (the exact 4-file pattern to mirror), the 0033/0034
+migration pair, `channel_products` (confirmed a *listing workflow* state,
+not an operator *permission* — genuinely a different concept, not
+duplicated by this work), `publicationGate.ts` (already channel-aware,
+`channel: ChannelKey` already a first-class input), `profitability/channels.ts`
+(already has real, distinct Shopify/Amazon UK fee models), and
+`ai/actions/recommend.ts`/`ceo/priorities.ts` (the existing advisory
+pattern — confirmed neither is, or should become, a persisted decision).
+
+**What was built — channel decisions.** Reuses the existing `product_decision`
+enum unchanged (add/block/test/watch/hold/remove/review) at finer
+granularity, rather than inventing a second enum:
+- `0035_channel_decision.sql`/`0036_rls_channel_decision.sql` — new
+  `channel_product_decisions` (current-state, keyed `(org_id, product_id,
+  channel)`, owner/admin RLS write — same shape as `products` itself) and
+  `channel_decision_transitions` (append-only, `forbid_mutation()`, same
+  shape as `product_decision_transitions`). 76 tables (was 74).
+- `src/lib/products/channelDecision.ts` — `planChannelDecisionChange`,
+  mirrors `planDecisionChange` line for line. Reuses `decisionGate.ts`'s
+  `decisionBlocksExecution` unchanged (only add/test permit execution,
+  exactly as true per-channel as per-product) rather than a second gate.
+- `src/lib/products/channelDecisionExecutor.ts` — `executeChannelDecisionChange`,
+  mirrors `decisionExecutor.ts`. Writes `channel_product_decisions` via the
+  user-scoped client (its own RLS enforces permission, same as `products.decision`),
+  `channel_decision_transitions` via service role, audits
+  (`CHANNEL_DECISION_CHANGED`, added to `audit/index.ts`'s closed action
+  set), notifies on `block`/`review`.
+- `changeChannelDecision` Server Action (`products/actions.ts`) — reuses
+  `DecisionChangeState` unchanged (identical shape, no new type needed).
+- `publicationGate.ts` — `channelDecision: ProductDecision | null` added
+  to `PublicationGateInput`; a new `channel_decision` requirement checked
+  **second**, immediately after `product_decision`, before lifecycle —
+  exactly the slot §53's own prior analysis identified. `null` (never set)
+  defaults to `'review'`, matching the column's own default — never an
+  implicit pass. Five existing call sites needed a mechanical
+  `channelDecision` field added (`productHandlers.ts`'s automated re-check
+  passes `null` — honestly not yet wired to a real per-channel decision,
+  a genuine follow-up, not fabricated as done; two `demo/automation.ts`
+  scenarios pass `'add'`, matching their existing `productDecision: 'add'`;
+  three test factories).
+- `ChannelDecisionControl.tsx` — one card per channel on `/products/[id]`,
+  mirrors `DecisionControl.tsx`'s form exactly.
+
+**What was built — deterministic recommendations.** The brief's
+SELL/WATCH/HOLD/REVIEW/REMOVE vocabulary, derived entirely from
+`assessPublicationReadiness`'s own already-computed, already-correct
+verdict — no second scoring engine, no LLM:
+- `src/lib/marketplaces/channelRecommendation.ts` — `deriveChannelRecommendation`,
+  a pure mapping. Everything passing -> SELL. Blocked by the operator's
+  own decision -> REMOVE/WATCH/HOLD/REVIEW matching that decision's value.
+  Blocked by anything the operator did NOT decide (profitability,
+  compliance, supplier, lifecycle) -> always REVIEW, deliberately never an
+  inferred REMOVE/HOLD from an incomplete fact.
+- `src/lib/marketplaces/channelReadiness.ts` — `getChannelReadiness`, the
+  live assembler. Reads real `channel_product_decisions`, real
+  `channel_products` (price/listing), real `suppliers`/`supplier_products`
+  (feeding `assessAmazonCapability`/`assessShopifyCapability`/`assessEbayCapability`
+  — all pre-existing, unchanged), and real profitability via
+  `profitability/channels.ts` + `calculateProfitability`/`assessProfitabilityGate`
+  where both a price and a cost exist. **Two things honestly NOT
+  assembled, by explicit choice, not oversight:** live compliance
+  (`compliance: null` — assembling a real `ComplianceContext` — brand, IP
+  risk, regulated-category flags — was out of scope for this pass) and
+  eBay profitability (`buildChannelProfiles` only models Shopify/Amazon
+  UK's real fee schedules; eBay's has not been verified against official
+  documentation, the same rigor Milestone 21 applied). Both surface as
+  `null`/unsatisfied, which the gate already treats as a failed
+  requirement — never a fabricated pass. This is the fact-first
+  requirement in direct effect: missing data produces REVIEW, never SELL.
+- The UI shows the full reasoning chain (`readiness.requirements`, the
+  same list `orders/page.tsx`'s scenario cards already render) alongside
+  the recommendation badge and the operator's actual decision — the
+  operator can see exactly why, and the recommendation never writes
+  anything itself.
+
+**Deliberately not touched:** `automation/priceExecution.ts` still only
+checks the product-level decision — extending it to also check the
+channel decision is a real, separate next step, not done here to avoid
+an under-reviewed change to a live execution path. Demo mode shows an
+honest "not modelled" empty state for both the purchase queue (§52) and
+channel decisions (this milestone) — real per-channel listing/supplier/
+cost data does not exist as a demo fixture, and fabricating one to make
+the panel "look complete" was rejected as inconsistent with §49/§52's own
+choice for the purchase queue.
+
+**Tested:** 31 new tests (`channel-decision.test.ts`,
+`channel-recommendation.test.ts`, plus a new describe block in
+`product-decision-gate.test.ts` proving the channel gate is checked
+second and independently of the product gate) — 1457 total, up from 1426.
+`npx tsc --noEmit`, `npm run lint`, `npm run build` (no new routes),
+`npm run db:verify` (76 tables, two additive migrations) all clean.
+Verified live in the browser (demo mode — this session's own Shopify/eBay
+credentials remain in `.env.local`, never read for this pass): `/products/[id]`
+renders the new "Channel decisions" section with the correct "not
+modelled in demo mode" honest empty state, no console or server errors;
+`/orders`'s purchase queue (§52) still renders correctly alongside it —
+no regression. **Not live-Postgres-verified** — the same project-wide
+limitation stated throughout this file.
+
+**Milestone:** channel-level decisions, §53(old)'s recommended next step,
+now complete for its core scope (decision + gate + UI + deterministic
+recommendation). Genuine remaining work: live compliance assembly for the
+readiness chain, eBay profitability (needs verified fee research), wiring
+`priceExecution.ts` to the channel gate, and threading the real channel
+decision into `productHandlers.ts`'s automated re-check.
+
+## 54. Next step
+
+**Done in §53: channel-level decisions**, exactly as described below when
+this was first written — `channel_product_decisions`, the full
+`channelDecision.ts`/`channelDecisionExecutor.ts` pattern, wired into
+`publicationGate.ts`, plus the deterministic SELL/WATCH/HOLD/REVIEW/REMOVE
+recommendation layer on top. Left the original paragraph in place beneath
+this note since the reasoning in it (why this extends without a redesign)
+is still accurate background, not because the work remains outstanding.
+**Still genuinely open from that same paragraph:** wiring advertising's
+product-linkage plumbing (campaigns still aren't joined to products
+anywhere in that pipeline) so a channel-level TEST decision can drive an
+advertising experiment classification — not built in §53, which scoped
+strictly to the decision/gate/recommendation layer itself.
+
+<details><summary>Original §53 recommendation (for its background reasoning)</summary>
+
+The product-level decision layer was deliberately built so this can extend
 without a redesign — `product_decision_transitions` is already keyed
 per-product, not embedded in a wider structure, and `decisionGate.ts`'s
 single-source-of-truth pattern generalises cleanly to a per-channel
@@ -4025,6 +4151,8 @@ campaigns aren't joined to products anywhere in that pipeline today)
 would naturally be built alongside this, since a channel-level TEST
 decision is exactly what the user described eventually wanting to
 drive an advertising experiment classification.
+
+</details>
 
 Two smaller, optional candidates carried over from §48/§49, neither
 blocking: (1) `MarketplaceListingSnapshot`

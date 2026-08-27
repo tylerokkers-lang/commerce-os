@@ -999,6 +999,70 @@ export interface Database {
           },
         ]
       }
+      channel_decision_transitions: {
+        Row: {
+          id: number
+          org_id: string
+          product_id: string
+          channel: Database['public']['Enums']['channel_key']
+          from_decision: Database['public']['Enums']['product_decision'] | null
+          to_decision: Database['public']['Enums']['product_decision']
+          reason: string
+          actor_type: Database['public']['Enums']['actor_type']
+          actor_user_id: string | null
+          actor_label: string | null
+          occurred_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          product_id: string
+          channel: Database['public']['Enums']['channel_key']
+          from_decision?: Database['public']['Enums']['product_decision'] | null
+          to_decision: Database['public']['Enums']['product_decision']
+          reason: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          occurred_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          product_id?: string
+          channel?: Database['public']['Enums']['channel_key']
+          from_decision?: Database['public']['Enums']['product_decision'] | null
+          to_decision?: Database['public']['Enums']['product_decision']
+          reason?: string
+          actor_type?: Database['public']['Enums']['actor_type']
+          actor_user_id?: string | null
+          actor_label?: string | null
+          occurred_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'channel_decision_transitions_actor_user_id_fkey'
+            columns: ['actor_user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_decision_transitions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_decision_transitions_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       channel_discrepancies: {
         Row: {
           id: string
@@ -1169,6 +1233,57 @@ export interface Database {
             columns: ['org_id']
             isOneToOne: false
             referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      channel_product_decisions: {
+        Row: {
+          id: number
+          org_id: string
+          product_id: string
+          channel: Database['public']['Enums']['channel_key']
+          decision: Database['public']['Enums']['product_decision']
+          decision_reason: string | null
+          decision_changed_at: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          org_id: string
+          product_id: string
+          channel: Database['public']['Enums']['channel_key']
+          decision?: Database['public']['Enums']['product_decision']
+          decision_reason?: string | null
+          decision_changed_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          org_id?: string
+          product_id?: string
+          channel?: Database['public']['Enums']['channel_key']
+          decision?: Database['public']['Enums']['product_decision']
+          decision_reason?: string | null
+          decision_changed_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'channel_product_decisions_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'channel_product_decisions_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
             referencedColumns: ['id']
           },
         ]

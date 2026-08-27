@@ -1,11 +1,13 @@
 import 'server-only'
 
-import type { ProductDecision, ProductSummary, StockAlert } from '@/lib/core/domain'
+import type { ChannelKey, ProductDecision, ProductSummary, StockAlert } from '@/lib/core/domain'
 import { demoProducts, demoStockAlerts } from '@/lib/demo/dataset'
 import { PRODUCT_DECISIONS } from '@/lib/products/decision'
+import { getChannelReadiness } from '@/lib/marketplaces/channelReadiness'
 import { requireSession } from '@/lib/security/session'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { zero } from '@/lib/core/money'
+import type { PublicationDecision } from '@/lib/marketplaces/publicationGate'
 
 export async function getProducts(): Promise<readonly ProductSummary[]> {
   const session = await requireSession()
@@ -155,4 +157,66 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
     decisionChangedAt: data.decision_changed_at,
     decisionChangedBy: lastTransition?.actor_label ?? null,
   }
+}
+
+const CHANNELS: readonly ChannelKey[] = ['shopify', 'amazon_uk', 'ebay']
+
+export interface ChannelReadinessRow {
+  channel: ChannelKey
+  decision: ProductDecision
+  decisionReason: string | null
+  decisionChangedAt: string | null
+  decisionChangedBy: string | null
+  readiness: PublicationDecision
+}
+
+/**
+ * Every channel's operator decision plus the deterministic "why" behind it
+ * (`assessPublicationReadiness`, assembled from real data by
+ * `channelReadiness.ts`) — the reasoning chain the product detail page
+ * shows the operator. Demo mode has no real per-channel listing/supplier/
+ * profitability data to assemble honestly, so it returns nothing here
+ * rather than fabricating a chain (same choice `orders/repository.ts`'s
+ * `getPurchaseQueue()` made for the identical reason).
+ */
+export async function getChannelReadinessList(product: ProductDetail): Promise<readonly ChannelReadinessRow[]> {
+  const session = await requireSession()
+  if (session.isDemo) return []
+
+  const supabase = await createServerSupabase()
+
+  const { data: decisionRows } = await supabase
+    .from('channel_product_decisions')
+    .select('channel, decision, decision_reason, decision_changed_at')
+    .eq('org_id', session.orgId)
+    .eq('product_id', product.id)
+
+  const { data: transitionRows } = await supabase
+    .from('channel_decision_transitions')
+    .select('channel, actor_label, occurred_at')
+    .eq('org_id', session.orgId)
+    .eq('product_id', product.id)
+    .order('occurred_at', { ascending: false })
+
+  const decisionByChannel = new Map((decisionRows ?? []).map((r) => [r.channel, r]))
+  const lastActorByChannel = new Map<ChannelKey, string | null>()
+  for (const t of transitionRows ?? []) {
+    if (!lastActorByChannel.has(t.channel)) lastActorByChannel.set(t.channel, t.actor_label)
+  }
+
+  return Promise.all(
+    CHANNELS.map(async (channel) => {
+      const row = decisionByChannel.get(channel)
+      const decision: ProductDecision = row?.decision ?? 'review'
+      const readiness = await getChannelReadiness(session.orgId, product.id, channel, product.stage as never, product.decision)
+      return {
+        channel,
+        decision,
+        decisionReason: row?.decision_reason ?? null,
+        decisionChangedAt: row?.decision_changed_at ?? null,
+        decisionChangedBy: lastActorByChannel.get(channel) ?? null,
+        readiness,
+      }
+    }),
+  )
 }

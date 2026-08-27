@@ -198,6 +198,12 @@ export async function handleChannelEligibilityRecheck(job: JobRecord, store: Aut
       channel: payload.channel,
       productStage: payload.productStage as never,
       productDecision: payload.productDecision as never,
+      // Not yet threaded through this job payload — wiring the automated
+      // re-check to the real per-channel decision is a genuine next
+      // increment (see `products/channelDecision.ts`). `null` maps to the
+      // channel_product_decisions column's own 'review' default, which
+      // correctly blocks rather than silently passing.
+      channelDecision: null,
       supplierCapability: supplier.unitCost.value
         ? capability({
             unitCost: supplier.unitCost.value,

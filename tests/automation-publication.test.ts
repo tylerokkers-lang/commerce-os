@@ -22,6 +22,7 @@ function gateInput(overrides: Partial<PublicationGateInput> = {}): PublicationGa
     channel: 'shopify',
     productStage: 'approved',
     productDecision: 'add',
+    channelDecision: 'add',
     supplierCapability: { status: 'approved', reasons: ['Everything checks out.'] },
     profitabilityGatePasses: true,
     profitabilityFailureReason: null,
