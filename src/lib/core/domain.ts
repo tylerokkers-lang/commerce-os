@@ -11,6 +11,7 @@ import type { Enums } from '@/lib/supabase/database.types'
 
 export type ChannelKey = Enums<'channel_key'>
 export type ProductStage = Enums<'product_stage'>
+export type ProductDecision = Enums<'product_decision'>
 export type ListingStatus = Enums<'channel_listing_status'>
 export type ComplianceVerdict = Enums<'compliance_verdict'>
 export type ApprovalStatus = Enums<'approval_status'>
@@ -57,6 +58,8 @@ export interface ProductSummary {
   title: string
   category: string | null
   stage: ProductStage
+  /** The operator's Commerce-OS decision — distinct from `stage` (a pipeline position) and from any channel/approval/compliance/supplier status shown alongside it. */
+  decision: ProductDecision
   healthScore: number
   opportunityScore: number | null
   /** Independent status per channel (§21) — never collapsed into one. */

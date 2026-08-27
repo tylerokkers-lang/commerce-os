@@ -1,7 +1,8 @@
 import 'server-only'
 
-import type { ProductSummary, StockAlert } from '@/lib/core/domain'
+import type { ProductDecision, ProductSummary, StockAlert } from '@/lib/core/domain'
 import { demoProducts, demoStockAlerts } from '@/lib/demo/dataset'
+import { PRODUCT_DECISIONS } from '@/lib/products/decision'
 import { requireSession } from '@/lib/security/session'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { zero } from '@/lib/core/money'
@@ -13,7 +14,7 @@ export async function getProducts(): Promise<readonly ProductSummary[]> {
   const supabase = await createServerSupabase()
   const { data, error } = await supabase
     .from('products')
-    .select('id, sku, title, category, stage')
+    .select('id, sku, title, category, stage, decision')
     .eq('org_id', session.orgId)
     .neq('stage', 'removed')
     .order('created_at', { ascending: false })
@@ -29,6 +30,7 @@ export async function getProducts(): Promise<readonly ProductSummary[]> {
     title: row.title,
     category: row.category,
     stage: row.stage,
+    decision: row.decision,
     healthScore: 0,
     opportunityScore: null,
     channelStatus: { shopify: 'not_listed', amazon_uk: 'not_listed', ebay: 'not_listed' },
@@ -53,4 +55,104 @@ export async function getProducts(): Promise<readonly ProductSummary[]> {
 export async function getStockAlerts(): Promise<readonly StockAlert[]> {
   const session = await requireSession()
   return session.isDemo ? demoStockAlerts() : []
+}
+
+export type ProductDecisionSummary = Record<ProductDecision, number>
+
+const EMPTY_DECISION_SUMMARY = (): ProductDecisionSummary =>
+  Object.fromEntries(PRODUCT_DECISIONS.map((d) => [d, 0])) as ProductDecisionSummary
+
+/**
+ * One grouped count per decision, org-scoped — the single real query the
+ * dashboard/products page reads, never a second calculation of the same
+ * thing. Counted from the same `products` rows `getProducts()` reads, not a
+ * duplicated business rule.
+ */
+export async function getProductDecisionSummary(): Promise<ProductDecisionSummary> {
+  const session = await requireSession()
+  const summary = EMPTY_DECISION_SUMMARY()
+
+  if (session.isDemo) {
+    for (const product of demoProducts()) summary[product.decision]++
+    return summary
+  }
+
+  const supabase = await createServerSupabase()
+  const { data, error } = await supabase.from('products').select('decision').eq('org_id', session.orgId).neq('stage', 'removed')
+  if (error) throw new Error(`Could not load product decision summary: ${error.message}`)
+
+  for (const row of data ?? []) summary[row.decision]++
+  return summary
+}
+
+export interface ProductDetail {
+  id: string
+  sku: string
+  title: string
+  category: string | null
+  stage: string
+  decision: ProductDecision
+  decisionReason: string | null
+  decisionChangedAt: string
+  /** From `product_decision_transitions`' most recent row — `products` itself has no "changed by" column, only what/when. */
+  decisionChangedBy: string | null
+}
+
+/**
+ * The single-product read the product detail page needs. No new
+ * price/margin/stock/marketplace-status computation is invented here —
+ * those remain out of scope for this read until a real caller needs them
+ * from their own existing, canonical source (`getProducts()`'s per-product
+ * row already carries the honest zeros/nulls live mode has today).
+ */
+export async function getProductDetail(productId: string): Promise<ProductDetail | null> {
+  const session = await requireSession()
+
+  if (session.isDemo) {
+    const product = demoProducts().find((p) => p.id === productId)
+    if (!product) return null
+    return {
+      id: product.id,
+      sku: product.sku,
+      title: product.title,
+      category: product.category,
+      stage: product.stage,
+      decision: product.decision,
+      decisionReason: 'Demo data — no real decision history exists.',
+      decisionChangedAt: new Date().toISOString(),
+      decisionChangedBy: 'Demo',
+    }
+  }
+
+  const supabase = await createServerSupabase()
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, sku, title, category, stage, decision, decision_reason, decision_changed_at')
+    .eq('org_id', session.orgId)
+    .eq('id', productId)
+    .maybeSingle()
+
+  if (error) throw new Error(`Could not load product: ${error.message}`)
+  if (!data) return null
+
+  const { data: lastTransition } = await supabase
+    .from('product_decision_transitions')
+    .select('actor_label')
+    .eq('org_id', session.orgId)
+    .eq('product_id', productId)
+    .order('occurred_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return {
+    id: data.id,
+    sku: data.sku,
+    title: data.title,
+    category: data.category,
+    stage: data.stage,
+    decision: data.decision,
+    decisionReason: data.decision_reason,
+    decisionChangedAt: data.decision_changed_at,
+    decisionChangedBy: lastTransition?.actor_label ?? null,
+  }
 }

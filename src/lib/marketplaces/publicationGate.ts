@@ -1,7 +1,8 @@
 import { isPreLaunch, isTerminal } from '@/lib/products/lifecycle'
+import { decisionBlocksExecution, decisionBlockReason } from '@/lib/products/decisionGate'
 import type { ChannelCapability } from '@/lib/suppliers/scoring'
 import type { ComplianceAssessment } from '@/lib/compliance/rules'
-import type { ChannelKey, ProductStage } from '@/lib/core/domain'
+import type { ChannelKey, ProductDecision, ProductStage } from '@/lib/core/domain'
 import type { Enums } from '@/lib/supabase/database.types'
 
 /**
@@ -13,6 +14,7 @@ import type { Enums } from '@/lib/supabase/database.types'
  * whether a specific product may be listed through it — that is decided
  * entirely here, by composing the engines that already exist:
  *
+ *   - operator product decision    -> `src/lib/products/decisionGate.ts`
  *   - product lifecycle rules      -> `src/lib/products/lifecycle.ts`
  *   - supplier status/capability   -> `src/lib/suppliers/scoring.ts`
  *   - profitability gate           -> `src/lib/profitability` (via the caller)
@@ -46,6 +48,8 @@ export interface PublicationDecision {
 export interface PublicationGateInput {
   channel: ChannelKey
   productStage: ProductStage
+  /** The operator's Commerce-OS decision for this product — checked first, ahead of every other requirement (`products/decisionGate.ts`). */
+  productDecision: ProductDecision
   supplierCapability: ChannelCapability | null
   profitabilityGatePasses: boolean
   profitabilityFailureReason: string | null
@@ -94,8 +98,22 @@ function automationPermitsAutoPublish(level: AutomationLevel): boolean {
  */
 export function assessPublicationReadiness(input: PublicationGateInput): PublicationDecision {
   const lifecycle = lifecycleAllowsListing(input.productStage)
+  const decisionBlocked = decisionBlocksExecution(input.productDecision)
 
   const requirements: PublicationRequirement[] = [
+    {
+      // Checked first, ahead of every other requirement — the operator's
+      // own decision is the outermost gate (PRODUCT DECISION -> channel
+      // eligibility -> compliance -> supplier -> profitability ->
+      // budget/cashflow -> approval -> execution), never something the
+      // other five requirements can override.
+      key: 'product_decision',
+      label: 'Commerce-OS product decision',
+      satisfied: !decisionBlocked,
+      detail: decisionBlocked
+        ? decisionBlockReason(input.productDecision)
+        : `Product decision "${input.productDecision}" permits proceeding to the remaining requirements.`,
+    },
     {
       key: 'lifecycle',
       label: 'Product lifecycle rules',

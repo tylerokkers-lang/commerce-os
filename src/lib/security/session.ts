@@ -3,7 +3,10 @@ import 'server-only'
 import { cache } from 'react'
 import { isDemoMode, isSupabaseConfigured } from '@/lib/core/env'
 import { createServerSupabase } from '@/lib/supabase/server'
+import { canWrite } from './roles'
 import type { Enums } from '@/lib/supabase/database.types'
+
+export { canWrite, canApprove } from './roles'
 
 /**
  * Who is asking, and which business are they asking about.
@@ -74,12 +77,6 @@ export async function requireSession(): Promise<SessionContext> {
   if (!session) throw new Error('Not authenticated')
   return session
 }
-
-const WRITE_ROLES: readonly Enums<'member_role'>[] = ['owner', 'admin']
-
-export const canWrite = (session: SessionContext): boolean => WRITE_ROLES.includes(session.role)
-
-export const canApprove = (session: SessionContext): boolean => session.role === 'owner'
 
 /**
  * Guard for Server Actions. Server Functions are reachable by direct POST, not

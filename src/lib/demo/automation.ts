@@ -230,6 +230,7 @@ function scenario4(): PublicationScenario {
     {
       channel: 'shopify',
       productStage: 'approved',
+      productDecision: 'add',
       supplierCapability: assessShopifyCapability(supplierSignals),
       profitabilityGatePasses: true,
       profitabilityFailureReason: null,
@@ -243,6 +244,7 @@ function scenario4(): PublicationScenario {
     {
       channel: 'amazon_uk',
       productStage: 'approved',
+      productDecision: 'add',
       supplierCapability: assessAmazonCapability(supplierSignals),
       profitabilityGatePasses: true,
       profitabilityFailureReason: null,

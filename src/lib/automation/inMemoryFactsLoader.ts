@@ -12,6 +12,8 @@ export interface SeedProduct {
   title: string
   category: string | null
   stage: string
+  /** Defaults to 'add' when unset — most existing seed fixtures predate the product-decision feature and represent products already eligible to trade. */
+  decision?: string
   updatedAt: string | null
 }
 
@@ -70,6 +72,7 @@ export function createInMemoryFactsLoader(seed?: {
         title: factFrom(p?.title, p?.updatedAt ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
         category: factFrom(p?.category ?? null, p?.updatedAt ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
         stage: factFrom(p?.stage, p?.updatedAt ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
+        decision: factFrom(p?.decision ?? 'add', p?.updatedAt ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
       }
     },
 

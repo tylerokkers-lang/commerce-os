@@ -1,21 +1,30 @@
 import { assessPriceChange, type PriceChangeRequest } from './priceAutomation'
+import { decisionBlocksExecution, decisionBlockReason } from '@/lib/products/decisionGate'
 import type { AutomationStore } from './store'
 import type { AutomationSettings } from './settingsTypes'
+import type { PolicyResult } from './types'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
+import type { ProductDecision } from '@/lib/core/domain'
 
 /**
  * The safe price-action pipeline (Milestone 7 brief §6):
  *
- *   FACT CHANGE -> PROFITABILITY RECALCULATION (assessPriceChange, unchanged
- *   from Milestone 6) -> POLICY (same call) -> APPROVAL IF REQUIRED
- *   -> PRICE UPDATE (SUBMIT) -> VERIFY -> RECONCILE -> AUDIT
+ *   PRODUCT DECISION (this milestone's addition, checked first — see
+ *   `products/decisionGate.ts`) -> FACT CHANGE -> PROFITABILITY
+ *   RECALCULATION (assessPriceChange, unchanged from Milestone 6) ->
+ *   POLICY (same call) -> APPROVAL IF REQUIRED -> PRICE UPDATE (SUBMIT)
+ *   -> VERIFY -> RECONCILE -> AUDIT
  *
  * Nothing here recalculates profitability or re-derives the policy verdict
  * — `assessPriceChange` already does both, exactly as it did in Milestone 6.
  * What is new is everything *after* the policy allows the change: actually
  * calling the marketplace connector, checking its own reported state
  * afterwards rather than trusting the write call's response, and only then
- * updating our own `channel_products` record.
+ * updating our own `channel_products` record. Also new: a product whose
+ * operator decision is not "add"/"test" never reaches `assessPriceChange`
+ * at all — blocked before profitability is even computed, since the
+ * product decision is the outermost gate, not a replacement for the
+ * profitability/policy gate that follows it.
  */
 
 export interface PriceExecutionInput {
@@ -24,6 +33,8 @@ export interface PriceExecutionInput {
   externalId: string
   request: PriceChangeRequest
   connector: MarketplaceConnector
+  /** The operator's Commerce-OS decision for this product — checked before any profitability/policy assessment. */
+  productDecision: ProductDecision
   /** One execution per real-world price change intent — a retried job must reuse the same key. */
   idempotencyKey: string
   jobId?: string
@@ -38,8 +49,22 @@ export interface PriceExecutionResult {
   executed: boolean
 }
 
+const BLOCKED_BY_DECISION_POLICY = (decision: ProductDecision): PolicyResult => ({
+  outcome: 'block',
+  requirements: [{ key: 'product_decision', label: 'Commerce-OS product decision', satisfied: false, detail: decisionBlockReason(decision) }],
+  reason: decisionBlockReason(decision),
+  riskLevel: 'low',
+})
+
 export async function executePriceChange(input: PriceExecutionInput, settings: AutomationSettings, store: AutomationStore): Promise<PriceExecutionResult> {
-  const assessment = assessPriceChange(input.request, settings)
+  const assessment = decisionBlocksExecution(input.productDecision)
+    ? {
+        before: { netMarginPct: null },
+        after: { netMarginPct: null },
+        pctChange: 0,
+        policy: BLOCKED_BY_DECISION_POLICY(input.productDecision),
+      }
+    : assessPriceChange(input.request, settings)
 
   const created = await store.createAutomationAction({
     orgId: input.orgId,

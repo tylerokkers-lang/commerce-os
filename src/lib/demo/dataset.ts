@@ -178,6 +178,13 @@ export function demoProducts(): readonly ProductSummary[] {
       title: seed.title,
       category: seed.category,
       stage: seed.stage,
+      // The demo catalogue represents an already-established, already-
+      // selling test business — every fixture predates the product-decision
+      // feature and is honestly 'add' rather than the safe-by-default
+      // 'review' a genuinely new product would start at (see
+      // products/repository.ts's live getProducts(), which reads the real
+      // per-product value instead).
+      decision: 'add',
       healthScore: healthScore(seed, econ.netMarginPct),
       opportunityScore: seed.opportunityScore,
       // eBay is not yet part of the demo dataset's per-product channel model

@@ -167,6 +167,7 @@ export interface ChannelEligibilityRecheckPayload {
   channelProductId: string
   channel: 'shopify' | 'amazon_uk'
   productStage: string
+  productDecision: string
   profitabilityGatePasses: boolean
   profitabilityFailureReason: string | null
   compliance: ReturnType<typeof assessCompliance> | null
@@ -196,6 +197,7 @@ export async function handleChannelEligibilityRecheck(job: JobRecord, store: Aut
     {
       channel: payload.channel,
       productStage: payload.productStage as never,
+      productDecision: payload.productDecision as never,
       supplierCapability: supplier.unitCost.value
         ? capability({
             unitCost: supplier.unitCost.value,
@@ -297,6 +299,7 @@ export interface ProductPriceReviewPayload {
   supplierShippingMinor: number
   channelFeePct?: number
   connectorKey: string
+  productDecision: string
 }
 
 function isPriceReviewPayload(p: Record<string, unknown>): boolean {
@@ -342,6 +345,7 @@ export async function handleProductPriceReview(job: JobRecord, store: Automation
     externalId: payload.externalId,
     request: { productTitle: payload.productTitle, costInputsBefore: costInputs, newSellingPrice: money(proposedPriceMinor, 'GBP'), automationLevel: settings.automationLevel },
     connector,
+    productDecision: payload.productDecision as never,
     idempotencyKey: `job:${job.id}`,
     jobId: job.id,
     correlationId: job.correlationId,

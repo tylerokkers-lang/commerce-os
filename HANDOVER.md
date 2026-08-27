@@ -3558,7 +3558,192 @@ diff); every new write path gated by `session.isDemo`/tenant-scoped
 no code path anywhere calls a supplier API, a marketplace write method,
 or anything that moves money.
 
-## 50. Next step
+## 50. Milestone: per-product operator decision/control system
+
+**Context.** A distinct sub-milestone, deliberately not folded into §49's
+order-ingestion work (which was already complete and committed before
+this was requested) — an explicit, operator-controlled per-product
+decision (ADD/BLOCK/TEST/WATCH/HOLD/REMOVE/REVIEW) that gates every
+automated operational action on a product, without ever replacing the
+existing profitability/compliance/supplier/approval gates. Planned via
+`EnterPlanMode` after an 11-point architecture inspection reported to
+the user first, matching the explicit "report before coding" and
+"split into a sub-milestone rather than silently expanding scope"
+instructions.
+
+**What already existed.** `products.stage` (`product_stage` enum) is a
+discovery-to-trading **pipeline position** — a strict, mostly-linear
+graph `products/lifecycle.ts`'s `ALLOWED` map explicitly refuses
+anything not modelled. It is not, and was never overloaded into, an
+operator **permission** gate — the two concepts are genuinely
+different (where a candidate is in its journey vs. what the operator
+has decided to allow). A fully-built, audited, but entirely unwired
+Server Action for `stage` changes already existed
+(`opportunities/actions.ts`'s `changeProductStage` →
+`products/transitions.ts`'s `planStageChange`) — mirrored exactly for
+the new `decision` concept. `marketplaces/publicationGate.ts`'s
+`assessPublicationReadiness` was already the one real choke point for
+listing eligibility, already reading `productStage` — the natural
+first-checked place to add the new gate. `automation/priceExecution.ts`
+had **zero** product-lifecycle awareness before this milestone — no
+stage or decision check of any kind. Advertising execution has no
+product-linkage plumbing anywhere in its pipeline (campaigns aren't
+joined to products) — confirmed by inspection, not touched.
+
+**What was changed — the product decision model.**
+
+- One migration (`0033_product_decision.sql`/`0034_rls_product_decision.sql`):
+  a new `product_decision` enum (`add`/`block`/`test`/`watch`/`hold`/
+  `remove`/`review`), three new columns on the **existing** `products`
+  table (`decision` — default `'review'`, `decision_reason`,
+  `decision_changed_at`), and one new append-only
+  `product_decision_transitions` table mirroring
+  `product_stage_transitions` exactly (RLS read-only through the same
+  generic managed-table policy every other history table uses). **74
+  tables now (was 73)** — the only schema growth this milestone needed;
+  no duplicate product table was created.
+- The default `'review'` makes "a newly discovered product is never
+  automatically ADD" true by construction — even though no live
+  discovery→insert path exists yet in this codebase (confirmed
+  unchanged from §49's own finding), this is safe by design for
+  whenever one is built.
+- `products/decision.ts` (pure): `planDecisionChange` — unlike
+  `stage`'s restrictive `ALLOWED` graph, **any decision may move to any
+  other** (ADD → TEST → BLOCK → ADD is all valid — an operator
+  override, not a forward pipeline). A same-value resubmission is not
+  an error (idempotent), but writes no transition-history row (only a
+  genuine value change does) — an audit entry is still produced either
+  way, so a reason-only edit stays fully auditable.
+- `products/decisionGate.ts` (pure): `EXECUTION_PERMITTED_DECISIONS =
+  {'add','test'}` — the single source of truth every gate integration
+  imports, so "which decisions permit execution" is defined in exactly
+  one place, never re-derived.
+- `products/decisionExecutor.ts` (server-only): the one real write path
+  for `products.decision`, shared by the Server Action and the API
+  route — neither talks to Postgres directly for this write.
+
+**How it interacts with listing/execution.**
+`publicationGate.ts`'s `assessPublicationReadiness` gained a
+`product_decision` requirement, checked **first**, ahead of the other
+five (lifecycle, supplier status, supplier capability, profitability,
+compliance, identifiers) — a blocked decision short-circuits with a
+reason naming which decision blocked it, never silently falling
+through. Proven by test: an ADD/TEST product still fails when
+profitability/compliance fail (the decision gate does not bypass
+them); a BLOCK/HOLD/WATCH/REMOVE/REVIEW product is blocked regardless
+of every other requirement passing. `priceExecution.ts`'s
+`executePriceChange` gained the identical check **before**
+`assessPriceChange` is ever called — a blocked decision never reaches
+profitability computation at all (proven with a `vi.spyOn` assertion
+that `assessPriceChange` is never invoked when blocked, and is invoked
+exactly once when permitted). Advertising execution was **deliberately
+not wired** — no product-linkage plumbing exists there today, and
+building it would be new machinery disproportionate to this
+milestone's scope, not a single insertion; the enum/gate-helper design
+already supports adding it later without a redesign, per the user's
+own explicit requirement.
+
+**How it interacts with order ingestion (§49).**
+Not at all, by design and confirmed by inspection —
+`orders/purchaseWorkflow.ts` resolves suppliers from
+`order_items`/`supplier_products` and never reads `products.decision`.
+Even ADD/TEST products still go through the identical manual-purchase
+workflow; the product decision governs **future operational actions**,
+never an already-created customer order. If a product becomes BLOCKED
+after a customer has already bought it, nothing in this milestone (or
+§49's) cancels, modifies, or otherwise touches that order —
+`planDecisionChange` has no order/fulfilment/shipment field anywhere
+in its input or output shape, proven directly by a test asserting its
+plan's exact key set.
+
+**UI.** A product detail page now exists (`/products/[id]`, none did
+before) with two visually separate cards: product facts (SKU,
+lifecycle stage) and the "Commerce-OS decision" control (current
+decision/changed-by/changed-at/reason, plus a form to change it) —
+neither card derives from or overwrites the other. "Changed by" is
+resolved from `product_decision_transitions`' most recent row, itself
+written from the authenticated session's real email — never
+hardcoded. The products list page gained a Decision column and a
+decision-count summary strip (`getProductDecisionSummary()`, one real
+grouped-count query, live-mode-only — never a duplicated calculation).
+Verified in the browser (demo mode): the summary strip, per-row
+badges, and the detail page's two-card layout all render correctly;
+the write form is correctly disabled in demo mode with the same
+"Demo mode has no database" message pattern `changeProductStage`
+already established. **No live-Postgres write was exercised** — this
+codebase has no live-Supabase-backed UI test harness for any write
+path (the same standing, project-wide limitation §48's "Next step"
+already documented), so the actual database write sequence is
+verified by code inspection and the executor's own logic, not by a
+live click-through.
+
+**API.** `GET`/`POST /api/products/[id]/decision`, session-authenticated,
+`POST` additionally gated by `requireWriteAccess()` (owner/admin only)
+and rejecting any value outside the closed `PRODUCT_DECISIONS` set —
+never coerced.
+
+**Tests — 35 new, covering every one of the 22 requested scenarios.**
+`tests/product-decision.test.ts` (18 tests): default state, all 7
+decisions individually, invalid decision rejected, ADD→TEST→BLOCK
+sequence valid, idempotent same-value resubmission (no duplicate
+transition row, still audited), a genuine change preserves the
+previous decision in both the transition row and audit entry,
+organisation-id threading, and the "no order/fulfilment field
+anywhere in the plan" proof. `tests/product-decision-gate.test.ts`
+(10 tests): the gate helper for all 7 values, publication blocked by
+watch/hold/block/remove/review individually, not blocked by add/test
+(but still failing on profitability when profitability fails),
+`priceExecution` provably never/always calling `assessPriceChange`
+via spy. `tests/security-roles.test.ts` (5 tests): owner/admin can
+write, viewer/analyst cannot (the exact check `requireWriteAccess`
+is built on), only owner can approve — extracted into a new pure
+`security/roles.ts` specifically so this is provable, since
+`session.ts` (`import 'server-only'`) cannot be imported into Vitest
+at all, the same structural constraint as every other server-only
+file in this codebase (confirmed no test anywhere previously imported
+it either). RLS-level organisation isolation itself is not re-tested
+— already covered by `db:verify`'s "every org-scoped table has RLS
+enabled" check and the identical, already-proven policy pattern every
+other managed table uses.
+
+**Verification:** 1408/1408 tests pass (was 1373), `tsc --noEmit`
+clean, `eslint` clean, `next build` clean (new `/products/[id]` page
+and `/api/products/[id]/decision` route both registered), `db:verify`
+clean — **74 tables (was 73), exactly the one migration this
+milestone needed.** No marketplace write call, no supplier-purchase
+call, and no credential value were added or exposed anywhere (grepped
+the full diff). eBay connector files show zero diff — untouched,
+still `CONFIGURATION_INCOMPLETE`. `informax-site` confirmed untouched
+(`HEAD` still `2bf3d8a`). Every pre-existing order-lifecycle test
+(§49's) still passes unchanged. **Nothing in this milestone has a
+live-connector surface, so no LIVE_VERIFIED claim applies to any part
+of it** — this is purely an internal control, verified against a real
+(migrated, RLS-checked) schema and the demo-mode UI, never against a
+live customer's actual product data.
+
+**Blockers:** none code-side. The two genuinely infrastructure-gated
+items are the same as ever: a live Supabase project to exercise the
+write path for real, and real `supplier_products`/order data to prove
+the gates against non-demo rows.
+
+## 51. Next step
+
+**Recommended next milestone from §50: channel-level decisions.** The
+product-level decision layer was deliberately built so this can extend
+without a redesign — `product_decision_transitions` is already keyed
+per-product, not embedded in a wider structure, and `decisionGate.ts`'s
+single-source-of-truth pattern generalises cleanly to a per-channel
+version. Concretely, this would mean: a new `channel_decision` concept
+(or a `channel_product_decisions` table keyed by `(product_id,
+channel)`) alongside — never replacing — the product-level one; the
+distinction the user was explicit about (a product could be `add`
+overall while `amazon_uk` is independently `block`) implies these
+genuinely are two different gates a caller may need to check, not one
+collapsed value. Wiring advertising's product-linkage plumbing (§50:
+campaigns aren't joined to products anywhere in that pipeline today)
+would naturally be built alongside this, since a channel-level TEST
+decision is exactly what the user described eventually wanting to
+drive an advertising experiment classification.
 
 Two smaller, optional candidates carried over from §48/§49, neither
 blocking: (1) `MarketplaceListingSnapshot`

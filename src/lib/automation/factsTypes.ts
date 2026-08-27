@@ -47,6 +47,8 @@ export interface ProductFacts {
   title: Fact<string>
   category: Fact<string | null>
   stage: Fact<string>
+  /** The operator's Commerce-OS decision (`products/decisionGate.ts` is the single source of truth for what it permits) — never defaulted to a permissive value when missing. */
+  decision: Fact<string>
 }
 
 export interface SupplierFacts {

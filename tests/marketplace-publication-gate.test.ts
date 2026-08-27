@@ -52,6 +52,7 @@ function baseInput(over: Partial<PublicationGateInput> = {}): PublicationGateInp
   return {
     channel: 'shopify',
     productStage: 'approved',
+    productDecision: 'add',
     supplierCapability: assessShopifyCapability(goodSupplier),
     profitabilityGatePasses: true,
     profitabilityFailureReason: null,

@@ -148,7 +148,7 @@ describe('job handler registry', () => {
 
     await store.enqueueJob({
       orgId: ORG_A, jobType: 'channel_eligibility_recheck',
-      payload: { channelProductId: 'cp-7', channel: 'shopify', productStage: 'approved', profitabilityGatePasses: true, profitabilityFailureReason: null, compliance: { verdict: 'pass', checks: [], blockingReasons: [], reviewReasons: [], remediableBlockers: [], fundamentalBlockers: [], ip: { risk: 'low', reasons: [] }, restrictedCategory: false, requiresDocumentation: false, rulesetVersion: 'v1', assessedAt: new Date().toISOString(), summary: 'Passes.', disclaimer: 'Not legal advice.', channel: 'shopify' }, supplierId: 'sup-7', productId: 'prod-7' },
+      payload: { channelProductId: 'cp-7', channel: 'shopify', productStage: 'approved', productDecision: 'add', profitabilityGatePasses: true, profitabilityFailureReason: null, compliance: { verdict: 'pass', checks: [], blockingReasons: [], reviewReasons: [], remediableBlockers: [], fundamentalBlockers: [], ip: { risk: 'low', reasons: [] }, restrictedCategory: false, requiresDocumentation: false, rulesetVersion: 'v1', assessedAt: new Date().toISOString(), summary: 'Passes.', disclaimer: 'Not legal advice.', channel: 'shopify' }, supplierId: 'sup-7', productId: 'prod-7' },
     })
     await runWorkerBatch(store, facts, connectors, 'worker-1')
 

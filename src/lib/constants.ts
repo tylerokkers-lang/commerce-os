@@ -1,4 +1,4 @@
-import type { ChannelKey, ListingStatus, ProductStage } from '@/lib/core/domain'
+import type { ChannelKey, ListingStatus, ProductDecision, ProductStage } from '@/lib/core/domain'
 import type { Tone } from '@/components/ui'
 
 export const APP_NAME = 'Commerce OS'
@@ -80,6 +80,26 @@ export const STAGE_TONES: Record<ProductStage, Tone> = {
   rejected: 'negative',
   paused: 'caution',
   removed: 'negative',
+}
+
+export const DECISION_LABELS: Record<ProductDecision, string> = {
+  add: 'Add',
+  test: 'Test',
+  watch: 'Watch',
+  hold: 'Hold',
+  block: 'Block',
+  remove: 'Remove',
+  review: 'Review',
+}
+
+export const DECISION_TONES: Record<ProductDecision, Tone> = {
+  add: 'positive',
+  test: 'accent',
+  watch: 'neutral',
+  hold: 'caution',
+  block: 'negative',
+  remove: 'negative',
+  review: 'caution',
 }
 
 export const LISTING_LABELS: Record<ListingStatus, string> = {

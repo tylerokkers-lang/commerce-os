@@ -29,13 +29,14 @@ export function getSupabaseFactsLoader(): FactsLoader {
   return {
     async loadProductFacts(orgId: string, productId: string, now: Date = new Date()): Promise<ProductFacts> {
       const supabase = createServiceSupabase()
-      const { data } = await supabase.from('products').select('title, category, stage, updated_at').eq('org_id', orgId).eq('id', productId).maybeSingle()
+      const { data } = await supabase.from('products').select('title, category, stage, decision, updated_at').eq('org_id', orgId).eq('id', productId).maybeSingle()
 
       return {
         productId,
         title: factFrom(data?.title, data?.updated_at ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
         category: factFrom(data?.category ?? null, data?.updated_at ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
         stage: factFrom(data?.stage, data?.updated_at ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
+        decision: factFrom(data?.decision, data?.updated_at ?? null, FRESHNESS_WINDOW_HOURS.productCatalogue, now),
       }
     },
 

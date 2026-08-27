@@ -198,6 +198,11 @@ export const profitabilityMonitor: Monitor<ProfitabilityMonitorSubject> = {
                   supplierShippingMinor: supplier.shippingCost.value?.minor ?? 0,
                   channelFeePct: profile.channelFeePct,
                   connectorKey: subject.connectorKey,
+                  // Never defaulted to a permissive value: an unavailable
+                  // decision fact blocks execution the same way an
+                  // undecided product would, matching `decision`'s own
+                  // safe 'review' column default.
+                  productDecision: product.decision.value ?? 'review',
                 }
                 const result = await ctx.events.createEvent({
                   orgId: ctx.orgId, eventType: 'PRODUCT_NO_LONGER_PROFITABLE', subjectType: 'product', subjectId: subject.productId,
