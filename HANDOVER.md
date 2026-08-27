@@ -3726,7 +3726,161 @@ items are the same as ever: a live Supabase project to exercise the
 write path for real, and real `supplier_products`/order data to prove
 the gates against non-demo rows.
 
-## 51. Next step
+## 51. eBay connection verification & hardening — real credentials, Sandbox, TOKEN_REFRESH_FAILED (honest)
+
+**Context.** Real eBay credentials were added to `.env.local` for the
+first time in this project's history. Inspected first, per instruction,
+before any change: the connector (`ebay.ts`, built §37/§38) was already
+substantially correct — real refresh-token OAuth, real read calls
+(`fetchListings`/`fetchOrders`/`getConnectionHealth`), write methods
+already honest stubs, capability descriptor already conservative
+(`writeListings`/`syncInventory`/`processRefunds`/`readFees`/`webhooks`/
+`verifyWrites` all `false`), and `registry.ts`'s `deriveMarketplaceStatus()`
+already never reported `'connected'` from env-var presence alone — it
+always required a genuine, successful `getConnectionHealth()` call. The
+one real, self-documented gap: **no Sandbox/Production distinction
+existed anywhere** — the connector hardcoded `api.ebay.com`
+unconditionally, a fact stated explicitly in its own doc comment as "a
+genuine, deliberately deferred gap, not an oversight."
+
+**What was built.** Verified against eBay's own documentation before
+writing anything: eBay issues separate credential sets/hosts per
+environment (`api.sandbox.ebay.com` vs `api.ebay.com`), and Client IDs
+carry a public, non-secret `-SBX-`/`-PRD-` naming marker. `ebay.ts`
+gained `resolveEbayEnvironment(clientId, explicitOverride)`: if an
+optional `EBAY_ENVIRONMENT` override and the Client ID's own marker are
+both present and **disagree**, that's a genuine conflict — refused
+outright, never guessed. If only one signal is present, it's used. If
+neither is present, defaults to `'production'` — **preserving the
+connector's original, pre-existing behaviour exactly**, so every one of
+the 36 pre-existing tests (using placeholder Client IDs like `'x'`) kept
+passing completely unmodified in their assertions.
+
+A new `verifyEbayConnection()` returns the six explicit states requested
+(`NOT_CONFIGURED`/`AUTHENTICATION_FAILED`/`TOKEN_REFRESH_FAILED`/
+`API_ACCESS_FAILED`/`CONNECTED`/`DEGRADED`), classified from eBay's own
+token-endpoint `error` field (`invalid_client` → AUTHENTICATION_FAILED,
+i.e. the app's own client id/secret pair is wrong; `invalid_grant` or
+anything else at that step → TOKEN_REFRESH_FAILED, i.e. the refresh
+token itself is bad) and HTTP status (429/5xx → DEGRADED, distinct from
+a hard failure, at both the token step and the API step). The existing,
+shared `MarketplaceConnectionStatus` enum (5-state, DB-backed, used by
+Shopify/Amazon too) was deliberately **left untouched** —
+`getConnectionHealth()` is now a thin wrapper mapping this richer result
+down to it, one real check with two views, never two implementations.
+
+`describeEbayCapabilityLayers()` reports, without inventing new
+enforcement, the four layers Task 4 asked to keep distinct: OAuth scopes
+actually granted (from the token response's own `scope` field — not a
+secret) vs. what the connector technically implements vs. what's
+explicitly enabled (`DESCRIPTOR.capabilities`, the real, unchanged
+enforcement mechanism every gate already reads) vs. what policy
+currently permits (`'read_only'`, true today, stated explicitly). A
+granted scope never automatically widens any of the other three —
+proven by a test that grants a much broader scope set and confirms
+`writeListings`/`processRefunds` stay `false` regardless.
+
+New `ebayVerificationAudit.ts`: `buildEbayVerificationAuditEntry(orgId,
+result)`, a small, real, exported function — not just a described
+pattern — constructing the exact safe metadata Task 9 lists (integration,
+environment, status, operation tested, latency, scopes granted) as a new
+`MARKETPLACE_CONNECTOR_VERIFIED` audit action (mirroring the existing
+`ADVERTISING_PROVIDER_VERIFIED` precedent's granularity — a deliberate
+verification event, not every routine health poll, matching how
+`registry.ts`'s own health checks were never audited either). Structurally
+cannot contain a credential — proven by a test asserting the built
+entry's exact key set and that no `Authorization`/`Bearer`/`Basic ` string
+ever appears in it. Not wired into a permanent route this round (not
+requested, would expand scope) — exported so a future "verify connection"
+UI/route can call it without a redesign, matching the "design so the
+architecture can later support..." instruction. No new database table or
+column was added — Task 5's explicit "do not unnecessarily migrate
+secrets into the database" — `db:verify` still reports 74 tables,
+unchanged.
+
+**Tests:** 18 new tests in `tests/marketplace-connectors.test.ts` (the
+existing eBay test file — no parallel file created), covering all 12
+requested scenarios: missing credentials, successful token refresh,
+`invalid_client` vs `invalid_grant` classified distinctly, successful
+and failed authenticated API calls, Sandbox Client ID → sandbox host /
+Production Client ID → production host / disagreeing signals → refused
+/ no signal → the original default, credentials never appearing
+anywhere in a `verifyEbayConnection()` result (checked via full-object
+JSON serialisation, not just the URL), env-var-presence-alone never
+producing `CONNECTED`, write capabilities staying disabled even after a
+genuinely successful `CONNECTED` result, a broad scope grant not
+expanding policy permission, 429/503 degradation at both steps, and the
+audit-entry builder's safety and outcome mapping. All 36 pre-existing
+eBay/marketplace tests still pass, completely unmodified in their own
+assertions (only 4 needed a mechanical `environment`/`environmentSource`
+field addition to their credential literals to satisfy the type).
+1426/1426 tests pass overall (was 1408), `tsc --noEmit` clean, `eslint`
+clean, `next build` clean (no new routes — none were added), `db:verify`
+clean, still 74 tables.
+
+**Live verification — the real result, not fabricated.** Ran via the
+same temporary, read-only Vitest script pattern used for every prior
+live verification in this project (deleted immediately after; no
+credential value ever printed, only structural booleans/status strings
+throughout, confirmed by grepping the full diff for the `-SBX-`/`-PRD-`
+markers afterward — every match was either this feature's own detection
+code or a fake test fixture, never the real value). Result:
+
+- **Environment auto-detected: Sandbox** (`source: 'detected'`, from the
+  real Client ID's own `-SBX-` marker — confirmed structurally, value
+  never read or printed by this session).
+- **Credentials present: YES** — all three required env vars found.
+- **OAuth token refresh: FAILED.** eBay's sandbox token endpoint (`https://api.sandbox.ebay.com/identity/v1/oauth2/token`)
+  was genuinely reached — proven by a real, specific eBay error, not a
+  network/DNS failure: `invalid_grant — the provided authorization
+  refresh token is invalid or was issued to another client`. This is
+  the exact same class of proof-of-real-connectivity this project has
+  relied on before (Shopify's DNS-error → `app_not_installed`
+  progression, §45-§47) — a specific, meaningful rejection from the
+  real service proves the request reached it, as distinct from a
+  network-level failure.
+- **Authenticated API test: NOT REACHED** — the sequence correctly
+  stopped at the token-refresh failure, per Task 2's explicit "do not
+  use a write operation merely to prove connectivity" and this
+  connector's own "never proceed past a failed step" design (unchanged
+  from before this session).
+- **Status: `TOKEN_REFRESH_FAILED`.** Not `AUTHENTICATION_FAILED` (the
+  client id/secret pair itself was accepted — eBay's `invalid_grant`,
+  not `invalid_client`), not `CONNECTED` (no successful authenticated
+  call occurred), not fabricated.
+- **Account identity: NOT VERIFIED** (blocked on the token failure
+  above — no account-identifying call was ever reached).
+
+**Root cause, most likely:** the refresh token in `.env.local` was
+issued against a *different* application/client-id registration than
+the `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` pair currently configured
+(eBay's own error text says exactly this: "issued to another client"),
+or the token has expired/been revoked since it was generated. This is a
+credential-provisioning issue on eBay's Developer Portal side, not a
+connector defect — the same category of externally-caused,
+correctly-diagnosed-not-worked-around blocker this project has hit
+before (Shopify's `app_not_installed`, §46).
+
+**Blockers:** one, external — the refresh token needs to be
+re-generated from the Sandbox Developer Portal, consented against the
+exact same Sandbox `EBAY_CLIENT_ID` currently configured, then
+re-verified using the same `verifyEbayConnection()` function (no further
+code change expected to be needed).
+
+**Security checks performed:** no credential value printed, logged, or
+pasted into chat/HANDOVER.md at any point this session (structural
+booleans and eBay's own error text only); `.env.local` confirmed ignored
+by git (`.gitignore:46`) and not tracked; full diff grepped for
+`-SBX-`/`-PRD-`/secret-shaped patterns — every match is this feature's
+own detection code or a fake test fixture; `git status` shows exactly 4
+files (3 modified, 1 new), matching the plan precisely; no
+`recordAudit`/`console.*` call anywhere in `ebay.ts` gained a credential
+dependency (still zero, as before this session); write capabilities
+confirmed structurally unchanged and disabled by a live test run against
+the real connector; `informax-site` untouched (confirmed separately,
+`HEAD` still `2bf3d8a`).
+
+## 52. Next step
 
 **Recommended next milestone from §50: channel-level decisions.** The
 product-level decision layer was deliberately built so this can extend

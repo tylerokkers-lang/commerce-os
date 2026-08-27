@@ -5,6 +5,8 @@ import type {
   FetchOutcome,
   FulfilmentUpdateInput,
   FulfilmentUpdateOutcome,
+  MarketplaceCapabilities,
+  MarketplaceConnectionStatus,
   MarketplaceConnector,
   MarketplaceConnectorDescriptor,
   MarketplaceFeeSnapshot,
@@ -83,13 +85,25 @@ import type {
  *   - `fetchFees`/`syncInventory`(write)/all three price-and-inventory
  *     write methods are honestly `not_supported`/unimplemented — eBay fee
  *     reporting requires the separate Finances API, not implemented here.
- *   - No sandbox toggle exists — this connector only ever targets
- *     `api.ebay.com` (production). eBay's sandbox lives at a distinct host
- *     (`api.sandbox.ebay.com`) with its own credential set; adding a
- *     toggle is a genuine, deliberately deferred gap, not an oversight.
  *   - `getAccessToken` never caches the access token — every call
  *     re-exchanges the refresh token, the same known, shared inefficiency
  *     `amazon.ts`/`amazonAds.ts` both already have, not a new one.
+ *
+ * SANDBOX/PRODUCTION (eBay connection verification & hardening): eBay
+ * issues separate credential sets and hosts per environment
+ * (`api.sandbox.ebay.com` vs `api.ebay.com`) — `resolveEbayEnvironment()`
+ * below decides which one a given `EBAY_CLIENT_ID` belongs to, using
+ * eBay's own, publicly documented naming convention (a `-SBX-`/`-PRD-`
+ * marker in the Client ID — not a secret; eBay's own docs describe it as
+ * a public application identifier, distinct from the Client Secret and
+ * refresh token). An optional `EBAY_ENVIRONMENT` env var lets a caller
+ * state it explicitly; if it disagrees with what the Client ID's own
+ * marker indicates, that is treated as a genuine configuration conflict
+ * — refused outright, never guessed at, never silently resolved in
+ * either direction. When neither signal is present at all, this
+ * preserves the connector's original, pre-existing behaviour exactly
+ * (defaults to production) rather than introducing a new failure mode
+ * for every caller that predates this feature.
  */
 
 const DESCRIPTOR: MarketplaceConnectorDescriptor = {
@@ -120,8 +134,14 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
   },
 }
 
-const EBAY_API_HOST = 'api.ebay.com'
-const EBAY_TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token'
+export type EbayEnvironment = 'sandbox' | 'production'
+
+// Scope identifier strings are environment-agnostic (confirmed via eBay's
+// own OAuth documentation) — only the token endpoint and API host differ.
+const EBAY_HOSTS: Record<EbayEnvironment, { tokenUrl: string; apiHost: string }> = {
+  production: { tokenUrl: 'https://api.ebay.com/identity/v1/oauth2/token', apiHost: 'api.ebay.com' },
+  sandbox: { tokenUrl: 'https://api.sandbox.ebay.com/identity/v1/oauth2/token', apiHost: 'api.sandbox.ebay.com' },
+}
 const EBAY_SCOPES = [
   'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',
   'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
@@ -133,10 +153,50 @@ function readEnv(name: string): string | undefined {
   return value && value.trim().length > 0 ? value.trim() : undefined
 }
 
+/**
+ * Never guesses. `clientId` is not a secret (eBay's own docs describe the
+ * Client ID as a public application identifier, distinct from the Client
+ * Secret/refresh token) — checking it for eBay's own `-SBX-`/`-PRD-`
+ * naming marker is safe and never logs the value itself. Three outcomes:
+ *   - both signals present and agree, or only one is present -> that
+ *     environment, with its source recorded for the verification report.
+ *   - both present and DISAGREE -> a genuine conflict, refused outright
+ *     rather than picking a side.
+ *   - neither present -> 'production', preserving this connector's
+ *     original, pre-existing behaviour exactly, so every caller that
+ *     predates this feature (and every existing test using a placeholder
+ *     Client ID like `'x'`) is completely unaffected.
+ */
+export function resolveEbayEnvironment(
+  clientId: string,
+  explicitOverride: string | undefined,
+): { ok: true; environment: EbayEnvironment; source: 'explicit' | 'detected' | 'default' } | { ok: false; detail: string } {
+  const detected: EbayEnvironment | null = clientId.includes('-SBX-') ? 'sandbox' : clientId.includes('-PRD-') ? 'production' : null
+
+  let explicit: EbayEnvironment | null = null
+  if (explicitOverride !== undefined) {
+    const normalised = explicitOverride.trim().toLowerCase()
+    if (normalised !== 'sandbox' && normalised !== 'production') {
+      return { ok: false, detail: `EBAY_ENVIRONMENT must be "sandbox" or "production", got "${explicitOverride}".` }
+    }
+    explicit = normalised
+  }
+
+  if (explicit && detected && explicit !== detected) {
+    return { ok: false, detail: `EBAY_ENVIRONMENT ("${explicit}") disagrees with the Client ID's own environment marker ("${detected}") — refusing to guess which is correct.` }
+  }
+
+  if (explicit) return { ok: true, environment: explicit, source: 'explicit' }
+  if (detected) return { ok: true, environment: detected, source: 'detected' }
+  return { ok: true, environment: 'production', source: 'default' }
+}
+
 interface EbayCredentials {
   clientId: string
   clientSecret: string
   refreshToken: string
+  environment: EbayEnvironment
+  environmentSource: 'explicit' | 'detected' | 'default'
 }
 
 function credentials(): EbayCredentials | null {
@@ -144,13 +204,21 @@ function credentials(): EbayCredentials | null {
   const clientSecret = readEnv('EBAY_CLIENT_SECRET')
   const refreshToken = readEnv('EBAY_REFRESH_TOKEN')
   if (!clientId || !clientSecret || !refreshToken) return null
-  return { clientId, clientSecret, refreshToken }
+
+  const resolved = resolveEbayEnvironment(clientId, readEnv('EBAY_ENVIRONMENT'))
+  // A genuine Sandbox/Production conflict is treated as unconfigured
+  // (not_configured) rather than guessed — matches "if the environment
+  // cannot be determined safely, mark the integration as degraded/not
+  // configured rather than guessing."
+  if (!resolved.ok) return null
+
+  return { clientId, clientSecret, refreshToken, environment: resolved.environment, environmentSource: resolved.source }
 }
 
 /** Exchanges the long-lived refresh token for a short-lived access token — the same shape every other connector in this codebase uses for its own OAuth family. */
-async function getAccessToken(creds: EbayCredentials): Promise<Result<string, string>> {
+async function getAccessToken(creds: EbayCredentials): Promise<Result<{ accessToken: string; scopeGranted: string }, string>> {
   try {
-    const response = await fetch(EBAY_TOKEN_URL, {
+    const response = await fetch(EBAY_HOSTS[creds.environment].tokenUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -165,10 +233,24 @@ async function getAccessToken(creds: EbayCredentials): Promise<Result<string, st
         scope: EBAY_SCOPES,
       }),
     })
-    if (!response.ok) return err(`eBay token exchange failed: ${response.status} ${response.statusText}`)
-    const body = (await response.json()) as { access_token?: string }
+    if (!response.ok) {
+      // eBay's token endpoint returns `{ error: 'invalid_client' | 'invalid_grant' | ..., error_description }`
+      // on failure — surfaced in the message (never the credential itself)
+      // so a caller can tell "the app's own client id/secret pair is
+      // wrong" (invalid_client) apart from "the refresh token itself is
+      // bad/expired/revoked" (invalid_grant, or anything else at this
+      // step) without a second parse elsewhere.
+      const errorBody = await response.json().catch(() => null) as { error?: string; error_description?: string } | null
+      const code = errorBody?.error ?? 'unknown_error'
+      const description = errorBody?.error_description ? ` — ${errorBody.error_description}` : ''
+      if (response.status === 429 || response.status >= 500) {
+        return err(`eBay token exchange degraded: ${response.status} ${response.statusText} (${code})${description}`)
+      }
+      return err(`eBay token exchange failed: ${code} (${response.status} ${response.statusText})${description}`)
+    }
+    const body = (await response.json()) as { access_token?: string; scope?: string }
     if (!body.access_token) return err('eBay token exchange returned no access token.')
-    return ok(body.access_token)
+    return ok({ accessToken: body.access_token, scopeGranted: body.scope ?? '' })
   } catch (error) {
     return err(`eBay token exchange threw: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -213,20 +295,31 @@ async function performEbayApiRequest(creds: EbayCredentials, path: string, metho
   if (!tokenResult.ok) return tokenResult
 
   try {
-    const response = await fetch(`https://${EBAY_API_HOST}${path}`, {
+    const response = await fetch(`https://${EBAY_HOSTS[creds.environment].apiHost}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${tokenResult.value}`,
+        Authorization: `Bearer ${tokenResult.value.accessToken}`,
         'Content-Language': 'en-GB',
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
 
+    const rawText = await response.text()
+
+    // A rate limit or eBay-side outage is transient, not a genuine
+    // access/permission failure — classified from the HTTP status alone,
+    // before attempting to parse a body, since an infrastructure-level
+    // 503 (a gateway/load-balancer page, not eBay's own JSON error
+    // envelope) is exactly the shape this needs to catch, not the
+    // non-JSON-response error path below.
+    if (!response.ok && (response.status === 429 || response.status >= 500)) {
+      return err(`eBay API degraded: eBay API returned ${response.status} ${response.statusText}.`)
+    }
+
     // A successful write (e.g. createShippingFulfillment's 201) can return
     // an empty or minimal body — parsing it as JSON unconditionally would
     // throw on a genuinely successful call, so an empty body parses to `null`.
-    const rawText = await response.text()
     let parsed: unknown = null
     if (rawText.length > 0) {
       try {
@@ -267,6 +360,135 @@ function mapEbayOrderStatus(order: RawEbayOrder): MarketplaceOrderSnapshot['stat
   return 'pending'
 }
 
+/**
+ * The full connection verification sequence: credentials present -> OAuth
+ * token refresh -> authenticated read-only API call. Never reports
+ * `CONNECTED` on anything less than a genuine, successful authenticated
+ * eBay API response — env vars existing only ever satisfies the first
+ * step. `getConnectionHealth()` (the shared `MarketplaceConnector`
+ * interface method every other caller already relies on) is a thin
+ * wrapper over this same function, mapped down to the coarser shared
+ * status — one real check, two views of it, never two implementations.
+ */
+export type EbayVerificationStatus = 'NOT_CONFIGURED' | 'AUTHENTICATION_FAILED' | 'TOKEN_REFRESH_FAILED' | 'API_ACCESS_FAILED' | 'CONNECTED' | 'DEGRADED'
+
+export interface EbayVerificationResult {
+  status: EbayVerificationStatus
+  environment: EbayEnvironment | null
+  environmentSource: 'explicit' | 'detected' | 'default' | null
+  checkedAt: string
+  operationTested: string | null
+  latencyMs: number | null
+  /** Safe, human-readable detail — structurally cannot contain a credential (built only from eBay's own error text or a fixed success string). */
+  detail: string
+  /** From the token response's own `scope` field — not a secret. Empty when the check never reached a successful token exchange. */
+  oauthScopesGranted: readonly string[]
+}
+
+export async function verifyEbayConnection(): Promise<EbayVerificationResult> {
+  const now = new Date().toISOString()
+  const creds = credentials()
+  if (!creds) {
+    return {
+      status: 'NOT_CONFIGURED',
+      environment: null,
+      environmentSource: null,
+      checkedAt: now,
+      operationTested: null,
+      latencyMs: null,
+      detail: 'Required credentials are missing, or the Sandbox/Production environment could not be safely determined from them.',
+      oauthScopesGranted: [],
+    }
+  }
+
+  const startedAt = Date.now()
+  const tokenResult = await getAccessToken(creds)
+
+  if (!tokenResult.ok) {
+    const degraded = tokenResult.error.startsWith('eBay token exchange degraded:')
+    const authFailed = tokenResult.error.includes('invalid_client')
+    return {
+      status: degraded ? 'DEGRADED' : authFailed ? 'AUTHENTICATION_FAILED' : 'TOKEN_REFRESH_FAILED',
+      environment: creds.environment,
+      environmentSource: creds.environmentSource,
+      checkedAt: now,
+      operationTested: 'POST /identity/v1/oauth2/token',
+      latencyMs: Date.now() - startedAt,
+      detail: tokenResult.error,
+      oauthScopesGranted: [],
+    }
+  }
+
+  const oauthScopesGranted = tokenResult.value.scopeGranted.split(' ').filter(Boolean)
+  const operationTested = 'GET /sell/fulfillment/v1/order?limit=1'
+  const apiResult = await performEbayApiRequest(creds, '/sell/fulfillment/v1/order?limit=1', 'GET')
+  const latencyMs = Date.now() - startedAt
+
+  if (!apiResult.ok) {
+    const degraded = apiResult.error.startsWith('eBay API degraded:')
+    return {
+      status: degraded ? 'DEGRADED' : 'API_ACCESS_FAILED',
+      environment: creds.environment,
+      environmentSource: creds.environmentSource,
+      checkedAt: now,
+      operationTested,
+      latencyMs,
+      detail: apiResult.error,
+      oauthScopesGranted,
+    }
+  }
+
+  return {
+    status: 'CONNECTED',
+    environment: creds.environment,
+    environmentSource: creds.environmentSource,
+    checkedAt: now,
+    operationTested,
+    latencyMs,
+    detail: `Authenticated eBay API call succeeded against ${creds.environment}.`,
+    oauthScopesGranted,
+  }
+}
+
+/**
+ * The four capability layers Task 4 requires kept distinct — reported
+ * here from facts that already exist elsewhere in this file, never a new
+ * enforcement mechanism (the real enforcement is the capability
+ * descriptor plus the honest write-method stubs below, unchanged). A
+ * granted OAuth scope alone never implies Commerce OS may act on it —
+ * `explicitlyEnabled`/`policyPermitted` are the two facts every caller
+ * (`publicationGate.ts`, `priceExecution.ts`, etc.) actually gates on,
+ * and neither is derived from `oauthScopesGranted`.
+ */
+export interface EbayCapabilityLayers {
+  /** 1. What eBay's OAuth grant actually returned — informational only. */
+  oauthScopesGranted: readonly string[]
+  /** 2. What this connector's code can technically do, regardless of whether it's turned on. */
+  technicallyImplemented: readonly string[]
+  /** 3. What's actually turned on — DESCRIPTOR.capabilities, the real source of truth every gate reads. */
+  explicitlyEnabled: MarketplaceCapabilities
+  /** 4. What Commerce OS policy currently permits acting on autonomously. */
+  policyPermitted: 'read_only'
+}
+
+export function describeEbayCapabilityLayers(oauthScopesGranted: readonly string[] = []): EbayCapabilityLayers {
+  return {
+    oauthScopesGranted,
+    technicallyImplemented: ['readListings (fetchListings)', 'ingestOrders (fetchOrders)', 'updateFulfilment (tracking push only, informational — never financial)'],
+    explicitlyEnabled: DESCRIPTOR.capabilities,
+    policyPermitted: 'read_only',
+  }
+}
+
+const EBAY_VERIFICATION_TO_MARKETPLACE_STATUS: Record<EbayVerificationStatus, MarketplaceConnectionStatus> = {
+  NOT_CONFIGURED: 'not_configured',
+  CONNECTED: 'connected',
+  DEGRADED: 'degraded',
+  AUTHENTICATION_FAILED: 'error',
+  TOKEN_REFRESH_FAILED: 'error',
+  API_ACCESS_FAILED: 'error',
+}
+
 export class EbayConnector implements MarketplaceConnector {
   readonly descriptor = DESCRIPTOR
 
@@ -275,18 +497,13 @@ export class EbayConnector implements MarketplaceConnector {
   }
 
   async getConnectionHealth(): Promise<Result<ConnectionHealth, string>> {
-    const creds = credentials()
-    const now = new Date().toISOString()
-    if (!creds) return ok({ status: 'not_configured', apiVersion: null, checkedAt: now, detail: null })
-
-    // A minimal, zero-side-effect order read (limit=1) is the recommended
-    // lightweight call for verifying credentials/scope actually work,
-    // matching Amazon's own "list profiles"/"marketplace participations"
-    // choice of a cheap, real, read-only endpoint rather than inventing a
-    // separate health-check call eBay does not offer.
-    const result = await ebayApiRequest<{ orders?: readonly RawEbayOrder[] }>(creds, '/sell/fulfillment/v1/order?limit=1', 'GET')
-    if (!result.ok) return ok({ status: 'error', apiVersion: 'v1', checkedAt: now, detail: result.error })
-    return ok({ status: 'connected', apiVersion: 'v1', checkedAt: now, detail: null })
+    const result = await verifyEbayConnection()
+    return ok({
+      status: EBAY_VERIFICATION_TO_MARKETPLACE_STATUS[result.status],
+      apiVersion: result.status === 'NOT_CONFIGURED' ? null : 'v1',
+      checkedAt: result.checkedAt,
+      detail: result.status === 'CONNECTED' ? null : result.detail,
+    })
   }
 
   async fetchListings(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceListingSnapshot>, string>> {
@@ -428,4 +645,4 @@ export class EbayConnector implements MarketplaceConnector {
 export const ebayConnector = new EbayConnector()
 
 /** Exposed for unit tests that cannot make real network or OAuth calls. */
-export const __internal = { credentials, getAccessToken, ebayApiRequest, performEbayApiRequest, describeEbayError }
+export const __internal = { credentials, getAccessToken, ebayApiRequest, performEbayApiRequest, describeEbayError, resolveEbayEnvironment }
