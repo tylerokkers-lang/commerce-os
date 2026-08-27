@@ -1,0 +1,97 @@
+/*
+  Storefront design tokens.
+
+  Deliberately separate from ../globals.css (the operator dashboard's design
+  system): the dashboard is a data-dense console read every morning; this is
+  a customer-facing shop meant to feel like a funded DTC brand. Everything
+  here is scoped under `.storefront` (applied once, in this route group's
+  layout) rather than added to the shared Tailwind `@theme`, so it can never
+  bleed into or be affected by the admin's palette. Storefront components
+  reference these via Tailwind's arbitrary-value syntax, e.g.
+  `bg-[var(--store-canvas)]`.
+*/
+
+.storefront {
+  --store-canvas: #faf7f2;
+  --store-canvas-raised: #ffffff;
+  --store-surface-sunken: #f2ede3;
+  --store-border: #e6ddcd;
+  --store-border-strong: #d8cbb0;
+
+  --store-ink: #201c16;
+  --store-ink-muted: #5c5346;
+  --store-ink-subtle: #8a8072;
+  --store-ink-inverse: #faf7f2;
+
+  --store-accent: #b0451f;
+  --store-accent-hover: #963a19;
+  --store-accent-soft: #f4e3d8;
+
+  --store-success: #3f6b4a;
+  --store-success-soft: #e5efe6;
+  --store-sale: #a3341f;
+
+  --store-font-display: var(--font-store-display), "Iowan Old Style", Georgia, serif;
+  --store-font-body: var(--font-store-body), ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --store-radius-sm: 4px;
+  --store-radius-md: 8px;
+  --store-radius-lg: 16px;
+
+  --store-shadow-card: 0 1px 2px rgba(32, 28, 22, 0.04), 0 8px 24px -12px rgba(32, 28, 22, 0.12);
+  --store-shadow-raised: 0 4px 12px rgba(32, 28, 22, 0.06), 0 16px 40px -16px rgba(32, 28, 22, 0.18);
+
+  --store-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  background-color: var(--store-canvas);
+  color: var(--store-ink);
+  font-family: var(--store-font-body);
+  min-height: 100dvh;
+}
+
+.storefront * {
+  border-color: var(--store-border);
+}
+
+.storefront .font-display {
+  font-family: var(--store-font-display);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .storefront *,
+  .storefront *::before,
+  .storefront *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.storefront .store-fade-up {
+  animation: store-fade-up 0.6s var(--store-ease) both;
+}
+
+@keyframes store-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.storefront .store-skeleton {
+  background: linear-gradient(90deg, var(--store-surface-sunken) 25%, var(--store-border) 37%, var(--store-surface-sunken) 63%);
+  background-size: 400% 100%;
+  animation: store-shimmer 1.4s ease infinite;
+}
+
+@keyframes store-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}

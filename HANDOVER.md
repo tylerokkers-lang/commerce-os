@@ -4259,7 +4259,121 @@ outside demo mode today) rather than described as live, since they aren't.
 Not committed as a rewrite of any functionality — no production code
 changed as part of writing this document.
 
-## 56. Next step
+## 56. Milestone: headless customer-facing storefront — Phase 3 foundation (design system, catalogue, cart)
+
+**Context.** The user's own "master prompt" asks for a full premium
+Shopify store + dropshipping product-sourcing operating system, phased as
+AUDIT → ARCHITECTURE → STORE FOUNDATION → PRODUCT SYSTEM → SUPPLIERS →
+DSERS → PUBLICATION → ORDER WORKFLOW → AUTOMATION → TESTING. This entry
+covers Phase 1 (audit), Phase 2 (architecture decision) and Phase 3 (store
+foundation) only — Phases 4 onward (product enrichment/quality-score,
+supplier discovery, DSers, controlled publication, capital-aware ranking)
+are genuinely not started and are **not** described as done anywhere below.
+
+**Phase 1 audit finding that shaped everything else:** there was no
+storefront/theme code anywhere in this repository — Commerce OS is purely
+the operator/admin backend. The existing Shopify connector
+(`src/lib/marketplaces/connectors/shopify.ts`) is Admin API, read-only, and
+structurally incapable of serving a public catalogue (no Storefront API
+token existed). Building "a Shopify store" therefore meant a real
+architecture decision, not a styling task.
+
+**Phase 2 decision (confirmed with the user, not assumed):** a headless
+Next.js storefront — new customer-facing routes inside this same
+codebase, using Shopify's Storefront API for catalogue/cart and handing
+off to Shopify's own hosted Checkout for payment (never PCI scope,
+never a custom checkout) — over a separate Liquid/Online Store 2.0 theme
+project. Chosen because it shares this codebase's data layer and gives
+full custom-React control over the design/animation the prompt asks for.
+
+**Built, Phase 3:**
+- `src/lib/shopify/storefront.ts` — a new, separate Storefront API
+  connector (public-safe `SHOPIFY_STOREFRONT_ACCESS_TOKEN`, distinct from
+  the Admin API's client-credentials pair; cannot read orders/customers or
+  write products — structurally read-catalogue + cart-write only).
+  Products, collections, and a real Storefront API Cart (create/add
+  lines/update quantity/remove lines), all `Result`-typed, all refusing to
+  run (never fabricating an empty "success") when not configured.
+  **IMPLEMENTED, NOT LIVE-VERIFIED** — no Storefront API token exists in
+  this environment; every query is written against Shopify's current
+  published reference, mirroring the same honesty convention
+  `marketplaces/connectors/shopify.ts` already established.
+- `src/app/(storefront)/` — a new route group, served under `/shop/*` so
+  it's purely additive (the admin dashboard still owns `/`; moving it to
+  free up `/` for the storefront is a deliberate, deferred decision, not
+  an oversight — see "Next step" below). Its own `storefront.css` design
+  system (warm/editorial palette, Fraunces + Inter via `next/font`),
+  scoped under a `.storefront` class so it can never bleed into or be
+  affected by the admin's own Tailwind `@theme` tokens in `globals.css`.
+  Reusable components: `Header` (with live collection nav + cart badge),
+  `Footer`, `Hero`, `ProductCard`/`ProductGrid`, `PriceDisplay`,
+  `ProductGallery`, `ProductPurchasePanel` (variant selection),
+  `AddToCartButton`, `CartLineRow`, `TrustSection`, `EmptyState`.
+  Pages: home (`/shop`), collection (`/shop/collections/[handle]`, with
+  real Storefront-API sort — best-selling/price/newest, no fake filters),
+  product (`/shop/products/[handle]`), cart (`/shop/cart`, real line
+  items, quantity controls, checkout button linking to Shopify's own
+  `cart.checkoutUrl`). Cart id lives in an httpOnly cookie; nothing about
+  the cart is persisted in this codebase's own database.
+- **No fake content anywhere in this pass:** no fabricated
+  testimonials/reviews, no invented brand name (`NEXT_PUBLIC_STORE_NAME`
+  defaults to the obviously-a-placeholder "Your Store" — no brand identity
+  exists anywhere in this project), no invented shipping/returns policy
+  copy in the trust section, and the newsletter section was deliberately
+  **not built** rather than built as a fake "you're subscribed!" form with
+  no email provider behind it — see the comment in `Footer.tsx`.
+- `src/lib/core/env.ts` gained a `shopify_storefront` entry in
+  `integrationStatus()` (separate from the existing `shopify` Admin API
+  entry) — the single source of truth the rest of the app already reads
+  for "is this integration really connected."
+- `next.config.ts` gained `images.remotePatterns` for `cdn.shopify.com`
+  (required for `next/image` to serve real product photography at all).
+
+**Verified live in the browser** (no Storefront API credentials exist, so
+every page correctly renders its "Store not connected yet" empty state —
+home, product, collection, cart — rather than any fabricated product):
+desktop and mobile (375px) both checked, no console errors, cart badge
+correctly shows nothing with an empty cart.
+
+**Tested:** 16 new tests (`tests/shopify-storefront.test.ts`) — config
+detection, domain normalisation, every read/write function refusing to run
+unconfigured, the access token going out as a header never a query
+param, GraphQL-200-with-errors treated as failure not success, a cart
+`userErrors` response treated as failure not a partial cart, and a
+same-value compare-at price (a common real Shopify data shape) never
+shown as a fake sale. 1478 total (was 1462). `npx tsc --noEmit`,
+`npm run lint`, `npm run build` (4 new routes), `npm run db:verify` (76
+tables, no migration this pass — nothing here touches Supabase) all
+clean.
+
+**Deliberately not built this pass, and why:**
+- **Routing collision left unresolved on purpose:** the storefront lives
+  under `/shop/*` rather than the site root, because the admin dashboard
+  already owns `/` (`src/app/(dashboard)/page.tsx`) and moving it would
+  touch every internal admin link for a decision that's really about
+  production deployment topology (subdomain split, e.g.
+  `shop.yourdomain.com` vs the admin's own domain) — that's a hosting
+  decision for when this actually goes live, not something to force now.
+- **Cart drawer:** the prompt asks for a slide-out `CartDrawer`; this pass
+  ships a real cart *page* (`/shop/cart`) instead — every action on it is
+  real (Storefront API mutations, not mock state) but it's a full page
+  navigation, not an animated overlay. Flagged rather than faked with a
+  drawer that shows placeholder line items.
+- **Filters on collection pages:** sort is real (Storefront API sort
+  keys); a full filter panel (price range, tags-as-facets) needs product
+  metafield/tag conventions this store doesn't have yet — building filter
+  UI against data that doesn't exist would be exactly the "fake filters"
+  the prompt explicitly rules out.
+- **Everything from Phase 4 onward** (product enrichment/AI copy,
+  product quality score, capital-aware opportunity ranking, supplier
+  discovery, DSers connector — already correctly `PLANNED`, not
+  implemented, in `src/lib/suppliers/connectors/registry.ts`, confirmed
+  by inspection rather than re-guessed — controlled publication pipeline,
+  compliance checks for storefront listings, product auto-pause):
+  **not started.** None of it was invented or stubbed to look further
+  along than it is.
+
+## 57. Next step
 
 **Done in §53: channel-level decisions**, exactly as described below when
 this was first written — `channel_product_decisions`, the full

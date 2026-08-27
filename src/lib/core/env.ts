@@ -84,10 +84,15 @@ export function integrationStatus(): readonly IntegrationCredentials[] {
       'NEXT_PUBLIC_SUPABASE_ANON_KEY',
       'SUPABASE_SERVICE_ROLE_KEY',
     ]),
-    describe('shopify', 'Shopify', [
+    describe('shopify', 'Shopify (Admin API — order/product read)', [
       'SHOPIFY_STORE_DOMAIN',
       'SHOPIFY_CLIENT_ID',
       'SHOPIFY_CLIENT_SECRET',
+      'SHOPIFY_API_VERSION',
+    ]),
+    describe('shopify_storefront', 'Shopify Storefront API (customer-facing store)', [
+      'SHOPIFY_STORE_DOMAIN',
+      'SHOPIFY_STOREFRONT_ACCESS_TOKEN',
       'SHOPIFY_API_VERSION',
     ]),
     describe('amazon', 'Amazon Selling Partner API', [
