@@ -1,7 +1,9 @@
 import { Badge, Card, CardHeader, EmptyState, PageHeader, type Tone } from '@/components/ui'
 import { formatMoney, money } from '@/lib/core/money'
 import { formatPct } from '@/lib/utils'
-import { getOrderScenarios } from '@/lib/orders/repository'
+import { getOrderScenarios, getPurchaseQueue } from '@/lib/orders/repository'
+import { getSession, canWrite } from '@/lib/security/session'
+import { PurchaseQueue } from './PurchaseQueue'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +20,8 @@ const SUBMISSION_LABELS: Record<string, string> = {
 }
 
 export default async function OrdersPage() {
-  const scenarios = await getOrderScenarios()
+  const [session, scenarios, purchaseQueue] = await Promise.all([getSession(), getOrderScenarios(), getPurchaseQueue()])
+  const canEdit = session !== null && canWrite(session)
 
   return (
     <>
@@ -37,6 +40,35 @@ export default async function OrdersPage() {
           </p>
         </div>
       </Card>
+
+      <div>
+        <h2 className="text-base font-semibold text-ink">Purchase queue</h2>
+        <p className="mt-1 max-w-3xl text-sm text-ink-subtle">
+          Fulfilments waiting on you: a supplier purchase, a shipment reference, or a delivery
+          confirmation. Commerce-OS never buys anything or contacts a supplier itself — every action
+          below only records something you already did.
+        </p>
+
+        {session?.isDemo ? (
+          <Card className="mt-3">
+            <EmptyState
+              title="Not modelled in demo mode"
+              description="Demo mode has no real Supabase-backed orders, so there is nothing genuine to show here — this queue only ever reflects real fulfilments waiting on a real person. Connect Supabase and ingest a real order to see it populate."
+            />
+          </Card>
+        ) : purchaseQueue.length === 0 ? (
+          <Card className="mt-3">
+            <EmptyState
+              title="Nothing waiting on you"
+              description="No fulfilment currently needs a purchase, shipment reference, or delivery confirmation."
+            />
+          </Card>
+        ) : (
+          <div className="mt-3">
+            <PurchaseQueue items={purchaseQueue} canEdit={canEdit} />
+          </div>
+        )}
+      </div>
 
       {scenarios.length === 0 ? (
         <Card>

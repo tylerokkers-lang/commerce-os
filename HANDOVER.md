@@ -3902,7 +3902,112 @@ re-copy the *complete* refresh token from the Sandbox Developer Portal
 (the full string, not a truncated selection) into `.env.local`, then
 re-run `verifyEbayConnection()`.
 
-## 52. Next step
+## 52. Shopify re-verification + AWAITING_PURCHASE operator UI
+
+**Context.** Resumed per explicit instruction: leave eBay alone (external
+blocker, a Developer Support ticket is open — see §51), don't touch
+informax-site, inspect before changing anything. Read HANDOVER.md §44-§52,
+`docs/MILESTONES.md` (confirmed stale relative to this file — stops before
+§44, never mentions Shopify/order-ingestion/product-decision work at all,
+not updated this pass since HANDOVER.md remains the authoritative living
+record), `docs/ARCHITECTURE.md`/`SECURITY.md`/`PRINCIPLES.md`/`COMPLIANCE.md`,
+and the actual code for the per-product decision system (§50) and order
+ingestion (§49) before writing anything.
+
+**Correction to §52's own prior text (now renumbered §53):** its "genuinely
+unblocked candidate" paragraph, describing `planOrderIngestion` as never
+wired to a write path, was stale — §49 (committed *before* that paragraph
+was written) already built the full write path. Left as-is below except
+where directly superseded by this pass's work, per instruction not to
+rewrite documentation beyond what genuinely changed.
+
+**1. Shopify — status, not new work.** Inspected `shopify.ts` in full: GraphQL
+Admin API, client-credentials OAuth, capability descriptor honestly
+all-`false` for writes, `normalizeStoreDomain()` strips repeated scheme
+prefixes (the exact bug §47 found live). This was already
+**LIVE_VERIFIED** for connectivity/auth/reads (§47) and real product
+field-mapping (§48) — not new work this pass, confirmed by inspection.
+
+**Re-verified live** (credentials already present in `.env.local`, never
+read or printed — only checked for presence — via the same temporary,
+self-deleting Vitest script pattern used throughout this project's eBay
+verification, created/run/`rm`'d, confirmed by an empty `git status --short`
+afterward):
+
+| Capability | Result |
+|---|---|
+| `getConnectionHealth` | 🟢 LIVE VERIFIED — `connected`, real API version `2026-07` |
+| `fetchListings` | 🟢 LIVE VERIFIED — 1 real product, real price/currency/stock |
+| `fetchInventory` | 🟢 LIVE VERIFIED — 1 record |
+| `fetchOrders` | 🟡 LIVE VERIFIED (connectivity) / NOT VERIFIED (mapping) — 0 real orders exist in the store, so line-item field mapping (`sku`/`quantity`/`originalUnitPriceSet`) remains unexercised against real data, unchanged from §48 |
+| `fetchFees` | ⚪ NOT IMPLEMENTED — honest `not_supported`, needs the separate Finances API |
+| Writes (price/inventory/status/fulfilment) | ⚪ NOT IMPLEMENTED — capability descriptor all-`false`, never attempted |
+
+No code change was needed or made to `shopify.ts` — nothing this run
+contradicted §47/§48's findings.
+
+**2. AWAITING_PURCHASE operator UI (the gap §49/§52 both flagged twice).**
+The backend has existed since §49 — three API routes
+(`/api/fulfilments/[id]/purchase|ship|deliver`) each calling a real,
+audited DB write (`recordSupplierPurchase`/`recordShipment`/`recordDelivery`)
+— but zero UI ever called them (confirmed by grepping every `.tsx` in
+`src/app` for a reference to any of the three; none existed). Built the
+UI, reusing those exact functions — no parallel logic, no new database
+migration, no new API route:
+
+- `src/lib/orders/repository.ts` gained `getPurchaseQueue()` — a real,
+  read-only, RLS-scoped query joining `fulfilments`/`orders`/`suppliers`/
+  `fulfilment_items`/`order_items` for every fulfilment in
+  `awaiting_supplier`/`submitted`/`shipped`. Demo mode honestly returns
+  empty — deliberately no fabricated demo fixture for "you bought this,"
+  since that is precisely the one workflow this project is most careful
+  never to invent (`Card`/`EmptyState` on the page explains why).
+- `src/app/(dashboard)/orders/actions.ts` (new) — three Server Actions
+  (`recordPurchaseAction`/`recordShipmentAction`/`recordDeliveryAction`),
+  each `requireWriteAccess()`-gated, demo-mode-refused, validating input
+  before calling the same `recordSupplierPurchase`/`recordShipment`/
+  `recordDelivery` the existing API routes already call. Mirrors
+  `products/actions.ts`'s `changeProductDecision` shape exactly — the
+  established pattern for a form-driven write in this codebase.
+- `src/app/(dashboard)/orders/PurchaseQueue.tsx` (new, Client Component) —
+  one card per fulfilment, showing order/channel/supplier/line items, with
+  the form appropriate to its state: a purchase-recording form
+  (`awaiting_supplier`), a shipment form (`submitted`), or a one-click
+  delivery confirmation (`shipped`). Read-only roles see the queue but no
+  forms (`canEdit`, mirrors `DecisionControl.tsx`'s identical gate).
+- `src/app/(dashboard)/orders/page.tsx` — added a "Purchase queue" section
+  above the existing demo-scenario section (untouched).
+
+**Every action here only records something the operator already did
+outside Commerce-OS** — none places an order, calls a supplier API, or
+moves money; this was true of the underlying functions before this pass
+and remains unchanged. No autonomous purchasing capability was added or
+made reachable by any code path.
+
+**Tested:** 1426/1426 existing tests still pass unmodified (no regression).
+No new test file was added for the three Server Actions or
+`getPurchaseQueue()` themselves — both are `'server-only'`/session-dependent
+glue around already-tested functions (`recordSupplierPurchase` etc. have
+no direct test either, for the identical reason — this is the established,
+project-wide limitation, not new to this pass); the pure logic underneath
+(`calculatePurchaseVariance`, `planFulfilmentTransition`) is already
+covered. `npx tsc --noEmit`, `npm run lint`, `npm run build` (no new
+routes — a Server Action needs none), `npm run db:verify` (74 tables, no
+migration this pass) all clean. **Not live-Postgres-verified** — the
+project-wide limitation stated throughout this file (no live-Supabase-backed
+UI test harness exists) applies here identically; verified by code
+inspection and reuse of already-live-tested write functions, not a live
+click-through, matching §50's own stated limitation for the decision UI.
+
+**Deliberately not built this pass:** channel-level decisions (§53's
+recommended next milestone, unchanged); extending `MarketplaceListingSnapshot`
+with `sku`/`vendor`/`description` (§53 item 1, unchanged); any UI beyond
+the purchase queue itself — no attempt was made to also surface e.g. a
+notification/badge count elsewhere in the dashboard, since that wasn't
+requested and would be scope creep beyond "connect the existing capability
+to a real button."
+
+## 53. Next step
 
 **Recommended next milestone from §50: channel-level decisions.** The
 product-level decision layer was deliberately built so this can extend
@@ -3927,27 +4032,21 @@ blocking: (1) `MarketplaceListingSnapshot`
 `description`/real-timestamp fields — confirmed present on real
 Shopify products but currently uncaptured; extending the shared
 canonical type touches every connector, so this needs its own decision
-rather than a silent addition. (2) An operator UI for the
-AWAITING_PURCHASE queue and recording a purchase/shipment — the three
-API routes built this milestone make the workflow operational, but
-there is no page yet; the natural next increment once the backend has
-been exercised against at least one real order. (3) Once the connected
+rather than a silent addition. (2) **Done in §52** — an operator UI for
+the AWAITING_PURCHASE queue now exists (`orders/PurchaseQueue.tsx`),
+wired to the same purchase/ship/deliver functions the API routes always
+called. (3) Once the connected
 Shopify store has a real order (and `supplier_products` rows for its
 products), re-running maintenance would prove the entire pipeline end
 to end against real data for the first time — currently only provable
 against the demo connector and the pure decision layer.
 
-**The one genuinely unblocked, non-trivial code candidate (§43): order
-ingestion → Postgres.** `orders/ingestion.ts`'s `planOrderIngestion` is
-fully built and has never been called with real data or wired to a
-write path. Needs, in order: a live-product SKU/line-item resolver (no
-live resolver currently exists), the actual `orders`/`order_items`/
-`order_status_transitions` write, and a maintenance-cycle trigger
-matching `runAdvertisingSyncForConnectedOrgs()`'s own shape — sized as
-its own milestone with full idempotency and write-path test coverage,
-not a quick addition. Needs no credentials to build or test (works
-identically against the demo connector); a live connector only changes
-whether it ever actually runs against real marketplace data.
+**Stale, corrected in §52: this paragraph described `orders/ingestion.ts`'s
+`planOrderIngestion` as never wired to a write path — §49 (committed
+before this "Next step" text was last edited) already built that write
+path in full, and §52 built the operator UI on top of it. Left here only
+so the correction is visible in place; no remaining action from this
+paragraph.**
 
 The two infrastructure/credential-blocked options remaining, per
 `docs/MILESTONES.md`: (1) **the one
