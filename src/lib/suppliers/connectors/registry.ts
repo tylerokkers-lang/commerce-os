@@ -61,6 +61,10 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'api',
       requiredCredentials: ['DSERS_API_KEY', 'DSERS_STORE_ID'],
       rateLimit: { requestsPerMinute: 30, requestsPerDay: 5000, minSecondsBetweenRuns: 300 },
+      capabilities: {
+        discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: true,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote:
@@ -78,6 +82,10 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'feed',
       requiredCredentials: ['SYNCEE_API_TOKEN'],
       rateLimit: { requestsPerMinute: 20, requestsPerDay: 2000, minSecondsBetweenRuns: 900 },
+      capabilities: {
+        discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote: 'To be used strictly within the provider’s own feed licence once connected.',
@@ -94,6 +102,10 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'api',
       requiredCredentials: ['EPROLO_API_KEY'],
       rateLimit: { requestsPerMinute: 30, requestsPerDay: 3000, minSecondsBetweenRuns: 300 },
+      capabilities: {
+        discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: true,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote: 'Our own account credentials only, once connected.',
@@ -110,6 +122,10 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'api',
       requiredCredentials: ['CJ_API_KEY', 'CJ_ACCESS_TOKEN'],
       rateLimit: { requestsPerMinute: 30, requestsPerDay: 3000, minSecondsBetweenRuns: 300 },
+      capabilities: {
+        discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: true,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote: 'Our own account credentials only, once connected.',
@@ -126,6 +142,10 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'api',
       requiredCredentials: ['AUTODS_API_KEY'],
       rateLimit: { requestsPerMinute: 20, requestsPerDay: 2000, minSecondsBetweenRuns: 600 },
+      capabilities: {
+        discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote: 'Our own account credentials only, once connected.',
@@ -143,6 +163,12 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'api',
       requiredCredentials: ['DIRECT_SUPPLIER_API_URL', 'DIRECT_SUPPLIER_API_KEY'],
       rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 300 },
+      // Genuinely bespoke per supplier — declared conservatively rather
+      // than assumed, since no two direct integrations are alike.
+      capabilities: {
+        discoverProducts: false, readProducts: true, readStock: false, readShipping: false,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote:
@@ -160,6 +186,10 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       sourceType: 'feed',
       requiredCredentials: ['SUPPLIER_FEED_URL'],
       rateLimit: { requestsPerMinute: 10, requestsPerDay: 96, minSecondsBetweenRuns: 900 },
+      capabilities: {
+        discoverProducts: true, readProducts: true, readStock: true, readShipping: false,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+      },
       usagePolicy: {
         termsUrl: null,
         permittedUseNote: 'Provided directly by the supplier for this purpose.',

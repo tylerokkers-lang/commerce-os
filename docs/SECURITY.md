@@ -440,6 +440,44 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What the supplier discovery milestone changed here (Phase 5 of the customer-facing store)
+
+No new tables' RLS to add — `product_research` and `supplier_products`
+already had the standard managed-table policy from `0009`
+(org-member read, owner/admin write) and their schemas were only
+extended with columns, not new tables, so no RLS migration was needed
+this phase at all.
+
+The genuinely new safety property is at the connector-capability level,
+not the database level: every `ConnectorDescriptor` in
+`suppliers/connectors/` (the manual connector and all seven `PLANNED`
+categories) now declares `capabilities.placeOrders`/`capabilities.cancelOrders`
+explicitly, and both are `false` on every single one without exception —
+asserted directly by `tests/supplier-connector-capabilities.test.ts`,
+which fails the build if a future connector is added without that
+constraint. This is a structural backstop layered on top of the existing
+one (`isConfigured()` returning `false` for every unconfigured connector,
+so no connector can run at all without real credentials): even once a
+real connector is eventually written and configured, its own capability
+declaration still cannot claim order-placement, keeping "no automated
+purchasing" enforced at two independent layers rather than one.
+
+`captureCandidate`/`importCandidate`/`rejectCandidate`
+(`suppliers/discovery/ingestion.ts`) all require `requireWriteAccess()`
+(owner/admin), exactly like every other privileged write action in this
+codebase, and use the user-scoped Supabase client rather than the
+service role — RLS itself, not just the Server Action's own session
+check, is what actually stops a lower-privileged member from capturing
+or importing a candidate.
+
+**Not verified**: this milestone adds no new instance of the two
+pre-existing, unverified boundaries (real RLS enforcement under an
+authenticated session; anything requiring a live Supabase project) — no
+live Supabase project exists in this environment, so the capture/import/
+reject flow has only ever been exercised through its pure sub-engines'
+unit tests, `tsc`, and code inspection, never a real form submission
+against a real database.
+
 ## What the product intelligence milestone changed here (Phase 4 of the customer-facing store)
 
 Three new tables, all read-only through RLS, service-role write only —

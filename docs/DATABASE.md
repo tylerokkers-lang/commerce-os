@@ -57,6 +57,27 @@ seven new `business_settings` columns (`min_quality_score`,
 no default on purpose (see 0037's own comment): an unset value means
 "not yet configured", never zero or unlimited.
 
+The supplier discovery milestone (0039) added **zero new tables** — the
+closest thing to a schema mistake this project's migration history has:
+an earlier draft of 0039 nearly created a second `candidate_status` enum
+before `npm run db:verify` caught `type "candidate_status" already
+exists`. `product_research` (Milestone 1's `0002`, extended by Milestone
+2's `0010`) already carried a `candidate_status` enum
+(`new`/`scored`/`promoted`/`rejected`/`duplicate`/`archived`),
+`estimated_unit_cost_minor`/`estimated_shipping_minor`/`currency`, and
+`rejected_reason` — all reused directly. Only three columns were
+genuinely missing and got added: `supplier_id` (no FK from
+`product_research` to `suppliers` existed at all), `supplier_sku`, and
+`duplicate_of` (a self-reference for candidate-to-candidate duplicate
+matching). `supplier_products` (Milestone 1's `0003`) already supports
+multiple supplier offers per product via its own
+`unique (org_id, supplier_id, product_id, variant_id)` — needed no change
+at all for "a product can have offers from several suppliers." Also
+added: two new `business_settings` columns
+(`max_candidates_per_discovery_run`, `max_products_pending_review`) —
+every other discovery criterion already existed from the product
+intelligence milestone or Milestone 1 and is reused unchanged.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

@@ -887,6 +887,8 @@ export interface Database {
           available_operating_capital_minor: number | null
           cash_buffer_minor: number | null
           max_supplier_cost_minor: number | null
+          max_candidates_per_discovery_run: number
+          max_products_pending_review: number
         }
         Insert: {
           org_id: string
@@ -948,6 +950,8 @@ export interface Database {
           available_operating_capital_minor?: number | null
           cash_buffer_minor?: number | null
           max_supplier_cost_minor?: number | null
+          max_candidates_per_discovery_run?: number
+          max_products_pending_review?: number
         }
         Update: {
           org_id?: string
@@ -1009,6 +1013,8 @@ export interface Database {
           available_operating_capital_minor?: number | null
           cash_buffer_minor?: number | null
           max_supplier_cost_minor?: number | null
+          max_candidates_per_discovery_run?: number
+          max_products_pending_review?: number
         }
         Relationships: [
           {
@@ -4248,6 +4254,9 @@ export interface Database {
           review_sample: Json
           review_count: number | null
           rating_avg: number | null
+          supplier_id: string | null
+          supplier_sku: string | null
+          duplicate_of: string | null
         }
         Insert: {
           id?: string
@@ -4275,6 +4284,9 @@ export interface Database {
           review_sample?: Json
           review_count?: number | null
           rating_avg?: number | null
+          supplier_id?: string | null
+          supplier_sku?: string | null
+          duplicate_of?: string | null
         }
         Update: {
           id?: string
@@ -4302,8 +4314,18 @@ export interface Database {
           review_sample?: Json
           review_count?: number | null
           rating_avg?: number | null
+          supplier_id?: string | null
+          supplier_sku?: string | null
+          duplicate_of?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: 'product_research_duplicate_of_fkey'
+            columns: ['duplicate_of']
+            isOneToOne: false
+            referencedRelation: 'product_research'
+            referencedColumns: ['id']
+          },
           {
             foreignKeyName: 'product_research_org_id_fkey'
             columns: ['org_id']
@@ -4330,6 +4352,13 @@ export interface Database {
             columns: ['run_id']
             isOneToOne: false
             referencedRelation: 'research_runs'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_research_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
             referencedColumns: ['id']
           },
         ]

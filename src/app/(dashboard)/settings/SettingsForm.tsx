@@ -156,6 +156,17 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
         </div>
       </Card>
 
+      <Card>
+        <CardHeader
+          title="Supplier discovery"
+          description="Bounds on how many product candidates can be captured or sit awaiting review at once. Quality over catalogue size — discovery is capped deliberately, not left to run unbounded."
+        />
+        <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+          <Field label="Maximum candidates per discovery run" name="max_candidates_per_discovery_run" type="number" min="1" max="500" defaultValue={settings.max_candidates_per_discovery_run} hint="A single capture/discovery pass will not exceed this" error={errors.max_candidates_per_discovery_run} />
+          <Field label="Maximum candidates awaiting review" name="max_products_pending_review" type="number" min="1" max="2000" defaultValue={settings.max_products_pending_review} hint="Further capture is refused once this many candidates are pending" error={errors.max_products_pending_review} />
+        </div>
+      </Card>
+
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"

@@ -5,9 +5,11 @@ import { STAGE_LABELS, STAGE_TONES } from '@/lib/constants'
 import { requireSession, canWrite } from '@/lib/security/session'
 import { getProductDetail, getChannelReadinessList } from '@/lib/products/repository'
 import { getProductIntelligence } from '@/lib/products/intelligence/repository'
+import { getSupplierOffersForProduct } from '@/lib/suppliers/discovery/repository'
 import { DecisionControl } from '../DecisionControl'
 import { ChannelDecisionControl } from '../ChannelDecisionControl'
 import { ProductIntelligencePanel } from '../ProductIntelligencePanel'
+import { SupplierOffersPanel } from '../SupplierOffersPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +21,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const channelRows = await getChannelReadinessList(product)
   const canEdit = canWrite(session) && !session.isDemo
   const intelligence = session.isDemo ? null : await getProductIntelligence(session.orgId, product.id)
+  const supplierOffers = session.isDemo ? [] : await getSupplierOffersForProduct(session.orgId, product.id)
 
   return (
     <>
@@ -55,6 +58,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       <Card>
         <DecisionControl product={product} canEdit={canEdit} />
       </Card>
+
+      {!session.isDemo && supplierOffers.length > 0 ? (
+        <Card>
+          <SupplierOffersPanel offers={supplierOffers} />
+        </Card>
+      ) : null}
 
       {session.isDemo ? (
         <Card>

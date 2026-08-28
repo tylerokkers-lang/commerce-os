@@ -65,7 +65,10 @@ src/lib/
                  decisions; intelligence/ (quality/risk/capital/pricing/
                  recommendation engines + the assembler that persists
                  them — see below)
-  suppliers/     supplier scoring, redundancy, connectors
+  suppliers/     supplier scoring, redundancy, connectors; discovery/
+                 (candidate capture, duplicate detection, offer
+                 comparison, import — hands off to products/intelligence/
+                 unchanged, never a second scoring engine — see below)
   compliance/    per-channel gate reads
   marketplaces/  connectors (Shopify/Amazon), reconciliation, publication gate
   orders/        ingestion, validation, refunds, the order pipeline

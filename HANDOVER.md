@@ -4539,7 +4539,171 @@ existing product/channel decision controls already are that human call,
 and building a second one would fork "the operator's real decision" into
 two competing places — noted as a deliberate scope decision, not a gap.
 
-## 58. Next step
+## 58. Milestone: Supplier discovery & product ingestion (Phase 5 of the customer-facing store)
+
+**Audit first, again, and it paid off twice over.** Before writing a
+single line, read §57 (Phase 4), `suppliers/connectors/{types,registry,manual,repository}.ts`,
+`suppliers/repository.ts`, `suppliers/scoring.ts`, migrations 0037/0038,
+and the current shape of `product_research`/`supplier_products`. Two real
+findings changed the whole design, and the second one was only found
+because the first prompted a *closer* read rather than trusting the
+original `CREATE TABLE` alone:
+
+1. `product_research` (0002, Milestone 1) already had `product_id`
+   nullable — a candidate that may or may not have become a real product
+   yet, the exact "product candidate" concept the brief describes — and
+   `research_source` already included `'supplier_catalogue'`. Confirmed
+   completely unused by any application code (grepped `src/`, zero hits
+   outside generated types) — the same "found and reused" situation as
+   Phase 4's `product_scores`/`product_health`.
+2. A first draft of migration 0039 added a new `candidate_status` enum.
+   `npm run db:verify` immediately failed: `type "candidate_status"
+   already exists`. Re-reading 0010 (Milestone 2) properly found it had
+   already extended `product_research` with exactly that enum
+   (`new`/`scored`/`promoted`/`rejected`/`duplicate`/`archived`) plus
+   `estimated_unit_cost_minor`/`estimated_shipping_minor`/`currency`/
+   `rejected_reason` — all reused directly instead. The migration that
+   shipped adds precisely three columns: `supplier_id` (no FK from
+   `product_research` to `suppliers` existed at all), `supplier_sku`, and
+   `duplicate_of`. This near-miss is left in the migration's own comment
+   deliberately, as a real example of why "audit first" matters more than
+   once per milestone.
+
+`supplier_products` (0003, Milestone 1) already supports multiple offers
+per product via its own `unique (org_id, supplier_id, product_id,
+variant_id)` — the brief's entire "PRODUCT SOURCE HISTORY / SUPPLIER
+OFFER MODEL" section, needing zero schema change.
+
+**As built**, `src/lib/suppliers/discovery/`:
+- `duplicateDetection.ts` — pure. Matches on supplier SKU / source
+  reference within the same supplier's other candidates, and on a real
+  barcode/GTIN/EAN/UPC against already-imported products *across*
+  suppliers (two suppliers selling the same physical item is the normal
+  case supplier offers exist for, not a duplicate — the duplicate check
+  here is specifically "has this exact candidate already been captured",
+  never "does another supplier sell this too"). A match is flagged with a
+  plain-English reason, never silently merged and never silently blocked
+  — the brief's own `POSSIBLE_DUPLICATE` + reason, not an automatic
+  rejection.
+- `offerComparison.ts` — pure. `compareSupplierOffers` scores every real
+  `supplier_products` row for a product on cost (relative to the
+  cheapest offer in the comparison, not an absolute scale),
+  delivery speed, reliability (reuses `suppliers.current_score`,
+  Milestone 3's `0012` — already computed by `scoreSupplier` whenever a
+  supplier is saved, not recomputed here), and tracking/returns, and
+  explains the preferred pick in the brief's own example style ("Supplier
+  B selected because total fulfilment cost is only £X higher, delivery
+  is N days faster, and tracking is available") — directly asserted in
+  `tests/supplier-discovery-offers.test.ts` against that exact shape. An
+  out-of-stock offer is never preferred, at any price.
+- `validation.ts` — pure candidate-input validation, kept in its own file
+  (not inside `ingestion.ts`, which imports `server-only` and so cannot
+  be imported directly into Vitest) — the identical split
+  `products/decision.ts`/`decisionExecutor.ts` already established.
+- `ingestion.ts` — server-only, the one orchestrator:
+  - `captureCandidate` — validates, checks the `max_products_pending_review`
+    limit (business_settings, new this milestone), runs duplicate
+    detection against the same supplier's other candidates and every
+    product identifier on file, inserts into `product_research` with the
+    right `candidate_status`, and audits `CANDIDATE_CAPTURED` or
+    `CANDIDATE_POSSIBLE_DUPLICATE`.
+  - `importCandidate` — refuses (and audits `CANDIDATE_IMPORT_BLOCKED`)
+    a `duplicate`-status candidate unless the caller explicitly
+    acknowledges it; refuses without a supplier or a real cost on file;
+    otherwise creates one real `products` row (stage `discovered`, SKU
+    generated via `generateCandidateSku`, prefixed `CAND-` so an
+    imported-from-discovery product is always identifiable) and one real
+    `supplier_products` offer, marks the candidate `promoted`, audits
+    `CANDIDATE_IMPORTED` + `PRODUCT_ADDED`, and then — the brief's most
+    important technical requirement — calls Phase 4's
+    `computeProductIntelligence` completely unchanged. No quality, risk,
+    capital, pricing, profitability, opportunity, or recommendation logic
+    is duplicated anywhere in this file; it supplies data, Phase 4
+    evaluates it. A failed intelligence run never undoes a successful
+    import (caught and logged, not re-thrown) — the product and its
+    offer are real either way, and intelligence can always be
+    recalculated later from the existing "Recalculate" button.
+  - `rejectCandidate` — a terminal, audited "no", with a required reason.
+- `repository.ts` — the discovery queue read and the per-product
+  supplier-offers read, both plain reads, no new logic.
+
+**Connector capabilities** — `ConnectorDescriptor` (`suppliers/connectors/types.ts`)
+gained a `capabilities` field (`discoverProducts`/`readProducts`/
+`readStock`/`readShipping`/`placeOrders`/`cancelOrders`/`trackingUpdates`),
+filled in honestly for all eight existing connectors (`manual` — real,
+`discoverProducts: true`, since a person genuinely can capture a
+candidate by hand at any time — and the seven `PLANNED` categories,
+where every capability reflects what that category of platform is
+*designed* for once connected, exactly like `requiredCredentials`
+already does for unconfigured connectors). `placeOrders`/`cancelOrders`
+are `false` on literally every one, asserted directly by
+`tests/supplier-connector-capabilities.test.ts` — a structural backstop
+independent of `isConfigured()`'s own "no credentials, no calls" gate.
+DSers (`dsers_compatible`) is untouched beyond gaining this same honest
+capability declaration — still `PLANNED`, still requiring
+`DSERS_API_KEY`/`DSERS_STORE_ID` neither of which exist in this
+environment, still fails every call via `UnavailableConnector`. Checked
+first, per the brief's own instruction, whether DSers exposes any
+official third-party discovery API at all: no evidence of one, so
+nothing beyond the honest capability declaration was attempted — no
+scraping, no reverse-engineered endpoint, no fabricated OAuth.
+
+**Settings**: two new `business_settings` columns,
+`max_candidates_per_discovery_run` (default 20) and
+`max_products_pending_review` (default 50), wired through
+`automation/settingsTypes.ts`/`settings.ts` exactly like every Phase 4
+addition. Every other discovery criterion the brief asks for
+(`max_supplier_cost_minor`, `min_net_margin_pct`, `max_delivery_days`,
+`max_risk_score`, `min_quality_score`, `available_operating_capital_minor`,
+`blocked_categories`/`allowed_categories`, `preferred_countries`) already
+existed from Phase 4 or Milestone 1 — none duplicated.
+
+**UI**: `/suppliers/discovery` (new nav entry under Catalogue) — a manual
+capture form (supplier dropdown from the real `getSuppliers()` read,
+cost/shipping/delivery/notes/source-URL fields) and the discovery queue
+table (product, supplier, cost, shipping, status, Import/Reject actions).
+A possible-duplicate candidate's Import button is disabled until an
+explicit "import anyway — genuinely different product" checkbox is
+ticked. No "auto-publish all" or bulk-import control exists anywhere. A
+new "Supplier offers" panel on `/products/[id]` shows every real offer
+for that product with the comparison/preferred-supplier explanation,
+visible only when at least one real offer exists.
+
+**Tested**: 32 new tests across 4 files — candidate validation (valid,
+missing title, missing cost is *valid* to capture since it's a real
+expected state not an error, negative cost, unsupported currency,
+malformed delivery range), duplicate detection (same-supplier SKU/URL
+match, cross-supplier non-match, cross-supplier barcode match against an
+already-imported product, case-insensitivity), offer comparison
+(cheapest wins when equal, a pricier-but-faster-with-tracking offer wins
+otherwise — the brief's own example, out-of-stock never preferred,
+unknown delivery scored below known-slow not assumed-fine, reliability
+affects ranking), and connector capability honesty (`placeOrders`/
+`cancelOrders` false on every connector, `discoverProducts` true only
+where genuinely true). 1564 total (was 1532). `npx tsc --noEmit`,
+`npm run lint`, `npm run build` (1 new route), `npm run db:verify` (79
+tables, unchanged — 0039 only adds columns) all clean. **Verified live in
+the browser** (demo mode, no Supabase credentials exist):
+`/suppliers/discovery` renders its honest "not modelled in demo mode"
+state, the Settings page's new "Supplier discovery" card renders both
+fields correctly, no console errors either place. **Not live-verified**:
+the capture → duplicate-check → import → intelligence-handoff flow
+end-to-end against a real database — no live Supabase project exists in
+this environment, so this is proven only through the pure sub-engines'
+unit tests, `tsc`, and code inspection (`ingestion.ts` visibly imports
+and calls `computeProductIntelligence` from `products/intelligence/assemble.ts`
+directly, never reimplementing any Phase 4 logic).
+
+**Deliberately not built, per the brief's own explicit instructions:**
+CSV/catalogue batch import (the manual single-candidate path already
+proves the real end-to-end mechanics; a batch importer would wrap the
+same `captureCandidate` function and adds no new architecture — safely
+deferred rather than built speculatively); any live connector beyond
+manual entry; automatic publishing or supplier purchasing from a
+recommendation; a REST API surface for discovery (Server Actions,
+matching this codebase's existing internal-operation pattern).
+
+## 59. Next step
 
 **Done in §53: channel-level decisions**, exactly as described below when
 this was first written — `channel_product_decisions`, the full

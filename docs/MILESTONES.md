@@ -2081,6 +2081,92 @@ so it follows this codebase's existing pattern of Server Actions +
 repository reads for internal use, not a new `/api/*` route — no external
 caller needs one yet, see `docs/API.md`).
 
+## Milestone — Supplier discovery & product ingestion ✅ complete (Phase 5 of the customer-facing store)
+
+Turns raw supplier listings into real products, without ever skipping
+Phase 4's intelligence layer: SUPPLIER SOURCE → candidate capture →
+duplicate check → PRODUCT RECORD / SOURCE LINK → Phase 4's
+`computeProductIntelligence`, completely unchanged → human review. Audited
+first, and the audit reshaped the whole design: `product_research`
+(Milestone 1, `0002`) already existed as exactly the right "product
+candidate" shape — `product_id` nullable (may or may not have become a
+real product yet), `research_source` already including
+`'supplier_catalogue'` — and was completely unused by any application
+code. A closer read after `0010` (Milestone 2) found even more already
+built: a `candidate_status` enum (`new`/`scored`/`promoted`/`rejected`/
+`duplicate`/`archived`, reused directly rather than a second one — an
+earlier migration draft nearly added a duplicate before `db:verify`
+caught the collision), `estimated_unit_cost_minor`/
+`estimated_shipping_minor`/`currency`, and `rejected_reason`, all already
+there. Only three columns were genuinely missing: a supplier link,
+supplier SKU, and a self-reference for duplicate matching. `supplier_products`
+(Milestone 1, `0003`) already supports multiple offers per product — the
+entire "PRODUCT SOURCE HISTORY / SUPPLIER OFFER MODEL" requirement,
+needing no schema change at all.
+
+**As built:** `src/lib/suppliers/discovery/` — `duplicateDetection.ts`
+(supplier SKU / source reference / cross-supplier barcode matching, never
+silently merging — a match is flagged, not blocked), `offerComparison.ts`
+(deterministic `compareSupplierOffers`, explaining a preferred supplier
+against cost/delivery/reliability/tracking/returns, never "cheapest
+wins" by default, and an out-of-stock offer is never preferred regardless
+of price), `validation.ts` (pure candidate validation, kept separate from
+the server-only orchestrator for the same reason `products/decision.ts`
+is kept separate from `decisionExecutor.ts`), `ingestion.ts`
+(`captureCandidate`/`importCandidate`/`rejectCandidate` — the one
+orchestrator; `importCandidate` creates a real `products` row at stage
+`discovered` plus a real `supplier_products` offer, then calls Phase 4's
+`computeProductIntelligence` unchanged — no scoring, profitability,
+capital, or recommendation logic is duplicated here), and
+`repository.ts` (queue + offer reads). New migration 0039: three columns
+on `product_research`, two new `business_settings` limits
+(`max_candidates_per_discovery_run`, `max_products_pending_review`) —
+every other discovery criterion (`max_supplier_cost_minor`,
+`min_net_margin_pct`, `max_delivery_days`, `max_risk_score`,
+`min_quality_score`, `available_operating_capital_minor`,
+`blocked_categories`/`allowed_categories`, `preferred_countries`) already
+existed from Phase 4 or Milestone 1 and is reused, not duplicated.
+
+**Connector capabilities** (`suppliers/connectors/types.ts`'s
+`ConnectorDescriptor`) gained an honest `capabilities` declaration
+(`discoverProducts`/`readProducts`/`readStock`/`readShipping`/
+`placeOrders`/`cancelOrders`/`trackingUpdates`) on all eight existing
+connectors — the manual connector and the seven `PLANNED` categories
+(DSers-compatible, Syncee-type, EPROLO-type, CJ-type, AutoDS-type, direct
+API, CSV feed). `placeOrders`/`cancelOrders` are `false` on every single
+one without exception — asserted directly in
+`tests/supplier-connector-capabilities.test.ts` — since nothing in this
+codebase is permitted to spend money automatically, regardless of what a
+real platform might technically support.
+
+**UI:** `/suppliers/discovery` — manual candidate capture form (the
+"MANUAL SUPPLIER ENTRY" workflow), and the discovery queue with
+Import/Reject actions (a possible-duplicate candidate requires an
+explicit "import anyway" acknowledgement, never a silent override). A new
+"Supplier offers" panel on the product detail page shows every real
+offer for that product with the comparison and preferred-supplier
+explanation. No "auto-publish all" or bulk-import control exists.
+
+**Tested:** 32 new tests (validation, duplicate detection, offer
+comparison, connector capability honesty) — 1564 total (was 1532).
+`npx tsc --noEmit`, `npm run lint`, `npm run build` (1 new route,
+`/suppliers/discovery`), `npm run db:verify` (79 tables, unchanged — this
+migration only adds columns) all clean. **Verified live in the browser**
+(demo mode, no Supabase credentials exist): `/suppliers/discovery` and
+the Settings page's new "Supplier discovery" card both render their
+honest states with no console errors.
+
+**Deliberately not built, per the brief's own explicit instructions:**
+CSV/catalogue batch import (the manual single-candidate path already
+proves capture → duplicate-check → import end to end; a batch importer
+would wrap the same `captureCandidate` function and is safely deferred);
+any live connector beyond manual entry (DSers and the rest remain
+honestly `PLANNED`/`NOT_CONFIGURED` — no scraping, no reverse-engineered
+APIs, no fabricated OAuth); automatic publishing or supplier purchasing
+from a recommendation; a REST API surface (Server Actions + repository
+reads, matching this codebase's existing internal-operation pattern, see
+`docs/API.md`).
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

@@ -59,6 +59,8 @@ export async function saveBusinessSettings(
     available_operating_capital_minor: majorToMinorOrNull(formData.get('available_operating_capital_major')),
     cash_buffer_minor: majorToMinorOrNull(formData.get('cash_buffer_major')),
     max_supplier_cost_minor: majorToMinorOrNull(formData.get('max_supplier_cost_major')),
+    max_candidates_per_discovery_run: formData.get('max_candidates_per_discovery_run'),
+    max_products_pending_review: formData.get('max_products_pending_review'),
   })
 
   if (!parsed.success) {

@@ -38,6 +38,29 @@ export interface ConnectorUsagePolicy {
   authenticatedFirstParty: boolean
 }
 
+/**
+ * What a connector actually does, declared honestly (Milestone: supplier
+ * discovery, Phase 5) — a capability is `true` only once the connector
+ * genuinely implements it; nothing here is aspirational. `readStock`
+ * corresponds to `fetchStatus` reporting `inStock`/`stockQty`,
+ * `discoverProducts` to a connector that can find *new* candidates (as
+ * opposed to only reporting status for products already known — the
+ * distinction `fetchStatus`'s own `knownRefs` parameter already makes).
+ * `placeOrders`/`cancelOrders` are declared `false` on every connector in
+ * this codebase without exception: nothing here is permitted to spend
+ * money automatically, regardless of what a real API might technically
+ * support.
+ */
+export interface ConnectorCapabilities {
+  discoverProducts: boolean
+  readProducts: boolean
+  readStock: boolean
+  readShipping: boolean
+  placeOrders: boolean
+  cancelOrders: boolean
+  trackingUpdates: boolean
+}
+
 export interface ConnectorDescriptor {
   key: string
   label: string
@@ -47,6 +70,7 @@ export interface ConnectorDescriptor {
   requiredCredentials: readonly string[]
   rateLimit: ConnectorRateLimit
   usagePolicy: ConnectorUsagePolicy
+  capabilities: ConnectorCapabilities
 }
 
 /**

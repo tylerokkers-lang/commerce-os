@@ -24,6 +24,7 @@ export const NAV_SECTIONS = [
       { href: '/opportunities', label: 'Opportunities' },
       { href: '/research', label: 'Research providers' },
       { href: '/suppliers', label: 'Suppliers' },
+      { href: '/suppliers/discovery', label: 'Supplier discovery' },
       { href: '/suppliers/connectors', label: 'Supplier connectors' },
       { href: '/compliance', label: 'Compliance' },
     ],

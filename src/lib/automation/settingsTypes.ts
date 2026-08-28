@@ -64,6 +64,10 @@ export interface AutomationSettings {
   cashBufferMinor: number | null
   /** A hard ceiling on supplier unit cost, if the owner has set one. Null means no ceiling is configured. */
   maxSupplierCostMinor: number | null
+  /** Milestone: supplier discovery (Phase 5). Bounds a single discovery pass — quality over catalogue size, per the brief. */
+  maxCandidatesPerDiscoveryRun: number
+  /** Ceiling on how many candidates may sit at 'new'/'duplicate' awaiting a human decision before further capture is refused. */
+  maxProductsPendingReview: number
 }
 
 /**
@@ -100,6 +104,8 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   availableOperatingCapitalMinor: null,
   cashBufferMinor: null,
   maxSupplierCostMinor: null,
+  maxCandidatesPerDiscoveryRun: 20,
+  maxProductsPendingReview: 50,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

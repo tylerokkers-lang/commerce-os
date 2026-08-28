@@ -33,6 +33,18 @@ const DESCRIPTOR: ConnectorDescriptor = {
   sourceType: 'manual',
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
+  capabilities: {
+    // A person can capture a new candidate by hand at any time (the
+    // supplier discovery UI's manual entry form) — genuinely true, unlike
+    // an automated "find new products" call.
+    discoverProducts: true,
+    readProducts: true,
+    readStock: true,
+    readShipping: true,
+    placeOrders: false,
+    cancelOrders: false,
+    trackingUpdates: false,
+  },
   usagePolicy: {
     termsUrl: null,
     permittedUseNote:
