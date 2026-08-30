@@ -440,6 +440,56 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What the real supplier connector milestone changed here (Phase 8 of the customer-facing store)
+
+The second external network call this codebase makes to an
+untrusted-by-default third party using a caller-supplied identifier
+(after Phase 7's arbitrary image URL fetch) — here, a product reference
+sent to CJdropshipping's own documented API, and the response treated as
+untrusted data throughout:
+
+- **No credential is ever logged.** `CJ_API_KEY` is read once from
+  `process.env`, sent only in the documented `apiKey` request body field
+  or the `CJ-Access-Token` header, and never appears in any error
+  message, audit entry, or console output this connector produces —
+  every error string is built from the response's own `message`/status
+  fields, never by echoing back what was sent.
+- **Every response field is validated, never trusted as-is.** `safeNumber`/
+  `safeUrl`/`safeString` reject a non-numeric price, a non-http(s) or
+  malformed image URL, and an empty/whitespace string respectively — a
+  field that fails validation becomes `null`/omitted (routing the
+  affected quality or shipping check to `review_required`, per
+  `qualityCheck.ts`'s and `shippingPolicy.ts`'s own "missing data is not
+  zero" discipline), never silently coerced or fabricated. Image URLs
+  discovered this way flow into the exact same Phase 7
+  `captureAndValidateMedia` pipeline — including its own SSRF mitigation
+  in `imageFetch.ts` — so a malicious image URL returned by (or
+  injected into) a CJ response is checked exactly as rigorously as one a
+  human pastes by hand.
+- **Rate limiting is enforced client-side, not just hoped for.** A
+  minimum 1100ms gap between requests (the documented free-tier limit is
+  1/second) and a single retry-with-backoff on HTTP 429 — CJ's own
+  service is never hammered by this codebase regardless of how large a
+  discovery request asks to be.
+- **Read-only by construction, not just by policy.** `SupplierConnector`
+  has no order-placement method at all, and this connector adds none of
+  its own — there is no code path in this codebase capable of spending
+  money against a supplier, not merely a capability flag set to `false`
+  guarding one that exists.
+- **Documentation-derived field names, not verified against a live
+  response.** Stated plainly in the connector's own header comment: no
+  CJ account exists in this environment, so a genuine mismatch between
+  documented and actual field names has not been (and cannot yet be)
+  ruled out by a real call — the defensive parsing above is specifically
+  designed so such a mismatch would surface as a validation warning, not
+  a crash or a fabricated value, the day a real account is connected.
+
+**Not verified**: like Phase 7's `imageFetch.ts`, this connector's
+behaviour against a real, potentially hostile or malformed CJ response
+has not been exercised against a live server — verified by code
+inspection and 26 mocked tests covering the documented and several
+plausible-malformed response shapes, not a live penetration test.
+
 ## What the product media intelligence milestone changed here (Phase 7 of the customer-facing store)
 
 This is the first milestone in this codebase that fetches content from an

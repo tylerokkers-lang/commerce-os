@@ -1,10 +1,12 @@
-import { ok, type Result } from '@/lib/core/result'
+import { err, ok, type Result } from '@/lib/core/result'
 import { DEMO_SUPPLIERS } from '@/lib/demo/suppliers'
 import type {
   ConnectorDescriptor,
   FetchStatusOptions,
   FetchStatusOutcome,
+  ReadProductDetailOptions,
   SupplierConnector,
+  SupplierProductDetail,
   SupplierProductStatus,
 } from './types'
 
@@ -44,6 +46,11 @@ const DESCRIPTOR: ConnectorDescriptor = {
     placeOrders: false,
     cancelOrders: false,
     trackingUpdates: false, readProductMedia: false,
+    // A manually-typed catalogue has no structured variant/shipping-rate
+    // detail beyond what `fetchStatus` already reports — honestly false,
+    // not a gap in this connector so much as a limit of what "a person
+    // typed this in" can mean without a form for each of these.
+    readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
   },
   usagePolicy: {
     termsUrl: null,
@@ -131,6 +138,12 @@ export class ManualSupplierConnector implements SupplierConnector {
       requestsMade: 0,
       warnings: [],
     })
+  }
+
+  /** Honestly unsupported — see `capabilities.readProductDetails`. */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept named to document the interface's real parameter, unused by this honest stub
+  async readProductDetail(productRef: string, _options?: ReadProductDetailOptions): Promise<Result<SupplierProductDetail, string>> {
+    return err(`The manual connector has no structured product detail for "${productRef}" — see fetchStatus for what it does report.`)
   }
 }
 

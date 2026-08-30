@@ -174,6 +174,18 @@ export interface SupplierConnectorSummary {
   lastError: string | null
   nextAllowedAt: string | null
   consecutiveFailures: number
+  /** Milestone: real supplier connector (Phase 8) — the descriptor's own declared capabilities, for the admin status grid. Declared, not verified: `isConfigured`/`status` above is what tells the UI whether any of these have ever actually run. */
+  capabilities: {
+    readProducts: boolean
+    readProductDetails: boolean
+    readStock: boolean
+    readVariants: boolean
+    readProductMedia: boolean
+    readShipping: boolean
+    readShippingRates: boolean
+    placeOrders: boolean
+    readOrders: boolean
+  }
 }
 
 /** One row on the Marketplace / Channels page. */

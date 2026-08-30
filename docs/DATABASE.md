@@ -113,6 +113,23 @@ delete) rather than the **system-computed** shape `product_intelligence`
 directly operator-editable (approve/reject/set-primary/remove/manual-
 attach), unlike a system-computed score. 80 tables total (was 79).
 
+The real supplier connector milestone (0043/0044) added **one new
+table**, `supplier_shipping_quotes`, after confirming no existing table
+could hold a per-destination shipping rate —
+`supplier_products.shipping_cost_minor` (Milestone 1) is a single,
+non-destination-aware figure, correct for its own purpose (Phase 4's
+profitability calculation) and left untouched. One new enum,
+`shipping_suitability_status`. `business_settings.max_delivery_days`
+(Milestone 1's `0001_core.sql`, editable in Settings since the very
+first migration but never read by any live decision before this
+milestone) is reused unchanged as the shipping-suitability gate's
+delivery-time threshold — no duplicate setting was added. RLS follows
+the **system-computed** shape (`product_intelligence`'s 0038 pattern) —
+read-only through RLS, service-role write — and the table is
+**append-only** (`forbid_mutation()`, defined once in 0001's own core
+migration, reused here): a superseding quote is a new row, a fresh
+historical fact, never an edit to an old one. 81 tables total (was 80).
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

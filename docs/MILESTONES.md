@@ -2265,7 +2265,64 @@ URL-pattern check, not vision, and is stated as such in its own output;
 AVIF dimensions are an honest, stated gap. No perceptual/near-duplicate
 image matching. No automatic publication — media becoming `media_ready`
 only ever unblocks one eligibility requirement; a human still presses
-"Create Shopify draft" and, separately, "Publish live."
+"Create Shopify draft" and, separately, "Publish live." (**Closed in
+Phase 8 below** — `readProductMedia` is now genuinely `true` for one
+real connector.)
+
+## Milestone — Real supplier connector & end-to-end product discovery ✅ complete (Phase 8 of the customer-facing store)
+
+Connects Commerce OS to one real dropshipping supplier's own API rather
+than another simulated demo. **CJdropshipping** was selected after
+checking each candidate (CJdropshipping, DSers, Spocket, Avasam, Syncee,
+EPROLO, AutoDS) against its actual public developer documentation —
+the only one with a fully public, self-serve REST API requiring no
+partner approval (see `HANDOVER.md` §61 for the full comparison and
+every documentation URL consulted). Strictly read/discovery: no order-
+placement method exists on the connector interface at all, and none was
+added.
+
+**As built:** `src/lib/suppliers/connectors/cjdropshipping.ts` — real
+authentication (`apiKey` → 15-day access token / 180-day refresh
+token), throttled to the documented 1 req/sec free-tier limit with
+retry-on-429, `fetchStatus` (lightweight discovery browse or known-
+product refresh) and a new `readProductDetail` method (title,
+description, category, real variants, real images, and — only when a
+destination is requested — a real destination-aware freight quote via
+CJ's own freight-calculation endpoint). Every field is defensively
+parsed; a malformed or missing field becomes `null`, never a guess.
+`ConnectorCapabilities` gained four flags (`readProductDetails`,
+`readVariants`, `readShippingRates`, `readOrders` — the last `false`
+everywhere, since no connector may place an order to read back), with
+the brief's remaining requested capability names explicitly mapped onto
+existing flags rather than duplicated (see `HANDOVER.md` §61).
+
+**New:** `shippingPolicy.ts` (a deterministic APPROVED/REVIEW_REQUIRED/
+REJECTED ladder reusing the existing, previously-unwired
+`business_settings.max_delivery_days` setting) and `shippingQuotes.ts`
+(the orchestrator, persisting every quote to the new
+`supplier_shipping_quotes` table — one new table, system-computed RLS,
+append-only). Phase 5's candidate capture gained real multi-image and
+real `product_variants` creation from connector-sourced data, all
+routed through Phase 7's existing `captureAndValidateMedia` unchanged —
+no second media pipeline. A "Discover from CJdropshipping" panel on
+`/suppliers/discovery` and a capabilities grid on the existing
+`/suppliers/connectors` page.
+
+**Tested:** 33 new tests (26 mocked-connector, 7 shipping-policy),
+1674 total. `tsc`/`lint`/`build`/`db:verify` (81 tables) all clean.
+Browser-verified: the connectors page correctly shows CJdropshipping as
+`not configured` with real capabilities on desktop and mobile.
+
+**Not live-verified:** no CJdropshipping account or API key exists in
+this environment — every method is proven only by documentation-derived
+mocked tests and code inspection, never a real API call.
+**Deliberately not built:** any order-placement capability (none
+exists on the interface); Phase 6 Shopify eligibility does not yet
+consult the new shipping-suitability result (flagged as the immediate
+next step); a simulated `cjdropshippingDemo.ts` connector (the brief's
+own "no fake data" instruction, and `/suppliers/discovery` already
+hides its entire contents in demo mode, made this both unnecessary and
+inadvisable to build for one specific, named, real supplier).
 
 ## Cross-cutting, ongoing
 

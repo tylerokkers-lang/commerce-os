@@ -5131,7 +5131,217 @@ and scoring are marketplace-agnostic by design (`product_media` has no
 Shopify-specific column), but no marketplace-specific consumer beyond
 `getApprovedMediaForPublication` for Shopify exists yet.
 
-## 61. Next step
+## 61. Milestone: Real supplier connector & end-to-end product discovery (Phase 8 of the customer-facing store)
+
+**Supplier selection, researched before any code was written, not
+assumed.** Checked each of the brief's named candidates against their
+own public developer documentation: **CJdropshipping** — a fully public,
+self-serve REST API (developers.cjdropshipping.com); a free account
+generates an `apiKey` directly, no partner-approval process, no paid
+tier gate; documented product/variant/per-country-inventory/destination-
+aware-freight/tracking endpoints with a real, verifiable request/response
+shape (`{code, result, message, data}`). **DSers** — a real Open API
+exists (dsers.dev) but is gated behind a separate partner-developer
+approval process oriented around building apps *for* DSers' own users
+installing them, not an external system pulling its own catalogue.
+**Avasam** — has published API docs (help.avasam.com/docs/supplier-api),
+but that API runs in the opposite direction this system needs: it is
+the interface a *supplier* uses to push their catalogue *into* Avasam's
+marketplace, not a buyer-side read over it. **Spocket** — no public
+self-serve API documentation was found; it is an app-based (Shopify/
+WooCommerce) integration. **Syncee** — feed/(S)FTP-based, with API access
+only via a support-ticket request, no public self-serve developer
+portal. **EPROLO** — an API exists but its documentation is shared only
+privately on request, not publicly published. **AutoDS** — has an API
+but access is approval-gated and may carry a setup fee. CJdropshipping
+was the only candidate meeting the brief's own first criterion
+(official, public, self-serve API documentation) outright — chosen on
+that documentation-transparency finding alone, not a value judgement
+about the others' products.
+
+**Audit first, exactly as instructed**, before writing the connector:
+`suppliers/connectors/types.ts`'s `SupplierConnector` interface (one
+method, `fetchStatus`, plus the existing `discoverProducts`/`readStock`/
+`readShipping`/`readProductMedia` capability-flag convention from
+Phases 5/7) was confirmed as the one supplier abstraction in this
+codebase — extended, never duplicated. `business_settings.max_delivery_days`
+(Milestone 1) was found configured in Settings since the very first
+migration but **never read by any live decision** — reused for the new
+shipping-suitability gate rather than inventing a second delivery-time
+limit. No existing table could hold a per-destination shipping quote
+(`supplier_products.shipping_cost_minor` is a single, non-destination-
+aware figure, correct for its own purpose and left untouched) — the one
+genuinely new table this milestone adds.
+
+**Capability vocabulary, mapped explicitly rather than duplicated:** the
+brief names more capabilities than this codebase's existing flags
+distinguish behaviourally. `readInventory`→`readStock` (existing),
+`readPricing`→`readProducts` (existing), `readShippingOptions`/
+`readDeliveryEstimates`→the new `readShippingRates` below,
+`readFulfilment`→`trackingUpdates` (existing). Four flags are genuinely
+new on `ConnectorCapabilities`: `readProductDetails`, `readVariants`,
+`readShippingRates`, `readOrders` (declared `false` on every connector
+without exception — no connector places an order, so none has one of
+its own to read back). One new interface method, `readProductDetail`,
+deliberately separate from the existing `fetchStatus`: a discovery
+browse of many products (`fetchStatus`, `knownRefs` absent — the
+existing Phase 5 convention) never triggers a freight-calculation call
+per result; only inspecting one specific candidate (`readProductDetail`,
+called once a human selects a discovery result) does — respects the
+brief's own "don't hammer the API" instruction structurally, not just by
+convention.
+
+**As built**, `src/lib/suppliers/`:
+- `connectors/cjdropshipping.ts` — the real connector.
+  Authentication: `POST /authentication/getAccessToken` with `{apiKey}`
+  → a 15-day access token + 180-day refresh token (documented
+  lifetimes); re-exchanged on every top-level call rather than cached
+  across requests, matching `marketplaces/connectors/ebay.ts`'s own
+  convention. Throttled to the documented free-tier limit (1 request/
+  second) with a single retry-with-backoff on HTTP 429. `fetchStatus`
+  browses `/product/listV2` (discovery mode) or re-queries known
+  products via `/product/query` (status-refresh mode).
+  `readProductDetail` calls `/product/query` for title/description/
+  category/images/variants, then — only when a `destinationCountry` is
+  passed — `/logistic/freightCalculate` for a real, destination-aware
+  shipping quote. Every numeric/URL/string field is parsed defensively
+  (`safeNumber`/`safeUrl`/`safeString`) — a field that fails validation
+  becomes `null`/omitted, never a fabricated value or a crash. **Every
+  endpoint path and field name was read from CJdropshipping's own
+  published documentation, not an unofficial wrapper** — stated in the
+  file's own header, along with the honest caveat that automated
+  documentation extraction (rather than a byte-for-byte OpenAPI spec)
+  means a real response could still use a slightly different field name
+  than documented, which the defensive parsing is specifically designed
+  to surface as a warning rather than a crash or silent data
+  corruption. **No CJ account exists in this environment** —
+  `isConfigured()` requires `CJ_API_KEY`, absent, so every method is
+  structurally unreachable: **IMPLEMENTED, NOT CONFIGURED, NOT
+  LIVE-VERIFIED**, never "connected."
+- `shippingPolicy.ts` — `assessShippingSuitability`, a fixed ladder: no
+  quote at all is `review_required` (never a guessed rejection); a
+  quote with no known delivery estimate is `review_required`; only a
+  known, too-slow estimate (against the real, existing
+  `max_delivery_days` setting) is `rejected`.
+- `shippingQuotes.ts` (`server-only`) — `fetchAndAssessShipping`, the
+  orchestrator: capability-gates on `readShippingRates`, calls
+  `readProductDetail`, runs the policy above, persists every quote
+  (never just the winner) to the new `supplier_shipping_quotes` table,
+  and audits `SUPPLIER_SHIPPING_QUOTED`.
+
+**Database (0043/0044):** one new table, `supplier_shipping_quotes` —
+system-computed (RLS: read-only through the org-scoped client, service-
+role write, exactly `product_intelligence`'s own 0038 pattern), and
+append-only (`forbid_mutation()`, already defined since 0001, reused —
+a superseding quote is a new row, never an edit to the old one, per the
+brief's own "don't overwrite an important historical fact"
+instruction). 81 tables total (was 80).
+
+**Phase 5 integration:** `CaptureCandidateInput` gained `imageUrls`
+(plural, alongside the existing Phase 7 singular `imageUrl`),
+`variants`, `connectorKey`/`connectorProductRef` — all optional, all
+defaulting to empty/null for the existing manual-entry path, which is
+unchanged. `importCandidate` now creates real `product_variants` rows
+from connector-sourced variant data (previously every imported product
+had none, a documented Phase 6 limitation — still true for
+manually-captured candidates, now genuinely resolved for
+connector-sourced ones) and registers **every** product and variant
+image through the exact same Phase 7 `captureAndValidateMedia` pipeline
+— no second image-processing system, per the brief's explicit
+instruction. A new `discoverFromCjAction`/`captureFromCjAction` pair on
+`/suppliers/discovery` lets an operator search CJdropshipping's real
+catalogue (`fetchStatus`) and capture one specific result
+(`readProductDetail`, with a UK shipping quote requested) into a real
+candidate — never imports automatically; import remains its own
+separate, human-triggered action exactly as before.
+
+**Phase 6 untouched, fed real data only:** no change to
+`publicationGate.ts`/`eligibility.ts`'s Phase 6 logic — the shipping
+policy result is available for a future eligibility requirement but
+**was not wired into the Shopify gate this phase**, since doing so
+correctly needs a UK shipping quote to exist for a product before it
+reaches the gate, which today only happens via the new discovery flow
+above, not for every product uniformly. Flagged as the natural next
+integration point, not silently skipped.
+
+**Admin UI:** `/suppliers/connectors` (Milestone 3's existing page,
+reused, not rebuilt) gained a "Capabilities" row per connector — a
+🟢/🔴 grid over Products/Product details/Pricing/Inventory/Variants/
+Media/Shipping rates/Orders (read)/Orders (place), explicitly labelled
+"declared by this connector's own code — not proof it has ever run."
+`/suppliers/discovery` gained a "Discover from CJdropshipping" card
+above the existing manual-capture form.
+
+**Tested:** 26 new mocked tests for the CJ connector (auth success/
+failure distinguished from a rate limit distinguished from a network
+error distinguished from a malformed response; a 429 retried once then
+given up on; product-list parsing including a missing-list-shape
+response and a missing-product-id item, both handled without a crash;
+rich product-detail parsing with and without a requested destination,
+proving a freight call is genuinely skipped when no destination is
+asked for; a failed shipping-quote call not failing the whole detail
+read; day-range text parsing including "no recognisable number found";
+every defensive parser individually; and the financial-safety proof the
+brief explicitly asks for — `placeOrders`/`cancelOrders`/`readOrders`
+all `false`, and no method on the class whose name suggests placing,
+paying, or charging), plus 7 for the shipping-policy ladder. Tests run
+with real rate-limiting/retry logic present but its wall-clock delays
+skipped only inside Vitest (`process.env.VITEST`) — the throttle and
+backoff themselves are real production code, exercised for correctness
+(call counts, retry behaviour), not for their real duration. 1674 total
+(was 1637). `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm
+run db:verify` (81 tables) all clean. **Verified live in the browser**:
+`/suppliers/connectors` shows CJdropshipping as `not configured` with
+`CJ_API_KEY` listed as the missing credential and every real capability
+correctly green, on both desktop and mobile, with no console errors
+traceable to this milestone (one transient "module not found" error
+appeared in the dev server's log buffer from a moment mid-session when
+`registry.ts` briefly referenced `cjdropshipping.ts` before that file
+was fully written — resolved before this milestone finished, confirmed
+by the clean `tsc`/`build`/`vitest` runs and the live server's current
+request log showing only 200s). **Not live-verified against a real CJ
+account**: no CJdropshipping account or API key exists in this
+environment — every connector method is proven only through its mocked
+tests, `tsc`, and code inspection against the published documentation,
+never a real API call. The new "Discover from CJdropshipping" UI panel
+could not be rendered in the browser at all — `/suppliers/discovery`
+hides its entire contents (including the new panel) behind an honest
+"not modelled in demo mode" empty state, matching Phase 5's own
+pre-existing behaviour — verified only by source inspection and `tsc`.
+
+**Deliberately not built, stated plainly:** no supplier order of any
+kind can be placed — the interface has no such method, and this
+connector adds none; `placeOrders`/`cancelOrders`/`readOrders` are
+`false` without exception. No automatic Shopify/Amazon/eBay publication
+is triggered by a discovery or shipping result — import only captures
+data, exactly as the brief requires. The Phase 6 Shopify eligibility
+gate does not yet consult the shipping-suitability result — flagged
+above as the natural next step, not silently dropped. No Amazon-specific
+compliance layer was added — the connector reports facts a future
+marketplace-rules layer would need, never a marketplace decision itself.
+No `cjdropshippingDemo.ts` simulated-data connector was built: the
+brief's own "no fake data" instruction (§33) and the fact that
+`/suppliers/discovery` already fully hides its contents in demo mode
+made a demo connector for one specific, named, real supplier both
+unnecessary and risky to build honestly.
+
+## 62. Next step
+
+**Recommended Phase 9, following directly from §61:** two natural,
+bounded follow-ups, neither requiring a redesign. (1) Wire
+`shippingPolicy.ts`'s result into Phase 6's `assessShopifyEligibility` as
+a new requirement, once a product has a real shipping quote on file —
+today the gate has no shipping-suitability input at all, so a product
+with a `rejected` shipping quote can still reach a Shopify draft; this
+was deliberately left unwired in §61 rather than half-wired for every
+product regardless of whether a real quote exists for it. (2) A real CJ
+account and `CJ_API_KEY` would let the entire connector be genuinely
+live-verified for the first time — `runWriteVerification`-style
+read-only proof (a real `getAccessToken`, a real `product/query`, a real
+`freightCalculate` against a real product) before relying on any of it
+for a real business, following the exact same "read-only live check
+before trusting it" discipline `advertising/verificationCheck.ts` and
+the eBay/Shopify connectors already established.
 
 **Recommended Phase 8, following directly from §60:** the media pipeline
 is now fully wired for a human-driven or manually-pasted image source,

@@ -21,10 +21,22 @@ describe('Supplier connector capabilities (Phase 5)', () => {
     expect(direct?.descriptor.capabilities.discoverProducts).toBe(false)
   })
 
-  it('every connector, including manual, declares readProductMedia as false — no connector, including a human pasting a URL, is a connector-discovered media source yet (Phase 7)', () => {
+  it('every connector except the real CJdropshipping one declares readProductMedia as false — no other connector, including a human pasting a URL, is a connector-discovered media source (Phase 7)', () => {
     const connectors = listConnectors()
     for (const connector of connectors) {
+      if (connector.descriptor.key === 'cjdropshipping') continue
       expect(connector.descriptor.capabilities.readProductMedia).toBe(false)
+    }
+  })
+
+  it('the real CJdropshipping connector genuinely declares readProductMedia (Phase 8) — its documented product-query response bundles image URLs', () => {
+    const cj = listConnectors().find((c) => c.descriptor.key === 'cjdropshipping')
+    expect(cj?.descriptor.capabilities.readProductMedia).toBe(true)
+  })
+
+  it('every connector, including the real CJdropshipping one, declares readOrders as false — no connector may place an order, so none has one of its own to read back (Phase 8)', () => {
+    for (const connector of listConnectors()) {
+      expect(connector.descriptor.capabilities.readOrders).toBe(false)
     }
   })
 })

@@ -2,7 +2,9 @@ import { Card, CardHeader, EmptyState, PageHeader } from '@/components/ui'
 import { requireSession } from '@/lib/security/session'
 import { getDiscoveryQueue } from '@/lib/suppliers/discovery/repository'
 import { getSuppliers } from '@/lib/suppliers/repository'
+import { getConnector } from '@/lib/suppliers/connectors/registry'
 import { CaptureCandidateForm } from './CaptureCandidateForm'
+import { CjDiscoveryPanel } from './CjDiscoveryPanel'
 import { QueueRow } from './QueueRow'
 
 export const dynamic = 'force-dynamic'
@@ -29,6 +31,8 @@ export default async function SupplierDiscoveryPage() {
 
   const [queue, suppliers] = await Promise.all([getDiscoveryQueue(), getSuppliers()])
   const pending = queue.filter((c) => c.status === 'new' || c.status === 'duplicate')
+  const cjConnector = getConnector('cjdropshipping')
+  const supplierOptions = suppliers.map((s) => ({ id: s.id, name: s.name }))
 
   return (
     <>
@@ -38,8 +42,16 @@ export default async function SupplierDiscoveryPage() {
       />
 
       <Card>
-        <CardHeader title="Capture a candidate" description="The manual entry workflow — every future connector's discovery output would land here the same way." />
-        <CaptureCandidateForm suppliers={suppliers.map((s) => ({ id: s.id, name: s.name }))} />
+        <CardHeader
+          title="Discover from CJdropshipping"
+          description="A real, read-only search against CJdropshipping's own product catalogue — never places an order, never imports automatically."
+        />
+        <CjDiscoveryPanel configured={cjConnector?.isConfigured() ?? false} suppliers={supplierOptions} />
+      </Card>
+
+      <Card>
+        <CardHeader title="Capture a candidate manually" description="Type in a supplier's product by hand — the same capture flow every connector's discovery output lands in." />
+        <CaptureCandidateForm suppliers={supplierOptions} />
       </Card>
 
       <Card>

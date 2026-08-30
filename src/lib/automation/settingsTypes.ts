@@ -75,6 +75,15 @@ export interface AutomationSettings {
   minImageHeightPx: number
   maxImageFileSizeBytes: number
   allowedImageFormats: readonly string[]
+  /**
+   * Milestone: real supplier connector (Phase 8). An existing
+   * `business_settings` column (Milestone 1, editable in Settings since
+   * "Maximum delivery time (days)") wired into a live decision for the
+   * first time here — `shippingPolicy.ts`'s deterministic gate rejects a
+   * supplier whose fastest confirmed delivery estimate exceeds this,
+   * rather than a second, duplicate threshold being invented.
+   */
+  maxDeliveryDays: number
 }
 
 /**
@@ -118,6 +127,7 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   minImageHeightPx: 800,
   maxImageFileSizeBytes: 5242880,
   allowedImageFormats: ['jpeg', 'png', 'webp'],
+  maxDeliveryDays: 7,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

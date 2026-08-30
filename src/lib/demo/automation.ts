@@ -56,6 +56,7 @@ const RUNNING_SETTINGS: AutomationSettings = {
   minImageHeightPx: 800,
   maxImageFileSizeBytes: 5242880,
   allowedImageFormats: ['jpeg', 'png', 'webp'],
+  maxDeliveryDays: 7,
 }
 
 const PAUSED_SETTINGS: AutomationSettings = { ...RUNNING_SETTINGS, automationPaused: true, automationPausedReason: 'Owner paused automation while reviewing Q3 numbers' }

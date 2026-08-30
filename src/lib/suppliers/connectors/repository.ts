@@ -48,6 +48,17 @@ export async function getSupplierConnectors(): Promise<readonly SupplierConnecto
       lastError: health.lastError,
       nextAllowedAt: health.nextAllowedAt,
       consecutiveFailures: health.consecutiveFailures,
+      capabilities: {
+        readProducts: connector.descriptor.capabilities.readProducts,
+        readProductDetails: connector.descriptor.capabilities.readProductDetails,
+        readStock: connector.descriptor.capabilities.readStock,
+        readVariants: connector.descriptor.capabilities.readVariants,
+        readProductMedia: connector.descriptor.capabilities.readProductMedia,
+        readShipping: connector.descriptor.capabilities.readShipping,
+        readShippingRates: connector.descriptor.capabilities.readShippingRates,
+        placeOrders: connector.descriptor.capabilities.placeOrders,
+        readOrders: connector.descriptor.capabilities.readOrders,
+      },
     } satisfies SupplierConnectorSummary
   })
 }

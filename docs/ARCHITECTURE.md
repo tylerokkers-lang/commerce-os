@@ -68,10 +68,13 @@ src/lib/
                  watermark/branding, product-match and duplicate checks,
                  the deterministic media score, the capture/moderation
                  orchestrators — see below)
-  suppliers/     supplier scoring, redundancy, connectors; discovery/
-                 (candidate capture, duplicate detection, offer
-                 comparison, import — hands off to products/intelligence/
-                 unchanged, never a second scoring engine — see below)
+  suppliers/     supplier scoring, redundancy, connectors/ (manual, and
+                 the real CJdropshipping connector — Phase 8);
+                 shippingPolicy.ts + shippingQuotes.ts (destination-aware
+                 shipping suitability, Phase 8); discovery/ (candidate
+                 capture, duplicate detection, offer comparison, import —
+                 hands off to products/intelligence/ unchanged, never a
+                 second scoring engine — see below)
   compliance/    per-channel gate reads
   marketplaces/  connectors (Shopify/Amazon), reconciliation, publication
                  gate, listing lifecycle; shopify/ (eligibility, payload

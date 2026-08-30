@@ -49,9 +49,23 @@ export interface CaptureCandidateInput {
   notes: string | null
   /** Optional supplier-hosted image URL captured alongside the candidate's own facts (Milestone: product media intelligence, Phase 7) — carried through `raw_signals` and registered as `supplier_provided` media only once/if the candidate is imported into a real product. */
   imageUrl: string | null
+  /** Milestone: real supplier connector (Phase 8). Additional supplier-hosted images beyond the single legacy `imageUrl` field — a real connector's product detail read (e.g. CJdropshipping) typically returns several. Merged with `imageUrl`, deduplicated, on import. */
+  imageUrls: readonly string[]
+  /** Milestone: real supplier connector (Phase 8). Real per-variant data from a connector's `readProductDetail`, if any — creates real `product_variants` rows on import rather than leaving every variant collapsed into one product-level offer. Empty for manual/single-variant candidates. */
+  variants: readonly CandidateVariantInput[]
+  /** Milestone: real supplier connector (Phase 8). Which connector this candidate came from, if any — for traceability only, never used to claim a live connection. */
+  connectorKey: string | null
+  connectorProductRef: string | null
   identifiers: readonly { idType: string; value: string }[]
   actorUserId: string
   actorLabel: string | null
+}
+
+export interface CandidateVariantInput {
+  sku: string | null
+  attributes: readonly { name: string; value: string }[]
+  unitCostMinor: number
+  imageUrls: readonly string[]
 }
 
 export interface CapturedCandidate {
@@ -143,6 +157,10 @@ export async function captureCandidate(input: CaptureCandidateInput): Promise<Re
         deliveryDaysMin: input.deliveryDaysMin,
         deliveryDaysMax: input.deliveryDaysMax,
         imageUrl: input.imageUrl,
+        imageUrls: input.imageUrls,
+        variants: input.variants,
+        connectorKey: input.connectorKey,
+        connectorProductRef: input.connectorProductRef,
       } as never,
     })
     .select('id')
@@ -178,7 +196,13 @@ interface CandidateRow {
   estimated_shipping_minor: number | null
   currency: string
   rejected_reason: string | null
-  raw_signals: { imageUrl?: string | null } | null
+  raw_signals: {
+    imageUrl?: string | null
+    imageUrls?: readonly string[]
+    variants?: readonly CandidateVariantInput[]
+    connectorKey?: string | null
+    connectorProductRef?: string | null
+  } | null
 }
 
 export interface ImportResult {
@@ -286,8 +310,42 @@ export async function importCandidate(
   // Phase 7) — captured in the very same form submission as this
   // product's title/SKU, so `capturedTogether: true` is genuine evidence,
   // not an assumption. A failure here must never undo the import.
-  const imageUrl = candidate.raw_signals?.imageUrl ?? null
-  if (imageUrl) {
+  // Real per-variant data (Milestone: real supplier connector, Phase 8) —
+  // creates real `product_variants` rows rather than leaving every
+  // variant collapsed into the one product-level offer above. A failure
+  // here must never undo the import, matching the media-capture and
+  // intelligence-computation failure handling immediately below.
+  const variantIdBySku = new Map<string, string>()
+  for (const variant of candidate.raw_signals?.variants ?? []) {
+    try {
+      const { data: variantRow, error: variantError } = await supabase
+        .from('product_variants')
+        .insert({
+          org_id: orgId,
+          product_id: product.id,
+          sku: variant.sku ?? generateCandidateSku(`${candidateId}-${variantIdBySku.size + 1}`, null),
+          title: variant.attributes.map((a) => a.value).join(' / ') || 'Variant',
+          options: Object.fromEntries(variant.attributes.map((a) => [a.name, a.value])) as never,
+        })
+        .select('id')
+        .single()
+      if (variantError || !variantRow) {
+        console.error('[supplier-discovery] variant creation failed after import', { productId: product.id, error: variantError })
+        continue
+      }
+      if (variant.sku) variantIdBySku.set(variant.sku, variantRow.id)
+    } catch (error) {
+      console.error('[supplier-discovery] variant creation threw after import', { productId: product.id, error })
+    }
+  }
+
+  // Supplier-provided media (Phase 7 pipeline) — the candidate's own
+  // image(s), merged and deduplicated across the legacy singular
+  // `imageUrl` field and the newer plural `imageUrls` (Phase 8), first
+  // one as primary, the rest secondary; then each variant's own images,
+  // linked to the real variant row created just above.
+  const productImages = Array.from(new Set([candidate.raw_signals?.imageUrl, ...(candidate.raw_signals?.imageUrls ?? [])].filter((u): u is string => Boolean(u))))
+  for (const [index, url] of productImages.entries()) {
     try {
       await captureAndValidateMedia({
         orgId,
@@ -295,11 +353,11 @@ export async function importCandidate(
         variantId: null,
         supplierId: candidate.supplier_id,
         supplierProductId: null,
-        mediaUrl: imageUrl,
+        mediaUrl: url,
         sourceUrl: null,
         sourceType: 'supplier_provided',
-        discoveryMethod: 'supplier_candidate_capture',
-        role: 'primary',
+        discoveryMethod: candidate.raw_signals?.connectorKey ?? 'supplier_candidate_capture',
+        role: index === 0 ? 'primary' : 'secondary',
         capturedTogether: true,
         conflictingSupplierSku: null,
         actorUserId: actor.userId,
@@ -307,6 +365,32 @@ export async function importCandidate(
       })
     } catch (error) {
       console.error('[supplier-discovery] media capture failed after import', { productId: product.id, error })
+    }
+  }
+
+  for (const variant of candidate.raw_signals?.variants ?? []) {
+    const variantId = variant.sku ? variantIdBySku.get(variant.sku) ?? null : null
+    for (const url of variant.imageUrls) {
+      try {
+        await captureAndValidateMedia({
+          orgId,
+          productId: product.id,
+          variantId,
+          supplierId: candidate.supplier_id,
+          supplierProductId: null,
+          mediaUrl: url,
+          sourceUrl: null,
+          sourceType: 'supplier_provided',
+          discoveryMethod: candidate.raw_signals?.connectorKey ?? 'supplier_candidate_capture',
+          role: 'variant',
+          capturedTogether: true,
+          conflictingSupplierSku: null,
+          actorUserId: actor.userId,
+          actorLabel: actor.label,
+        })
+      } catch (error) {
+        console.error('[supplier-discovery] variant media capture failed after import', { productId: product.id, error })
+      }
     }
   }
 

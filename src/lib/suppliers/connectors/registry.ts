@@ -1,12 +1,15 @@
 import { err, type Result } from '@/lib/core/result'
 import { manualSupplierConnector } from './manual'
+import { cjdropshippingConnector } from './cjdropshipping'
 import type {
   ConnectorDescriptor,
   ConnectorHealth,
   ConnectorStatus,
   FetchStatusOptions,
   FetchStatusOutcome,
+  ReadProductDetailOptions,
   SupplierConnector,
+  SupplierProductDetail,
 } from './types'
 
 /**
@@ -39,6 +42,11 @@ class UnavailableConnector implements SupplierConnector {
       `${this.descriptor.label} is not available: ${this.reason} (requested up to ${options.limit} statuses)`,
     )
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept named to document the interface's real parameter, unused by this honest stub
+  async readProductDetail(productRef: string, _options?: ReadProductDetailOptions): Promise<Result<SupplierProductDetail, string>> {
+    return err(`${this.descriptor.label} is not available: ${this.reason} (requested detail for "${productRef}")`)
+  }
 }
 
 /**
@@ -48,7 +56,15 @@ class UnavailableConnector implements SupplierConnector {
  * "-compatible" and "-type" throughout because none of these is an official
  * partnership. Each would need its own real API credentials and its own
  * written integration before it could report anything other than
- * `not_configured`.
+ * `not_configured`. `cj_type` is deliberately no longer in this list — it
+ * graduated to a real, written integration (`./cjdropshipping.ts`,
+ * Milestone: real supplier connector, Phase 8) against CJdropshipping's
+ * actual documented API, chosen over the other candidates here after
+ * checking each one's real developer documentation (see `HANDOVER.md`
+ * for the comparison). "Real integration" still means exactly what it
+ * always has in this codebase: the code genuinely calls the documented
+ * endpoints — `isConfigured()` requires `CJ_API_KEY`, absent from this
+ * environment, so it reports `not_configured` today, never "connected."
  */
 const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = [
   {
@@ -64,6 +80,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -85,6 +102,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -105,26 +123,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
-      },
-      usagePolicy: {
-        termsUrl: null,
-        permittedUseNote: 'Our own account credentials only, once connected.',
-        authenticatedFirstParty: true,
-      },
-    },
-  },
-  {
-    reason: 'No CJ-type sourcing API credentials are configured, and the integration is not yet written.',
-    descriptor: {
-      key: 'cj_type',
-      label: 'CJ-type sourcing',
-      description: 'Product sourcing and fulfilment through a CJ-type dropshipping platform API.',
-      sourceType: 'api',
-      requiredCredentials: ['CJ_API_KEY', 'CJ_ACCESS_TOKEN'],
-      rateLimit: { requestsPerMinute: 30, requestsPerDay: 3000, minSecondsBetweenRuns: 300 },
-      capabilities: {
-        discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
-        placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -145,6 +144,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -168,6 +168,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: false, readProducts: true, readStock: false, readShipping: false,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -189,6 +190,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: false,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -201,6 +203,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
 
 const CONNECTORS = new Map<string, SupplierConnector>()
 CONNECTORS.set(manualSupplierConnector.descriptor.key, manualSupplierConnector)
+CONNECTORS.set(cjdropshippingConnector.descriptor.key, cjdropshippingConnector)
 for (const planned of PLANNED) {
   CONNECTORS.set(planned.descriptor.key, new UnavailableConnector(planned.descriptor, planned.reason))
 }

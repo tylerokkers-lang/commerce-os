@@ -63,22 +63,32 @@ describe('manual supplier connector', () => {
 })
 
 describe('connector registry', () => {
-  it('registers the manual connector and every planned category', () => {
+  it('registers the manual connector, the real CJdropshipping connector, and every remaining planned category', () => {
     const keys = listConnectors().map((c) => c.descriptor.key)
     expect(keys).toContain('manual')
+    expect(keys).toContain('cjdropshipping')
     expect(keys).toContain('dsers_compatible')
     expect(keys).toContain('syncee_type')
     expect(keys).toContain('eprolo_type')
-    expect(keys).toContain('cj_type')
     expect(keys).toContain('autods_type')
     expect(keys).toContain('direct_api')
     expect(keys).toContain('csv_feed')
   })
 
   it('reports every planned connector as not configured even in principle', () => {
-    for (const key of ['dsers_compatible', 'syncee_type', 'eprolo_type', 'cj_type', 'autods_type']) {
+    for (const key of ['dsers_compatible', 'syncee_type', 'eprolo_type', 'autods_type']) {
       const connector = getConnector(key)!
       expect(connector.isConfigured()).toBe(false)
+    }
+  })
+
+  it('reports the real CJdropshipping connector as not configured without CJ_API_KEY — never "connected" from code existing alone', () => {
+    const original = process.env.CJ_API_KEY
+    delete process.env.CJ_API_KEY
+    try {
+      expect(getConnector('cjdropshipping')!.isConfigured()).toBe(false)
+    } finally {
+      if (original !== undefined) process.env.CJ_API_KEY = original
     }
   })
 
@@ -127,11 +137,15 @@ describe('connector registry', () => {
     }
   })
 
-  it('names every planned connector after its category, not an official product, using -compatible/-type suffixes', () => {
-    for (const key of ['dsers_compatible', 'syncee_type', 'eprolo_type', 'cj_type', 'autods_type']) {
+  it('names every remaining planned connector after its category, not an official product, using -compatible/-type suffixes', () => {
+    for (const key of ['dsers_compatible', 'syncee_type', 'eprolo_type', 'autods_type']) {
       const label = getConnector(key)!.descriptor.label
       expect(label).toMatch(/-compatible|-type/)
     }
+  })
+
+  it('names the real CJdropshipping connector as itself, since it is a genuine written integration against their documented API, not a placeholder category', () => {
+    expect(getConnector('cjdropshipping')!.descriptor.label).toBe('CJdropshipping')
   })
 })
 

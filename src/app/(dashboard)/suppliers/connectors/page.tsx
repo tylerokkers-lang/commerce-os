@@ -156,6 +156,29 @@ export default async function SupplierConnectorsPage() {
               </div>
             </dl>
 
+            <div className="border-t border-border px-5 py-3">
+              <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Capabilities</p>
+              <p className="mt-1 max-w-3xl text-xs text-ink-subtle">Declared by this connector&apos;s own code — not proof it has ever run. See status above for that.</p>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-muted">
+                {([
+                  ['Products', connector.capabilities.readProducts],
+                  ['Product details', connector.capabilities.readProductDetails],
+                  ['Pricing', connector.capabilities.readProducts],
+                  ['Inventory', connector.capabilities.readStock],
+                  ['Variants', connector.capabilities.readVariants],
+                  ['Media', connector.capabilities.readProductMedia],
+                  ['Shipping rates', connector.capabilities.readShippingRates],
+                  ['Orders (read)', connector.capabilities.readOrders],
+                  ['Orders (place)', connector.capabilities.placeOrders],
+                ] as const).map(([label, enabled]) => (
+                  <li key={label}>
+                    {enabled ? '🟢' : '🔴'} {label}
+                    {label === 'Orders (place)' && !enabled ? ' — disabled by design' : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             {connector.missingCredentials.length > 0 ? (
               <div className="border-t border-border px-5 py-3">
                 <p className="text-xs font-medium text-ink-subtle">Required environment variables</p>

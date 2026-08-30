@@ -5926,6 +5926,106 @@ export interface Database {
           },
         ]
       }
+      supplier_shipping_quotes: {
+        Row: {
+          id: string
+          org_id: string
+          supplier_id: string | null
+          product_id: string | null
+          connector_key: string
+          connector_product_ref: string
+          destination_country: string
+          method: string
+          carrier_name: string | null
+          shipping_cost_minor: number
+          currency: string
+          processing_days_min: number | null
+          processing_days_max: number | null
+          transit_days_min: number | null
+          transit_days_max: number | null
+          total_delivery_days_min: number | null
+          total_delivery_days_max: number | null
+          provides_tracking: boolean | null
+          suitability_status: Database['public']['Enums']['shipping_suitability_status']
+          suitability_reason: string
+          quoted_at: string
+          is_demo: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          supplier_id?: string | null
+          product_id?: string | null
+          connector_key: string
+          connector_product_ref: string
+          destination_country: string
+          method: string
+          carrier_name?: string | null
+          shipping_cost_minor: number
+          currency: string
+          processing_days_min?: number | null
+          processing_days_max?: number | null
+          transit_days_min?: number | null
+          transit_days_max?: number | null
+          total_delivery_days_min?: number | null
+          total_delivery_days_max?: number | null
+          provides_tracking?: boolean | null
+          suitability_status: Database['public']['Enums']['shipping_suitability_status']
+          suitability_reason: string
+          quoted_at?: string
+          is_demo?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          supplier_id?: string | null
+          product_id?: string | null
+          connector_key?: string
+          connector_product_ref?: string
+          destination_country?: string
+          method?: string
+          carrier_name?: string | null
+          shipping_cost_minor?: number
+          currency?: string
+          processing_days_min?: number | null
+          processing_days_max?: number | null
+          transit_days_min?: number | null
+          transit_days_max?: number | null
+          total_delivery_days_min?: number | null
+          total_delivery_days_max?: number | null
+          provides_tracking?: boolean | null
+          suitability_status?: Database['public']['Enums']['shipping_suitability_status']
+          suitability_reason?: string
+          quoted_at?: string
+          is_demo?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'supplier_shipping_quotes_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_shipping_quotes_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'supplier_shipping_quotes_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       suppliers: {
         Row: {
           id: string
@@ -6288,6 +6388,7 @@ export interface Database {
       provider_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'
       refund_reason: 'customer_changed_mind' | 'damaged' | 'not_as_described' | 'not_delivered' | 'late_delivery' | 'faulty' | 'goodwill' | 'pricing_error' | 'other'
       research_source: 'google_trends' | 'amazon_api' | 'shopify_api' | 'tiktok_api' | 'supplier_catalogue' | 'licensed_dataset' | 'manual' | 'demo'
+      shipping_suitability_status: 'approved' | 'review_required' | 'rejected'
       supplier_document_type: 'invoice' | 'contract' | 'certificate_of_conformity' | 'safety_datasheet' | 'test_report' | 'insurance' | 'authorisation_letter' | 'other'
       supplier_order_status: 'draft' | 'awaiting_approval' | 'approved' | 'placed' | 'confirmed' | 'shipped' | 'received' | 'cancelled' | 'failed'
       vat_treatment: 'standard' | 'reduced' | 'zero_rated' | 'exempt' | 'outside_scope' | 'reverse_charge' | 'marketplace_deemed_supplier' | 'not_registered' | 'review_required'
