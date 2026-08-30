@@ -73,8 +73,8 @@ create table product_media (
   media_url  text not null,
   source_url text,
   source_type media_source_type not null,
-  -- Free text rather than an enum: 'manual_candidate_capture',
-  -- 'manual_admin_attach' today; a future connector's own key once one
+  -- Free text rather than an enum: 'supplier_candidate_capture',
+  -- 'manual_attach' today; a future connector's own key once one
   -- genuinely implements `readProductMedia`, without a migration.
   discovery_method text not null,
 

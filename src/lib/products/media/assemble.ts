@@ -106,7 +106,24 @@ export async function captureAndValidateMedia(input: CaptureMediaInput): Promise
 
   const facts = fetchResult.ok
     ? fetchResult.value
-    : { widthPx: null, heightPx: null, fileSizeBytes: null, format: null, contentType: '' }
+    : { widthPx: null, heightPx: null, fileSizeBytes: null, format: null, contentType: '', checksum: null as string | null }
+
+  // A second duplicate pass, only possible once real bytes have been
+  // fetched: the first pass above (before any network call) can only
+  // catch an identical URL; this catches the same image genuinely
+  // re-hosted at a different URL, which only a checksum can prove.
+  if (fetchResult.ok) {
+    const checksumDuplicate = detectDuplicateMedia({ mediaUrl: input.mediaUrl, checksum: facts.checksum }, existing)
+    if (checksumDuplicate.isDuplicate) {
+      return ok({
+        id: checksumDuplicate.matchedMediaId!,
+        validationStatus: 'review_required',
+        validationReason: checksumDuplicate.reason ?? 'Duplicate.',
+        isDuplicate: true,
+        duplicateOfMediaId: checksumDuplicate.matchedMediaId,
+      })
+    }
+  }
 
   const quality = assessImageQuality(
     { widthPx: facts.widthPx, heightPx: facts.heightPx, fileSizeBytes: facts.fileSizeBytes, format: facts.format },
@@ -155,6 +172,7 @@ export async function captureAndValidateMedia(input: CaptureMediaInput): Promise
       height: facts.heightPx,
       file_size_bytes: facts.fileSizeBytes,
       format: facts.format,
+      checksum: facts.checksum,
       provenance_status: provenanceStatus,
       quality_status: quality.status,
       quality_score: quality.score,

@@ -172,7 +172,7 @@ export async function refreshMedia(orgId: string, mediaId: string, actor: Actor)
 
   const settings = await getAutomationSettingsForOrg(orgId)
   const fetchResult = await fetchImageFacts(media.media_url)
-  const facts = fetchResult.ok ? fetchResult.value : { widthPx: null, heightPx: null, fileSizeBytes: null, format: null, contentType: '' }
+  const facts = fetchResult.ok ? fetchResult.value : { widthPx: null, heightPx: null, fileSizeBytes: null, format: null, contentType: '', checksum: null as string | null }
 
   const quality = assessImageQuality(
     { widthPx: facts.widthPx, heightPx: facts.heightPx, fileSizeBytes: facts.fileSizeBytes, format: facts.format },
@@ -201,6 +201,7 @@ export async function refreshMedia(orgId: string, mediaId: string, actor: Actor)
       height: facts.heightPx,
       file_size_bytes: facts.fileSizeBytes,
       format: facts.format,
+      checksum: facts.checksum,
       quality_status: quality.status,
       quality_score: quality.score,
       quality_components: quality.components as never,

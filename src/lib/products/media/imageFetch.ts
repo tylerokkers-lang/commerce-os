@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { createHash } from 'node:crypto'
 import { err, ok, type Result } from '@/lib/core/result'
 import { parseImageHeader } from './imageHeaderParser'
 
@@ -62,6 +63,16 @@ export interface FetchedImageFacts {
   fileSizeBytes: number | null
   format: string | null
   contentType: string
+  /**
+   * SHA-256 of the bytes actually read (up to `MAX_HEADER_BYTES`), not of
+   * the whole file when it exceeds that cap — sufficient to catch an
+   * identical file re-hosted at a different URL in the common case
+   * (product photos are almost always well under 256KB), but a file
+   * whose first 256KB happen to match while later bytes differ would be
+   * a false positive this does not defend against. Real, not simulated —
+   * computed with Node's own `crypto`, no new dependency.
+   */
+  checksum: string
 }
 
 function validateUrl(rawUrl: string): Result<URL, string> {
@@ -123,6 +134,7 @@ export async function fetchImageFacts(rawUrl: string): Promise<Result<FetchedIma
 
     const bytes = new Uint8Array(arrayBuffer)
     const parsed = parseImageHeader(bytes)
+    const checksum = createHash('sha256').update(bytes).digest('hex')
 
     return ok({
       widthPx: parsed?.width ?? null,
@@ -130,6 +142,7 @@ export async function fetchImageFacts(rawUrl: string): Promise<Result<FetchedIma
       fileSizeBytes: fileSizeBytes !== null && Number.isFinite(fileSizeBytes) ? fileSizeBytes : null,
       format: parsed?.format ?? format,
       contentType,
+      checksum,
     })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
