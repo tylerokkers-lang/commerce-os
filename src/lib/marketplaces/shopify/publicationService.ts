@@ -7,6 +7,7 @@ import { getChannelReadiness } from '../channelReadiness'
 import { getProductIntelligence } from '@/lib/products/intelligence/repository'
 import { getSupplierOffersForProduct } from '@/lib/suppliers/discovery/repository'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
+import { getProductMedia, getApprovedMediaForPublication } from '@/lib/products/media/repository'
 import { getMarketplaceConnector } from '../connectors/registry'
 import type { CreateListingImage, CreateListingVariant, MarketplaceConnector } from '../connectors/types'
 import { planListingTransition, type ListingState } from '../listingLifecycle'
@@ -142,7 +143,7 @@ export async function assembleShopifyPublicationPreview(orgId: string, productId
   const readiness = await getChannelReadiness(orgId, productId, 'shopify', product.stage, product.decision)
   const intelligence = await getProductIntelligence(orgId, productId)
   const offers = await getSupplierOffersForProduct(orgId, productId)
-  const settings = await getAutomationSettingsForOrg(orgId)
+  const mediaState = await getProductMedia(orgId, productId)
 
   const selectedPriceMinor = listing?.price_minor ?? intelligence?.recommendedPriceMinor ?? null
   const preferredOffer = offers[0] ?? null
@@ -151,8 +152,8 @@ export async function assembleShopifyPublicationPreview(orgId: string, productId
     corePublication: readiness.readiness,
     hasTitle: Boolean(product.title?.trim()),
     hasDescription: Boolean(product.description?.trim()),
-    imageCount: 0, // Honest gap: no image source exists yet for a product never previously listed — see HANDOVER.md.
-    minImageCount: settings.minProductImages,
+    mediaReadiness: mediaState.readiness.status,
+    mediaReadinessReason: mediaState.readiness.reason,
     selectedPriceMinor,
     variantsValid: true, // A product with zero variants gets Shopify's own implicit default variant — never invalid on its own.
     variantIssue: null,
@@ -247,7 +248,8 @@ export async function createDraft(orgId: string, productId: string, selectedPric
     options: Object.entries((v.options as Record<string, string>) ?? {}).map(([name, value]) => ({ name, value })),
     weightGrams: null,
   }))
-  const images: readonly CreateListingImage[] = [] // Honest gap: no image source exists yet — see HANDOVER.md.
+  const approvedMedia = await getApprovedMediaForPublication(orgId, productId)
+  const images: readonly CreateListingImage[] = approvedMedia.map((m) => ({ url: m.media_url, altText: preview.product.title }))
 
   const idempotencyKey = `draft-${productId}`
 

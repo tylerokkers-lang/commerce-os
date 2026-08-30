@@ -59,6 +59,18 @@ export interface ConnectorCapabilities {
   placeOrders: boolean
   cancelOrders: boolean
   trackingUpdates: boolean
+  /**
+   * Milestone: product media intelligence (Phase 7). Whether this
+   * connector can report supplier-hosted image URLs for a product —
+   * genuinely `true` only once a connector implements a real media read;
+   * `false` on every connector today, including `manual` (a person
+   * pastes a URL by hand — real, but a human action, not the connector
+   * discovering media on its own). Never collapsed with "implemented":
+   * the manual connector's own capture form is what actually lets
+   * supplier-provided media into the system this phase, independent of
+   * this flag.
+   */
+  readProductMedia: boolean
 }
 
 export interface ConnectorDescriptor {

@@ -43,7 +43,7 @@ const DESCRIPTOR: ConnectorDescriptor = {
     readShipping: true,
     placeOrders: false,
     cancelOrders: false,
-    trackingUpdates: false,
+    trackingUpdates: false, readProductMedia: false,
   },
   usagePolicy: {
     termsUrl: null,

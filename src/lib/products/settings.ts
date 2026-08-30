@@ -52,6 +52,12 @@ export const businessSettingsSchema = z.object({
 
   // Controlled Shopify publication (Phase 6).
   min_product_images: z.coerce.number().int().min(0).max(20),
+
+  // Product media intelligence (Phase 7).
+  min_image_width_px: z.coerce.number().int().min(1).max(20000),
+  min_image_height_px: z.coerce.number().int().min(1).max(20000),
+  max_image_file_size_bytes: z.coerce.number().int().min(1),
+  allowed_image_formats: z.array(z.enum(['jpeg', 'png', 'webp', 'avif'])).min(1, 'At least one image format must be allowed'),
 })
   .refine((data) => !data.vat_number || data.vat_registered, {
     message: 'A VAT number cannot be recorded unless the business is VAT registered',

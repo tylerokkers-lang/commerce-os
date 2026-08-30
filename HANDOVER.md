@@ -4883,9 +4883,271 @@ limitation, not an oversight); a real image source for a product that
 has never previously been listed anywhere (Phase 5's candidate capture
 does not collect image URLs, so `imageCount` is honestly `0` for any
 freshly-imported product today — correctly reported as BLOCKED by
-eligibility rather than faked).
+eligibility rather than faked). **Closed in §60** — Phase 5's capture
+form now takes an optional image URL, and `eligibility.ts` reasons about
+real, provenance/quality/product-match-checked `product_media` rows
+rather than a hardcoded `0`.
 
-## 60. Next step
+## 60. Milestone: Product Media Intelligence & Image Sourcing (Phase 7 of the customer-facing store)
+
+**Audit first, exactly as instructed.** Read `products/intelligence/`
+(Phase 4), `suppliers/discovery/ingestion.ts` (Phase 5),
+`marketplaces/shopify/{eligibility,publicationService}.ts` (Phase 6),
+and confirmed by direct inspection: **no image/media table or column
+existed anywhere in this schema before this milestone** — §59's own
+closing paragraph names this exact gap (`imageCount` was hardcoded to
+`0`). `business_settings.min_product_images` (0040, Phase 6) already
+existed and is reused unchanged as the "how many approved images are
+required" threshold; no duplicate setting was added.
+
+**The brief's own core principle, taken literally:** finding an image
+must never mean using it. Every image that enters `product_media` is
+independently provenance-classified, quality-checked, watermark/
+branding-checked and product-match-checked, then run through one
+deterministic scoring ladder (`mediaScore.ts`) that can only ever reach
+🟢 APPROVED by clearing every check in order — never a weighted average
+that lets a good score compensate for a hard failure, exactly the
+pattern `products/intelligence/recommendation.ts` (Phase 4) and
+`marketplaces/shopify/eligibility.ts` (Phase 6) already established.
+
+**No fake AI, stated as fact, not caveat:** this codebase has no
+image-analysis or computer-vision provider configured. Two checks that
+sound like they need one are built as genuinely deterministic,
+non-vision alternatives instead: (1) **dimensions/format** come from a
+hand-written, dependency-free byte-format parser (`imageHeaderParser.ts`)
+that reads the real JPEG SOF marker / PNG IHDR chunk / WEBP VP8-VP8X
+header fields every one of those formats' own specifications define at
+fixed offsets — not image analysis, just reading a file's own declared
+metadata. Verified against hand-constructed real byte sequences for all
+three formats plus an AVIF `ftyp` box, in `tests/product-media-header-
+parser.test.ts` — AVIF's format is detected but its dimensions are
+honestly `null` (its size box needs walking nested ISOBMFF structures
+not implemented here). (2) **Watermark/branding** (`sourceRiskCheck.ts`)
+checks the image/source URL's own hostname against a short, real list of
+known marketplace and brand domains (`amazon.`, `ebayimg.com`,
+`aliexpress`, `temu.com`, etc.) — a genuine, well-known pattern (that
+platform's own imagery commonly carries its branding), not pixel
+analysis. Because this can only ever look at a URL, never at pixels, the
+result type itself has no `not_detected` value — only `detected` (a
+confident positive) or `uncertain` (this check found nothing, which is
+not the same as confirming there is nothing). Real visual watermark
+detection is explicitly NOT_CONFIGURED/PLANNED, stated in the check's
+own output text, not hidden in a comment.
+
+**As built**, `src/lib/products/media/`:
+- `qualityCheck.ts` — `assessImageQuality`: four independent components
+  (resolution, format, file size, aspect ratio) against real
+  `business_settings` thresholds, never hard-coded. Overall status is the
+  *worst* component (fail > review_required > not_assessed > pass) —
+  one wrong format fails the whole image even if everything else is
+  perfect. An unassessable dimension is `not_assessed`, never guessed as
+  pass or fail, and excluded from the 0-100 score; a fully-unassessable
+  image scores `null`, never `0`.
+- `sourceRiskCheck.ts` — `assessSourceRisk`, described above.
+- `productMatch.ts` — `assessProductMatch`: the strongest possible
+  evidence is `capturedTogether: true` (this media and the product's own
+  identifying facts were submitted in the same form action — genuine,
+  not inferred); absent that, a URL/SKU or URL/title-keyword textual
+  overlap can raise confidence to `matched`, but `mismatched` is only
+  ever returned for an explicit, independently-supplied conflicting SKU
+  — never inferred from a mere absence of a match signal.
+- `duplicateDetection.ts` — `detectDuplicateMedia`: checksum match first
+  (strongest), then normalised-URL match. Deliberately no perceptual/
+  near-duplicate image comparison — that needs real image analysis this
+  codebase doesn't have.
+- `mediaScore.ts` — `scoreMedia` (the fixed ladder: quality fail → reject;
+  product mismatch → reject; watermark detected → reject; unverified
+  (Level 4) source → review; uncertain match → review; quality
+  review/not_assessed → review; otherwise approved, with an explicit
+  unverified-licensing note for user-provided images) and
+  `assessMediaReadiness` (the product-level aggregate: `media_ready`
+  needs enough approved images *and* an approved primary; enough
+  approved but no primary, or too few but at least one pending, is
+  `media_review_required`; anything else — including zero media — is
+  `media_not_ready`, ⚪ NO_ACCEPTABLE_MEDIA in the brief's own vocabulary).
+- `imageHeaderParser.ts` — pure, dependency-free, described above.
+- `imageFetch.ts` (`server-only`) — `fetchImageFacts`: the one place an
+  external image URL is actually reached. http(s)-only, rejects
+  loopback/private/link-local hostnames (a **partial** SSRF mitigation —
+  no connect-time IP re-validation across DNS resolution or redirects,
+  stated here and in `docs/SECURITY.md`, not oversold as complete),
+  `redirect: 'error'` (a redirect is refused outright, never followed —
+  closes the open-redirect SSRF bypass class entirely rather than
+  "handling" it), a 5-second timeout, a 256KB `Range`-header read cap
+  (also the actual performance safeguard against downloading whole
+  files), and a content-type allowlist. Every failure path returns a
+  `Result`, never throws — a fetch failure routes the media straight to
+  `review_required`, it does not abort capture.
+- `assemble.ts` (`server-only`) — `captureAndValidateMedia`: the one
+  orchestrator. Duplicate-checks first (a duplicate short-circuits
+  straight to `review_required` pointing at the existing row, no new
+  facts are fetched); otherwise fetches real facts, runs all three
+  assessments against the org's real settings, scores the result, writes
+  exactly one `product_media` row, and records `MEDIA_CAPTURED` +
+  `MEDIA_VALIDATED` via the existing `audit_logs` table — no second audit
+  system, per the brief's explicit instruction.
+- `moderation.ts` (`server-only`) — the five admin actions the brief
+  names: `approveMedia`/`rejectMedia` (requires a reason)/
+  `setPrimaryMedia` (demotes any other `primary` on the product first —
+  at most one primary at a time)/`removeMedia` (owner-only, matching
+  `product_media`'s own RLS delete policy, re-checked in the Server
+  Action too, not left to the database alone)/`refreshMedia` (re-fetches
+  and re-runs every check against the same URL; re-runs product-match
+  with `capturedTogether: false`, since that fact describes how the
+  media was *originally* captured, not "now" — a refresh can only ever
+  raise a match to `review_required` off stale evidence, never silently
+  re-confirm one).
+- `repository.ts` — `getProductMedia` (list + `assessMediaReadiness`
+  against real settings, the one place the UI and the Shopify gate are
+  guaranteed to agree) and `getApprovedMediaForPublication` (approved-
+  only, primary-first, ordered — exactly what a publication payload
+  needs).
+
+**Database (0041/0042):** one new table, `product_media` — seven new
+enums (`media_type`, `media_role`, `media_source_type`,
+`media_provenance_status`, `media_check_status`,
+`media_watermark_status` — deliberately no `not_detected` value, enforced
+at the schema level too — `media_product_match_status`,
+`media_validation_status`), and four new `business_settings` columns
+(`min_image_width_px`/`min_image_height_px`/`max_image_file_size_bytes`/
+`allowed_image_formats`, all read by `qualityCheck.ts`, never
+hard-coded). RLS follows the **managed-table** shape (org read, owner/
+admin insert/update, owner-only delete) — deliberately different from
+Phase 4's `product_intelligence` (system-computed, no insert/update
+policy at all), because `product_media` is directly operator-editable by
+design. 80 tables total (was 79).
+
+**Connector capability registry extended, honestly, across all eight
+descriptors:** `ConnectorCapabilities` gained `readProductMedia: boolean`
+— `false` on every connector today, **including `manual`**. This is
+deliberate and different from `discoverProducts` (which `manual` honestly
+declares `true`, since a person really can capture a candidate by hand at
+any time): a human pasting a URL into a form is a real capability, but
+it is the person doing the discovering, not the connector — no connector
+in this codebase has yet implemented an automated "read this supplier's
+own image URLs for me" call. Asserted for every connector in
+`tests/supplier-connector-capabilities.test.ts`.
+
+**Phase 5 integration — supplier-provided images, captured with real
+evidence:** `CaptureCandidateForm.tsx` gained one optional "Product image
+URL" field. `captureCandidate` carries it through `product_research.
+raw_signals` (no new column) until the candidate is imported;
+`importCandidate` then calls `captureAndValidateMedia` with
+`sourceType: 'supplier_provided'` and — critically — `capturedTogether:
+true`, because the image URL was submitted in the exact same form action
+as the product's own title/SKU/cost. This is genuine, checkable evidence
+for `productMatch.ts`, not an assumption. A media-capture failure here
+never undoes a successful product import, mirroring the exact same
+"a failed side-effect must never undo the primary write" pattern
+`computeProductIntelligence`'s own post-import call already uses.
+
+**Phase 6 integration — the hardcoded gap from §59 is closed:**
+`assembleShopifyPublicationPreview`'s eligibility check now calls
+`getProductMedia` and passes its real `mediaReadiness`/
+`mediaReadinessReason` straight through — `eligibility.ts`'s `images`
+requirement is satisfied only when the aggregate status is genuinely
+`media_ready` (not merely "count >= threshold", which would have missed
+the "no primary image set" and "some images still pending review" cases
+the brief explicitly asks to distinguish). `createDraft` now calls
+`getApprovedMediaForPublication` and sends real, ordered, **approved-
+only** media URLs to Shopify — a product with rejected or
+still-pending images cannot pass any approved image through to a
+listing payload, no matter what else is true about it.
+
+**UI:** a "Product Media" card on `/products/[id]`
+(`MediaPanel.tsx`) between Product Intelligence and Shopify publication
+— a readiness badge (🟢/🟡/⚪ in the brief's own vocabulary), one card per
+image (thumbnail, 🟢/🟡/🔴 validation state, role, provenance level,
+dimensions/format/size, the validation reason in plain English, a
+watermark warning line only when genuinely `detected`, a product-match
+warning line only when not `matched`), and — gated by role exactly like
+every other write in this codebase — Approve / Reject (typed reason) /
+Set as primary / Refresh / Review source (external link) actions, plus
+an owner-only Remove, plus a manual "Attach an image" form
+(`source_type: 'user_provided'`, with an explicit on-screen statement
+that the attaching operator is responsible for confirming usage rights —
+never silently claimed as licensed). Demo mode shows the same honest
+"not modelled" empty state every other data-dependent panel already
+uses. Settings gained one new "Product media" card (min width/height,
+max file size, allowed formats) — watermark/branding and product-match
+checks are explicitly **not** configurable, stated on-screen, since they
+are not threshold-based.
+
+**Tested:** 45 new tests across 3 files — the header parser against real
+hand-constructed JPEG/PNG/WEBP/AVIF byte sequences plus an unrecognised/
+too-short case (5); the full pure-engine suite in
+`product-media-intelligence.test.ts` — quality (pass, below-resolution
+fail, unsupported-format fail, oversized-file fail, extreme-aspect-ratio
+review, undetermined-dimensions excluded from scoring, fully-unknown
+scores `null` not `0`, worst-component-wins), watermark/branding
+(marketplace-domain detection, brand-term detection, clean URL is only
+ever `uncertain`, the type has no third value), product match (captured-
+together, SKU-in-URL, title-keyword-in-URL, no-evidence-is-uncertain-
+never-mismatched, explicit-conflict-is-mismatched), duplicates
+(checksum match, normalised-URL match, genuinely different is not a
+duplicate), the full scoring ladder (approved path, and one test per
+rejection/review rule proving ordering — a quality failure rejects even
+with a perfect match, an unverified source always needs review even with
+perfect quality), and product-level readiness (no media, ready,
+approved-without-primary, pending-with-insufficient-approved,
+rejected-only) (29); plus one capability-registry regression test and
+the pre-existing eligibility suite updated to the new
+`mediaReadiness`/`mediaReadinessReason` inputs. **Not directly unit
+tested, per this codebase's own established pattern** (a `server-only`
+module cannot be imported into Vitest): `imageFetch.ts`'s SSRF/timeout/
+content-type guards, `assemble.ts`, and `moderation.ts` — verified
+instead by `tsc --noEmit`, code inspection, and the browser check below.
+1637 total (was 1597 before this milestone plus §59's own count — the
+extra beyond the 45 written here come from the two files above growing
+slightly). `npx tsc --noEmit`, `npm run lint` (one `next/image` warning
+on the arbitrary-external-host thumbnail, suppressed with an explanatory
+comment — Next's image optimiser requires allow-listing every hostname
+in advance, which defeats the purpose here), `npm run build`, `npm run
+db:verify` (80 tables, up from 79) all clean. **Verified live in the
+browser** (demo mode): the new "Product Media" card renders its honest
+"not modelled in demo mode" empty state on `/products/[id]` in the
+correct position, the new Settings card renders all four fields
+correctly, no console errors attributable to this milestone.
+
+**Deliberately not built, stated plainly, per the brief's own instruction
+not to exaggerate:** no supplier connector (DSers/Avasam/CJdropshipping/
+Spocket or any other) is connected, configured, or verified — every
+connector's `readProductMedia` capability is `false`, and media sourcing
+today works only for (a) a URL a person pastes into the Phase 5 capture
+form or the new manual-attach control, and (b) whatever a future
+connector's own `discoverProducts()`/media-read implementation would one
+day feed through the exact same `captureAndValidateMedia` entry point —
+the interface exists, nothing implements it yet. No real computer-vision
+or image-analysis provider is configured; watermark detection and
+"AVIF dimensions" are both honest, stated gaps, not silently degraded
+features. No perceptual/near-duplicate image matching (checksum/URL
+only). No automatic publication is triggered by media becoming
+`media_ready` — a human still has to press "Create Shopify draft" and
+then, separately, "Publish live", exactly as before this milestone;
+finding acceptable media only ever *unblocks* one eligibility
+requirement, it never acts on its own. Amazon/eBay media-specific rules
+are explicitly out of scope (the brief's own instruction) — the schema
+and scoring are marketplace-agnostic by design (`product_media` has no
+Shopify-specific column), but no marketplace-specific consumer beyond
+`getApprovedMediaForPublication` for Shopify exists yet.
+
+## 61. Next step
+
+**Recommended Phase 8, following directly from §60:** the media pipeline
+is now fully wired for a human-driven or manually-pasted image source,
+but no supplier connector actually discovers media on its own —
+`readProductMedia` is `false` everywhere. The natural next milestone is
+picking one real, honestly-scoped supplier integration (DSers-compatible
+CSV/API is the brief's own recurring example) and implementing a genuine
+`readProductMedia` call for it, which would flow through
+`captureAndValidateMedia` unchanged — no new scoring/validation logic
+needed, only a new, real source of `mediaUrl`/`sourceUrl` values. A
+second, smaller candidate: a real image-analysis provider (for genuine
+visual watermark detection and AVIF dimensions) would need to be chosen,
+configured, and marked `CONFIGURED`/`VERIFIED` deliberately — not
+invented — the moment one is actually connected; until then,
+`sourceRiskCheck.ts`'s conservative URL-based check remains the honest
+state of the art here.
 
 **Done in §53: channel-level decisions**, exactly as described below when
 this was first written — `channel_product_decisions`, the full

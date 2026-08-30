@@ -2207,7 +2207,65 @@ before any test was written against the buggy version.
 specific brief); any automatic publish/pause/archive; per-variant
 pricing (no price column exists on `product_variants`); a real image
 source for freshly Phase-5-imported products (correctly reported
-BLOCKED, not faked).
+BLOCKED, not faked — **closed in Phase 7 below**).
+
+## Milestone — Product Media Intelligence & Image Sourcing ✅ complete (Phase 7 of the customer-facing store)
+
+Closes the exact gap Phase 6 left open: a freshly-imported product had
+no image source at all, so Shopify eligibility's `images` requirement
+was always hardcoded `imageCount: 0`. This milestone gives Commerce OS a
+trustworthy, auditable answer to "is this product's media actually
+suitable for commercial publication" — never simply "an image URL
+exists, so use it." Every image is independently provenance-classified
+(supplier/manufacturer/user-provided/unverified — a four-level hierarchy),
+quality-checked (resolution/format/size/aspect-ratio against real,
+configurable thresholds), watermark/branding-checked (a deterministic,
+non-vision URL-pattern check — this codebase has no image-analysis
+provider, and none is faked to look more sophisticated than it is), and
+product-matched (real evidence — captured together with the product's
+own facts, or a textual SKU/title overlap — never a guess), then run
+through one deterministic scoring ladder that can only reach 🟢 APPROVED
+by clearing every check in order.
+
+**As built:** `src/lib/products/media/` — `qualityCheck.ts`,
+`sourceRiskCheck.ts`, `productMatch.ts`, `duplicateDetection.ts`,
+`mediaScore.ts` (all pure, fully unit-tested), `imageHeaderParser.ts` (a
+hand-written, dependency-free JPEG/PNG/WEBP header parser — no image
+library, no fake AI vision), `imageFetch.ts` (`server-only`; SSRF-
+mitigated, timeout-bounded, 256KB-capped, content-type-allowlisted
+fetch), `assemble.ts` (the capture orchestrator) and `moderation.ts`
+(approve/reject/set-primary/remove/refresh), plus `repository.ts` for UI
+reads. One new table, `product_media` (managed RLS — org read, owner/
+admin write, owner delete), seven new enums, four new
+`business_settings` columns. `business_settings.min_product_images`
+(Phase 6) is reused unchanged.
+
+**Phase 5 integration:** the candidate capture form gained an optional
+image URL, carried through `product_research.raw_signals` and registered
+as `supplier_provided` media — with genuine `capturedTogether: true`
+evidence — the moment a candidate is imported into a real product.
+**Phase 6 integration:** `eligibility.ts`'s `images` requirement and
+`createDraft`'s image payload now both read real `product_media` rows
+via `assessMediaReadiness`/`getApprovedMediaForPublication` — approved-
+only, primary-first, ordered — instead of the old hardcoded `0`/`[]`.
+
+**UI:** a "Product Media" card on `/products/[id]` between Product
+Intelligence and Shopify publication — readiness badge, per-image cards
+with the brief's own 🟢/🟡/🔴 vocabulary, and Approve/Reject/Set-primary/
+Refresh/Review-source/manual-attach controls, owner-gated Remove. A new
+"Product media" Settings card for the four quality thresholds.
+
+**Deliberately not built, stated plainly:** no supplier connector
+(DSers/Avasam/CJdropshipping/Spocket) is connected or verified — every
+connector's `readProductMedia` capability is `false`; media sourcing
+works only via a person pasting a URL (Phase 5's capture form, or the
+new manual-attach control). No real computer-vision/image-analysis
+provider is configured — watermark detection is a genuine, deterministic
+URL-pattern check, not vision, and is stated as such in its own output;
+AVIF dimensions are an honest, stated gap. No perceptual/near-duplicate
+image matching. No automatic publication — media becoming `media_ready`
+only ever unblocks one eligibility requirement; a human still presses
+"Create Shopify draft" and, separately, "Publish live."
 
 ## Cross-cutting, ongoing
 

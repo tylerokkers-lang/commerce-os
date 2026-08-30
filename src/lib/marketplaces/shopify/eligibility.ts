@@ -1,4 +1,5 @@
 import type { PublicationDecision, PublicationRequirement } from '../publicationGate'
+import type { MediaReadinessStatus } from '@/lib/products/media/mediaScore'
 
 /**
  * Shopify publication eligibility (Milestone: controlled Shopify
@@ -22,8 +23,8 @@ export interface ShopifyEligibilityInputs {
   corePublication: PublicationDecision
   hasTitle: boolean
   hasDescription: boolean
-  imageCount: number
-  minImageCount: number
+  mediaReadiness: MediaReadinessStatus
+  mediaReadinessReason: string
   selectedPriceMinor: number | null
   variantsValid: boolean
   variantIssue: string | null
@@ -50,14 +51,7 @@ export function assessShopifyEligibility(input: ShopifyEligibilityInputs): Shopi
       input.hasDescription,
       input.hasDescription ? 'Description is set.' : 'No customer-facing description on file.',
     ),
-    req(
-      'images',
-      'Product images',
-      input.imageCount >= input.minImageCount,
-      input.imageCount >= input.minImageCount
-        ? `${input.imageCount} image${input.imageCount === 1 ? '' : 's'} on file.`
-        : `${input.imageCount} image${input.imageCount === 1 ? '' : 's'} on file — at least ${input.minImageCount} required. Missing product images.`,
-    ),
+    req('images', 'Product images', input.mediaReadiness === 'media_ready', input.mediaReadinessReason),
     req(
       'selling_price',
       'Selling price selected',

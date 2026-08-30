@@ -52,6 +52,10 @@ const RUNNING_SETTINGS: AutomationSettings = {
   maxCandidatesPerDiscoveryRun: 20,
   maxProductsPendingReview: 50,
   minProductImages: 1,
+  minImageWidthPx: 800,
+  minImageHeightPx: 800,
+  maxImageFileSizeBytes: 5242880,
+  allowedImageFormats: ['jpeg', 'png', 'webp'],
 }
 
 const PAUSED_SETTINGS: AutomationSettings = { ...RUNNING_SETTINGS, automationPaused: true, automationPausedReason: 'Owner paused automation while reviewing Q3 numbers' }

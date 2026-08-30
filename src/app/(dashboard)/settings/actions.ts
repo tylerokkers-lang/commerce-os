@@ -62,6 +62,10 @@ export async function saveBusinessSettings(
     max_candidates_per_discovery_run: formData.get('max_candidates_per_discovery_run'),
     max_products_pending_review: formData.get('max_products_pending_review'),
     min_product_images: formData.get('min_product_images'),
+    min_image_width_px: formData.get('min_image_width_px'),
+    min_image_height_px: formData.get('min_image_height_px'),
+    max_image_file_size_bytes: Math.round(Number(formData.get('max_image_file_size_mb') ?? 5) * 1024 * 1024),
+    allowed_image_formats: formData.getAll('allowed_image_formats'),
   })
 
   if (!parsed.success) {

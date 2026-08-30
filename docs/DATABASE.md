@@ -91,6 +91,28 @@ and an append-only history table (`channel_listing_transitions`, with an
 of the decision"), both confirmed unused by any application code before
 this milestone.
 
+The product media intelligence milestone (0041/0042) added **one new
+table**, `product_media`, after confirming no image/media table or column
+existed anywhere in the schema before it. Seven new enums back it:
+`media_type`, `media_role`, `media_source_type`,
+`media_provenance_status`, `media_check_status`,
+`media_watermark_status` (deliberately only `detected`/`uncertain` — no
+`not_detected` value exists, enforced at the schema level, not just in
+application code, since a deterministic URL-based check can never
+positively confirm the absence of a watermark), and
+`media_product_match_status`. Also added: four new `business_settings`
+columns (`min_image_width_px`, `min_image_height_px`,
+`max_image_file_size_bytes`, `allowed_image_formats`) — the deterministic
+quality thresholds `src/lib/products/media/qualityCheck.ts` reads, never
+hard-codes. `business_settings.min_product_images` (0040) is reused
+unchanged as the "how many approved images are required" threshold — no
+duplicate setting was added. RLS for `product_media` follows the
+**managed-table** shape (org read, owner/admin insert/update, owner-only
+delete) rather than the **system-computed** shape `product_intelligence`
+(0037/0038) uses (no insert/update policy at all) — this table is
+directly operator-editable (approve/reject/set-primary/remove/manual-
+attach), unlike a system-computed score. 80 tables total (was 79).
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

@@ -27,8 +27,8 @@ const BASE: ShopifyEligibilityInputs = {
   corePublication: PASSING_CORE,
   hasTitle: true,
   hasDescription: true,
-  imageCount: 3,
-  minImageCount: 1,
+  mediaReadiness: 'media_ready',
+  mediaReadinessReason: '2 approved images, including a primary image.',
   selectedPriceMinor: 1999,
   variantsValid: true,
   variantIssue: null,
@@ -49,9 +49,9 @@ describe('Shopify publication eligibility', () => {
   })
 
   it('missing images blocks eligibility — the brief\'s own "Missing product images" example', () => {
-    const result = assessShopifyEligibility({ ...BASE, imageCount: 0, minImageCount: 1 })
+    const result = assessShopifyEligibility({ ...BASE, mediaReadiness: 'media_not_ready', mediaReadinessReason: 'No media has been attached to this product yet.' })
     expect(result.eligible).toBe(false)
-    expect(result.blockingReasons.some((r) => r.includes('Missing product images'))).toBe(true)
+    expect(result.blockingReasons.some((r) => r.includes('No media has been attached'))).toBe(true)
   })
 
   it('no selling price selected blocks eligibility', () => {
@@ -98,9 +98,10 @@ describe('Shopify publication eligibility', () => {
     expect(keys).toContain('selling_price')
   })
 
-  it('exactly meeting the minimum image count is sufficient, not a block', () => {
-    const result = assessShopifyEligibility({ ...BASE, imageCount: 1, minImageCount: 1 })
+  it('media_review_required blocks eligibility (approved but no primary, or awaiting review) without claiming it is ready', () => {
+    const result = assessShopifyEligibility({ ...BASE, mediaReadiness: 'media_review_required', mediaReadinessReason: '1 approved image, but none is set as the primary image.' })
     const imagesReq = result.requirements.find((r) => r.key === 'images')
-    expect(imagesReq?.satisfied).toBe(true)
+    expect(imagesReq?.satisfied).toBe(false)
+    expect(result.eligible).toBe(false)
   })
 })

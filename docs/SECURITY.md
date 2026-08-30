@@ -440,6 +440,88 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What the product media intelligence milestone changed here (Phase 7 of the customer-facing store)
+
+This is the first milestone in this codebase that fetches content from an
+arbitrary, operator-or-supplier-supplied external URL
+(`src/lib/products/media/imageFetch.ts`'s `fetchImageFacts`), so it is
+the first place SSRF, oversized-download and dangerous-content-type risks
+actually apply. Every one of the brief's named threats is addressed
+directly, and each mitigation's real limits are stated here rather than
+implied to be complete:
+
+- **SSRF (partial, stated as partial).** Only `http:`/`https:` URLs are
+  accepted — `file:`, `ftp:`, `data:`, and anything else are rejected
+  before any network call is made. The hostname is checked against a
+  regex list covering loopback (`127.`, `::1`), the unspecified address,
+  RFC1918 private ranges (`10.`, `172.16-31.`, `192.168.`), and link-local
+  addresses (`169.254.` — which also covers the common cloud metadata
+  endpoint address) — the request is refused before `fetch()` is ever
+  called if the hostname matches. This is a **genuinely partial**
+  mitigation, not a complete one: it checks the hostname string, not the
+  IP address a DNS lookup for that hostname actually resolves to (a
+  DNS-rebinding attack — a hostname that resolves to a public IP at
+  request time but a private one at connect time — is not defended
+  against), and `redirect: 'error'` means a redirect is refused outright
+  rather than silently followed, which closes the "public URL that
+  redirects to a private one" bypass class entirely without needing
+  connect-time IP re-validation for that specific case. A full mitigation
+  would need to validate the resolved IP at connect time and on every hop
+  of a redirect chain; that is not built, and this file's own comment
+  says so.
+- **Oversized downloads.** A `Range: bytes=0-262143` header caps every
+  fetch at 256KB regardless of the real file's size, and the response
+  body is measured again after download and rejected if it somehow
+  exceeds that cap anyway (a server ignoring the `Range` header is not
+  trusted to have honoured it). This is also the actual performance
+  safeguard against "download every possible image in full" — no image
+  is ever fully downloaded by this codebase, only enough of its header to
+  parse dimensions.
+- **Dangerous content types.** The response's `Content-Type` header is
+  checked against a small allowlist (`image/jpeg`, `image/jpg`,
+  `image/png`, `image/webp`, `image/avif`) before the body is read at
+  all; anything else — including an HTML error page, a script, or an
+  executable served with a spoofed extension — is rejected by content
+  type, not by file extension (which a URL's path segment cannot be
+  trusted to reflect honestly).
+- **Timeouts.** A 5-second `AbortController` timeout on every fetch — a
+  slow or hanging server cannot tie up a request indefinitely; the
+  failure routes the media straight to `review_required`, it does not
+  crash or hang the calling action.
+- **Path traversal / unauthorised uploads.** This milestone never accepts
+  a file upload or writes to any filesystem path — only an image *URL*
+  is accepted, fetched read-only, and its bytes are held in memory only
+  long enough to parse a header. There is no upload endpoint, so path
+  traversal and "unauthorised file type uploaded to storage" do not apply
+  as attack surfaces here; if a real file-upload feature is added later,
+  it needs its own equivalent review; this section covers only what was
+  actually built.
+- **Authorisation.** Every write to `product_media` — capture, approve,
+  reject, set-primary, refresh, manual-attach — goes through
+  `requireWriteAccess()` (owner/admin) exactly like every other
+  privileged write in this codebase, and RLS (`product_media_insert`/
+  `_update`, owner-or-admin) enforces the same boundary at the database
+  level, not just in the Server Action. `removeMedia` is additionally
+  gated on `canApprove()` (owner-only) in the Server Action, matching
+  `product_media_delete`'s owner-only RLS policy exactly — checked twice,
+  by design, so a bug in one layer does not silently become the only
+  thing standing between a non-owner and a permanent delete.
+- **No fabricated authorisation claim.** `mediaScore.ts`'s approved
+  reason text for `user_provided_unverified_rights` media explicitly
+  states that usage rights were not independently verified, and the
+  "Attach an image" UI control states on-screen that the attaching
+  operator is responsible for confirming they may use the image — this
+  codebase never asserts an image is licensed or authorised beyond what
+  its `source_type` genuinely establishes.
+
+**Not verified**: like every other external-network code path in this
+codebase without live credentials, `fetchImageFacts`'s behaviour against
+a real hostile server (a slow-drip response, a redirect chain, a
+DNS-rebinding attempt) has not been exercised against a live adversarial
+target — the mitigations above are verified by code inspection and the
+`Result`-returning contract's unit-testable pure consumers, not by a
+live penetration test.
+
 ## What the controlled Shopify publication milestone changed here (Phase 6 of the customer-facing store)
 
 No new tables, so no new RLS to add — `channel_products` and

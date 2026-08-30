@@ -20,4 +20,11 @@ describe('Supplier connector capabilities (Phase 5)', () => {
     const direct = listConnectors().find((c) => c.descriptor.key === 'direct_api')
     expect(direct?.descriptor.capabilities.discoverProducts).toBe(false)
   })
+
+  it('every connector, including manual, declares readProductMedia as false — no connector, including a human pasting a URL, is a connector-discovered media source yet (Phase 7)', () => {
+    const connectors = listConnectors()
+    for (const connector of connectors) {
+      expect(connector.descriptor.capabilities.readProductMedia).toBe(false)
+    }
+  })
 })

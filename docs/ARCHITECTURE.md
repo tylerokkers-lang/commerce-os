@@ -64,7 +64,10 @@ src/lib/
   products/      catalogue, lifecycle, identifiers, opportunity scoring,
                  decisions; intelligence/ (quality/risk/capital/pricing/
                  recommendation engines + the assembler that persists
-                 them — see below)
+                 them — see below); media/ (provenance, quality,
+                 watermark/branding, product-match and duplicate checks,
+                 the deterministic media score, the capture/moderation
+                 orchestrators — see below)
   suppliers/     supplier scoring, redundancy, connectors; discovery/
                  (candidate capture, duplicate detection, offer
                  comparison, import — hands off to products/intelligence/

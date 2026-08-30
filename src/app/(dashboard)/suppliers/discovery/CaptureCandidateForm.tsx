@@ -41,6 +41,12 @@ export function CaptureCandidateForm({ suppliers }: { suppliers: readonly { id: 
       </div>
 
       <div>
+        <label htmlFor="imageUrl" className="block text-sm font-medium text-ink">Product image URL</label>
+        <input id="imageUrl" name="imageUrl" type="url" placeholder="https://…" className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/25" />
+        <p className="mt-1 text-xs text-ink-subtle">Optional. A supplier-hosted image URL — checked and scored for quality/provenance automatically once this candidate is imported.</p>
+      </div>
+
+      <div>
         <label htmlFor="unitCostMajor" className="block text-sm font-medium text-ink">Supplier cost</label>
         <input id="unitCostMajor" name="unitCostMajor" type="number" step="0.01" min="0" className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/25" />
       </div>

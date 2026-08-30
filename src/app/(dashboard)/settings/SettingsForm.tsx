@@ -177,6 +177,35 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
         </div>
       </Card>
 
+      <Card>
+        <CardHeader
+          title="Product media"
+          description="Deterministic quality thresholds an image must clear before it can be approved. Watermark/branding and product-match checks are separate from these and cannot be disabled here."
+        />
+        <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+          <Field label="Minimum image width (px)" name="min_image_width_px" type="number" min="1" defaultValue={settings.min_image_width_px} error={errors.min_image_width_px} />
+          <Field label="Minimum image height (px)" name="min_image_height_px" type="number" min="1" defaultValue={settings.min_image_height_px} error={errors.min_image_height_px} />
+          <Field label="Maximum image file size (MB)" name="max_image_file_size_mb" type="number" step="0.1" min="0.1" defaultValue={settings.max_image_file_size_bytes ? Math.round((settings.max_image_file_size_bytes / (1024 * 1024)) * 10) / 10 : 5} error={errors.max_image_file_size_bytes} />
+          <div>
+            <p className="block text-sm font-medium text-ink">Allowed image formats</p>
+            <div className="mt-1 flex flex-wrap gap-3">
+              {(['jpeg', 'png', 'webp', 'avif'] as const).map((format) => (
+                <label key={format} className="flex items-center gap-1.5 text-sm text-ink-muted">
+                  <input
+                    type="checkbox"
+                    name="allowed_image_formats"
+                    value={format}
+                    defaultChecked={(settings.allowed_image_formats ?? ['jpeg', 'png', 'webp']).includes(format)}
+                  />
+                  {format.toUpperCase()}
+                </label>
+              ))}
+            </div>
+            {errors.allowed_image_formats ? <p className="mt-1 text-xs text-negative">{errors.allowed_image_formats}</p> : null}
+          </div>
+        </div>
+      </Card>
+
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"

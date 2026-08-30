@@ -5,6 +5,7 @@ import { createServerSupabase } from '@/lib/supabase/server'
 import { recordAudit } from '@/lib/audit'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { computeProductIntelligence } from '@/lib/products/intelligence/assemble'
+import { captureAndValidateMedia } from '@/lib/products/media/assemble'
 import { detectDuplicateCandidate, type CandidateIdentity, type DuplicateCheckResult } from './duplicateDetection'
 import { validateCandidateInput, generateCandidateSku } from './validation'
 
@@ -46,6 +47,8 @@ export interface CaptureCandidateInput {
   deliveryDaysMin: number | null
   deliveryDaysMax: number | null
   notes: string | null
+  /** Optional supplier-hosted image URL captured alongside the candidate's own facts (Milestone: product media intelligence, Phase 7) — carried through `raw_signals` and registered as `supplier_provided` media only once/if the candidate is imported into a real product. */
+  imageUrl: string | null
   identifiers: readonly { idType: string; value: string }[]
   actorUserId: string
   actorLabel: string | null
@@ -139,6 +142,7 @@ export async function captureCandidate(input: CaptureCandidateInput): Promise<Re
       raw_signals: {
         deliveryDaysMin: input.deliveryDaysMin,
         deliveryDaysMax: input.deliveryDaysMax,
+        imageUrl: input.imageUrl,
       } as never,
     })
     .select('id')
@@ -174,6 +178,7 @@ interface CandidateRow {
   estimated_shipping_minor: number | null
   currency: string
   rejected_reason: string | null
+  raw_signals: { imageUrl?: string | null } | null
 }
 
 export interface ImportResult {
@@ -191,7 +196,7 @@ export async function importCandidate(
 
   const { data: candidate } = await supabase
     .from('product_research')
-    .select('id, org_id, candidate_title, category, status, product_id, supplier_id, supplier_sku, estimated_unit_cost_minor, estimated_shipping_minor, currency, rejected_reason')
+    .select('id, org_id, candidate_title, category, status, product_id, supplier_id, supplier_sku, estimated_unit_cost_minor, estimated_shipping_minor, currency, rejected_reason, raw_signals')
     .eq('org_id', orgId)
     .eq('id', candidateId)
     .maybeSingle<CandidateRow>()
@@ -275,6 +280,35 @@ export async function importCandidate(
     newValue: { sku, title: candidate.candidate_title, source: 'supplier_discovery_candidate' },
     reason: `Created from supplier discovery candidate ${candidateId}.`,
   })
+
+  // Register the candidate's own image URL, if one was captured, as
+  // supplier_provided media (Milestone: product media intelligence,
+  // Phase 7) — captured in the very same form submission as this
+  // product's title/SKU, so `capturedTogether: true` is genuine evidence,
+  // not an assumption. A failure here must never undo the import.
+  const imageUrl = candidate.raw_signals?.imageUrl ?? null
+  if (imageUrl) {
+    try {
+      await captureAndValidateMedia({
+        orgId,
+        productId: product.id,
+        variantId: null,
+        supplierId: candidate.supplier_id,
+        supplierProductId: null,
+        mediaUrl: imageUrl,
+        sourceUrl: null,
+        sourceType: 'supplier_provided',
+        discoveryMethod: 'supplier_candidate_capture',
+        role: 'primary',
+        capturedTogether: true,
+        conflictingSupplierSku: null,
+        actorUserId: actor.userId,
+        actorLabel: actor.label,
+      })
+    } catch (error) {
+      console.error('[supplier-discovery] media capture failed after import', { productId: product.id, error })
+    }
+  }
 
   // Hand off to Phase 4, unchanged — this file supplies data, Phase 4 evaluates it.
   let intelligenceComputed = false

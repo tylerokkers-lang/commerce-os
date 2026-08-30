@@ -30,6 +30,7 @@ export async function captureCandidateAction(_previous: CaptureFormState, formDa
     supplierId: (formData.get('supplierId') as string) || null,
     supplierSku: (formData.get('supplierSku') as string) || null,
     sourceReference: (formData.get('sourceReference') as string) || null,
+    imageUrl: (formData.get('imageUrl') as string) || null,
     source: 'manual',
     unitCostMinor: (() => {
       const major = numberOrNull('unitCostMajor')

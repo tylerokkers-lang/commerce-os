@@ -9,7 +9,7 @@ export type { AutomationSettings } from './settingsTypes'
 export { isCategoryPaused } from './settingsTypes'
 
 const SETTINGS_COLUMNS =
-  'automation_level, automation_paused, automation_paused_at, automation_paused_reason, automation_paused_categories, max_auto_purchase_minor, max_auto_price_change_pct, max_price_movement_per_day_pct, max_auto_refund_minor, max_daily_auto_refund_minor, max_refunds_per_order, max_daily_auto_supplier_spend_minor, max_auto_supplier_switch_cost_increase_pct, min_net_margin_pct, max_daily_ad_spend_minor, min_roas, max_auto_ad_increase_pct, min_gross_margin_pct, min_opportunity_score, min_quality_score, max_risk_score, target_net_margin_pct, advertising_allowance_pct, available_operating_capital_minor, cash_buffer_minor, max_supplier_cost_minor, max_candidates_per_discovery_run, max_products_pending_review, min_product_images'
+  'automation_level, automation_paused, automation_paused_at, automation_paused_reason, automation_paused_categories, max_auto_purchase_minor, max_auto_price_change_pct, max_price_movement_per_day_pct, max_auto_refund_minor, max_daily_auto_refund_minor, max_refunds_per_order, max_daily_auto_supplier_spend_minor, max_auto_supplier_switch_cost_increase_pct, min_net_margin_pct, max_daily_ad_spend_minor, min_roas, max_auto_ad_increase_pct, min_gross_margin_pct, min_opportunity_score, min_quality_score, max_risk_score, target_net_margin_pct, advertising_allowance_pct, available_operating_capital_minor, cash_buffer_minor, max_supplier_cost_minor, max_candidates_per_discovery_run, max_products_pending_review, min_product_images, min_image_width_px, min_image_height_px, max_image_file_size_bytes, allowed_image_formats'
 
 interface SettingsRow {
   automation_level: AutomationSettings['automationLevel']
@@ -41,6 +41,10 @@ interface SettingsRow {
   max_candidates_per_discovery_run: number
   max_products_pending_review: number
   min_product_images: number
+  min_image_width_px: number
+  min_image_height_px: number
+  max_image_file_size_bytes: number
+  allowed_image_formats: string[] | null
 }
 
 function mapSettingsRow(data: SettingsRow): AutomationSettings {
@@ -74,6 +78,10 @@ function mapSettingsRow(data: SettingsRow): AutomationSettings {
     maxCandidatesPerDiscoveryRun: data.max_candidates_per_discovery_run,
     maxProductsPendingReview: data.max_products_pending_review,
     minProductImages: data.min_product_images,
+    minImageWidthPx: data.min_image_width_px,
+    minImageHeightPx: data.min_image_height_px,
+    maxImageFileSizeBytes: data.max_image_file_size_bytes,
+    allowedImageFormats: data.allowed_image_formats ?? [],
   }
 }
 

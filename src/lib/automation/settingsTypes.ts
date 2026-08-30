@@ -70,6 +70,11 @@ export interface AutomationSettings {
   maxProductsPendingReview: number
   /** Milestone: controlled Shopify publication (Phase 6). Below this, the Shopify eligibility gate blocks on "Missing product images." */
   minProductImages: number
+  /** Milestone: product media intelligence (Phase 7). Deterministic resolution/format/size thresholds — never hard-coded in the quality engine itself. */
+  minImageWidthPx: number
+  minImageHeightPx: number
+  maxImageFileSizeBytes: number
+  allowedImageFormats: readonly string[]
 }
 
 /**
@@ -109,6 +114,10 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   maxCandidatesPerDiscoveryRun: 20,
   maxProductsPendingReview: 50,
   minProductImages: 1,
+  minImageWidthPx: 800,
+  minImageHeightPx: 800,
+  maxImageFileSizeBytes: 5242880,
+  allowedImageFormats: ['jpeg', 'png', 'webp'],
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

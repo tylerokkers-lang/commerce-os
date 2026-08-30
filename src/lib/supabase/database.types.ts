@@ -890,6 +890,10 @@ export interface Database {
           max_candidates_per_discovery_run: number
           max_products_pending_review: number
           min_product_images: number
+          min_image_width_px: number
+          min_image_height_px: number
+          max_image_file_size_bytes: number
+          allowed_image_formats: string[]
         }
         Insert: {
           org_id: string
@@ -954,6 +958,10 @@ export interface Database {
           max_candidates_per_discovery_run?: number
           max_products_pending_review?: number
           min_product_images?: number
+          min_image_width_px?: number
+          min_image_height_px?: number
+          max_image_file_size_bytes?: number
+          allowed_image_formats?: string[]
         }
         Update: {
           org_id?: string
@@ -1018,6 +1026,10 @@ export interface Database {
           max_candidates_per_discovery_run?: number
           max_products_pending_review?: number
           min_product_images?: number
+          min_image_width_px?: number
+          min_image_height_px?: number
+          max_image_file_size_bytes?: number
+          allowed_image_formats?: string[]
         }
         Relationships: [
           {
@@ -4143,6 +4155,169 @@ export interface Database {
           },
         ]
       }
+      product_media: {
+        Row: {
+          id: string
+          org_id: string
+          product_id: string
+          variant_id: string | null
+          supplier_id: string | null
+          supplier_product_id: string | null
+          media_type: Database['public']['Enums']['media_type']
+          role: Database['public']['Enums']['media_role']
+          position: number
+          media_url: string
+          source_url: string | null
+          source_type: Database['public']['Enums']['media_source_type']
+          discovery_method: string
+          width: number | null
+          height: number | null
+          file_size_bytes: number | null
+          format: string | null
+          checksum: string | null
+          provenance_status: Database['public']['Enums']['media_provenance_status']
+          quality_status: Database['public']['Enums']['media_check_status']
+          quality_score: number | null
+          quality_components: Json
+          watermark_status: Database['public']['Enums']['media_watermark_status'] | null
+          watermark_detail: string | null
+          product_match_status: Database['public']['Enums']['media_product_match_status']
+          product_match_detail: string | null
+          validation_status: Database['public']['Enums']['media_validation_status']
+          validation_reason: string
+          rejection_reason: string | null
+          reviewed_by: string | null
+          reviewed_at: string | null
+          discovered_at: string
+          validated_at: string | null
+          last_checked_at: string | null
+          is_demo: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          product_id: string
+          variant_id?: string | null
+          supplier_id?: string | null
+          supplier_product_id?: string | null
+          media_type?: Database['public']['Enums']['media_type']
+          role?: Database['public']['Enums']['media_role']
+          position?: number
+          media_url: string
+          source_url?: string | null
+          source_type: Database['public']['Enums']['media_source_type']
+          discovery_method: string
+          width?: number | null
+          height?: number | null
+          file_size_bytes?: number | null
+          format?: string | null
+          checksum?: string | null
+          provenance_status: Database['public']['Enums']['media_provenance_status']
+          quality_status?: Database['public']['Enums']['media_check_status']
+          quality_score?: number | null
+          quality_components?: Json
+          watermark_status?: Database['public']['Enums']['media_watermark_status'] | null
+          watermark_detail?: string | null
+          product_match_status?: Database['public']['Enums']['media_product_match_status']
+          product_match_detail?: string | null
+          validation_status?: Database['public']['Enums']['media_validation_status']
+          validation_reason?: string
+          rejection_reason?: string | null
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          discovered_at?: string
+          validated_at?: string | null
+          last_checked_at?: string | null
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          product_id?: string
+          variant_id?: string | null
+          supplier_id?: string | null
+          supplier_product_id?: string | null
+          media_type?: Database['public']['Enums']['media_type']
+          role?: Database['public']['Enums']['media_role']
+          position?: number
+          media_url?: string
+          source_url?: string | null
+          source_type?: Database['public']['Enums']['media_source_type']
+          discovery_method?: string
+          width?: number | null
+          height?: number | null
+          file_size_bytes?: number | null
+          format?: string | null
+          checksum?: string | null
+          provenance_status?: Database['public']['Enums']['media_provenance_status']
+          quality_status?: Database['public']['Enums']['media_check_status']
+          quality_score?: number | null
+          quality_components?: Json
+          watermark_status?: Database['public']['Enums']['media_watermark_status'] | null
+          watermark_detail?: string | null
+          product_match_status?: Database['public']['Enums']['media_product_match_status']
+          product_match_detail?: string | null
+          validation_status?: Database['public']['Enums']['media_validation_status']
+          validation_reason?: string
+          rejection_reason?: string | null
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          discovered_at?: string
+          validated_at?: string | null
+          last_checked_at?: string | null
+          is_demo?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'product_media_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_media_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_media_reviewed_by_fkey'
+            columns: ['reviewed_by']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_media_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_media_supplier_product_id_fkey'
+            columns: ['supplier_product_id']
+            isOneToOne: false
+            referencedRelation: 'supplier_products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'product_media_variant_id_fkey'
+            columns: ['variant_id']
+            isOneToOne: false
+            referencedRelation: 'product_variants'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       product_performance: {
         Row: {
           id: string
@@ -6091,6 +6266,14 @@ export interface Database {
       market_expansion_recommendation: 'ready' | 'promising' | 'requires_review' | 'blocked' | 'insufficient_facts'
       marketplace_connection_status: 'demo' | 'not_configured' | 'connected' | 'degraded' | 'error'
       marketplace_listing_state: 'discovered' | 'evaluating' | 'approved' | 'ready_to_list' | 'pending_approval' | 'published' | 'paused' | 'ended' | 'blocked'
+      media_check_status: 'pass' | 'review_required' | 'fail' | 'not_assessed'
+      media_product_match_status: 'matched' | 'mismatched' | 'uncertain'
+      media_provenance_status: 'verified_supplier' | 'verified_manufacturer' | 'user_provided_unverified_rights' | 'unverified_source'
+      media_role: 'primary' | 'secondary' | 'product_detail' | 'lifestyle' | 'packaging' | 'dimensions' | 'variant' | 'instructional'
+      media_source_type: 'supplier_provided' | 'manufacturer_provided' | 'user_provided' | 'other_unverified'
+      media_type: 'image' | 'video' | 'document'
+      media_validation_status: 'approved' | 'review_required' | 'rejected'
+      media_watermark_status: 'detected' | 'uncertain'
       member_role: 'owner' | 'admin' | 'analyst' | 'viewer'
       monitor_run_status: 'running' | 'success' | 'partial_success' | 'failed' | 'cancelled'
       movement_reason: 'purchase_received' | 'sale' | 'reservation' | 'reservation_released' | 'return' | 'adjustment' | 'damage' | 'loss' | 'recount' | 'supplier_sync' | 'demo_seed'

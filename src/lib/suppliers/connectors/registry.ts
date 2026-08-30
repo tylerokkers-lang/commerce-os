@@ -63,7 +63,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       rateLimit: { requestsPerMinute: 30, requestsPerDay: 5000, minSecondsBetweenRuns: 300 },
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
-        placeOrders: false, cancelOrders: false, trackingUpdates: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -84,7 +84,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       rateLimit: { requestsPerMinute: 20, requestsPerDay: 2000, minSecondsBetweenRuns: 900 },
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
-        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -104,7 +104,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       rateLimit: { requestsPerMinute: 30, requestsPerDay: 3000, minSecondsBetweenRuns: 300 },
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
-        placeOrders: false, cancelOrders: false, trackingUpdates: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -124,7 +124,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       rateLimit: { requestsPerMinute: 30, requestsPerDay: 3000, minSecondsBetweenRuns: 300 },
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
-        placeOrders: false, cancelOrders: false, trackingUpdates: true,
+        placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -144,7 +144,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       rateLimit: { requestsPerMinute: 20, requestsPerDay: 2000, minSecondsBetweenRuns: 600 },
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
-        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -167,7 +167,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       // than assumed, since no two direct integrations are alike.
       capabilities: {
         discoverProducts: false, readProducts: true, readStock: false, readShipping: false,
-        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -188,7 +188,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       rateLimit: { requestsPerMinute: 10, requestsPerDay: 96, minSecondsBetweenRuns: 900 },
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: false,
-        placeOrders: false, cancelOrders: false, trackingUpdates: false,
+        placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
       },
       usagePolicy: {
         termsUrl: null,

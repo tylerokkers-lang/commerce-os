@@ -7,11 +7,14 @@ import { getProductDetail, getChannelReadinessList } from '@/lib/products/reposi
 import { getProductIntelligence } from '@/lib/products/intelligence/repository'
 import { getSupplierOffersForProduct } from '@/lib/suppliers/discovery/repository'
 import { assembleShopifyPublicationPreview } from '@/lib/marketplaces/shopify/publicationService'
+import { getProductMedia } from '@/lib/products/media/repository'
+import { canApprove } from '@/lib/security/session'
 import { DecisionControl } from '../DecisionControl'
 import { ChannelDecisionControl } from '../ChannelDecisionControl'
 import { ProductIntelligencePanel } from '../ProductIntelligencePanel'
 import { SupplierOffersPanel } from '../SupplierOffersPanel'
 import { ShopifyPublicationPanel } from '../ShopifyPublicationPanel'
+import { MediaPanel } from '../MediaPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +28,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const intelligence = session.isDemo ? null : await getProductIntelligence(session.orgId, product.id)
   const supplierOffers = session.isDemo ? [] : await getSupplierOffersForProduct(session.orgId, product.id)
   const publicationPreview = session.isDemo ? null : await assembleShopifyPublicationPreview(session.orgId, product.id)
+  const mediaState = session.isDemo ? null : await getProductMedia(session.orgId, product.id)
 
   return (
     <>
@@ -83,6 +87,22 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           <ProductIntelligencePanel productId={product.id} data={intelligence} canEdit={canEdit} />
         </Card>
       )}
+
+      {session.isDemo ? (
+        <Card>
+          <CardHeader title="Product media" description="Provenance, quality and product-match checked before any image can be used." />
+          <div className="border-t border-border px-5 py-6">
+            <EmptyState
+              title="Not modelled in demo mode"
+              description="Product media needs a real product and real image sources to check against — demo mode has none of that to show honestly. Connect Supabase to see this populate."
+            />
+          </div>
+        </Card>
+      ) : mediaState ? (
+        <Card>
+          <MediaPanel productId={product.id} media={mediaState.media} readiness={mediaState.readiness} canEdit={canEdit} canRemove={canEdit && canApprove(session)} />
+        </Card>
+      ) : null}
 
       {session.isDemo ? (
         <Card>
