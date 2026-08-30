@@ -62,6 +62,21 @@ export interface MarketplaceCapabilities {
    * 'uncertain'`, never as success.
    */
   verifyWrites: boolean
+  /**
+   * Milestone: controlled Shopify publication (Phase 6). Deliberately
+   * separate from `writeListings` (which gates writes to a listing that
+   * *already exists* — price/inventory/status changes): creating a brand
+   * new product needs no prior `externalId` at all, and in Shopify's case
+   * specifically needs the `write_products` OAuth scope, which is a
+   * different grant from anything this codebase's Admin connector
+   * currently holds (confirmed by inspection: the app's configured scopes
+   * are `read_products`/`read_orders`/`read_inventory`/`read_fulfillments`
+   * only — see `docs/API.md`/`HANDOVER.md` for how that was verified).
+   * `true` would mean this connector can create a new draft listing;
+   * `false` means either no credentials, or credentials with a scope that
+   * doesn't include product creation — never conflated.
+   */
+  createListings: boolean
 }
 
 export interface MarketplaceConnectorDescriptor {
@@ -207,6 +222,59 @@ export interface MarketplaceConnector {
    * `capabilities.verifyWrites` is true.
    */
   verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>>
+
+  /**
+   * Milestone: controlled Shopify publication (Phase 6). Creates a brand
+   * new listing — no `externalId` exists yet, which is exactly why this
+   * is a separate method from `updateListingPrice`/etc rather than an
+   * overload of them. Gated by `descriptor.capabilities.createListings`
+   * at the call site, identically to every other write method in this
+   * interface: a connector declaring `createListings: false` must never
+   * have this called at all.
+   */
+  createListing(input: CreateListingInput): Promise<Result<CreateListingOutcome, WriteFailure>>
+}
+
+export interface CreateListingImage {
+  url: string
+  altText: string | null
+}
+
+export interface CreateListingVariant {
+  /** Our own SKU, when one is assigned — never fabricated if absent. */
+  sku: string | null
+  priceMinor: number
+  /** e.g. [{ name: 'Size', value: 'M' }]. Empty for a single-variant product — Shopify's own "Default Title" convention, not a fake option. */
+  options: readonly { name: string; value: string }[]
+  weightGrams: number | null
+}
+
+export interface CreateListingInput {
+  /** Our internal product id — carried through for traceability/audit only, never sent to the marketplace itself. */
+  productId: string
+  /** Idempotency: resubmitting the same create must never create a duplicate listing. */
+  idempotencyKey: string
+  title: string
+  descriptionHtml: string
+  productType: string | null
+  vendor: string | null
+  tags: readonly string[]
+  currency: string
+  compareAtPriceMinor: number | null
+  images: readonly CreateListingImage[]
+  variants: readonly CreateListingVariant[]
+  seoTitle: string | null
+  seoDescription: string | null
+  /** Every write this codebase performs creates a draft, never a live listing directly — this is not a caller-chosen option. */
+  status: 'draft'
+}
+
+export interface CreateListingOutcome {
+  accepted: boolean
+  externalId: string | null
+  externalHandle: string | null
+  /** A human-viewable admin URL, when the provider's response includes enough to build one. */
+  adminUrl: string | null
 }
 
 export interface FulfilmentUpdateInput {

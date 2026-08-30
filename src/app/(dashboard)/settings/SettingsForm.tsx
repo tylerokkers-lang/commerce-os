@@ -167,6 +167,16 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
         </div>
       </Card>
 
+      <Card>
+        <CardHeader
+          title="Shopify publication"
+          description="What a product needs before it can be created as a Shopify draft. Publishing live always requires an explicit, separate action — that is not a setting."
+        />
+        <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+          <Field label="Minimum product images" name="min_product_images" type="number" min="0" max="20" defaultValue={settings.min_product_images} hint="Below this, Shopify eligibility blocks on missing images" error={errors.min_product_images} />
+        </div>
+      </Card>
+
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"

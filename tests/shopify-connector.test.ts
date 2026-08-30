@@ -532,6 +532,7 @@ describe('12. Capability truthfulness (Milestone Shopify-Read-Only)', () => {
       readFees: false,
       webhooks: false,
       verifyWrites: false,
+      createListings: false,
     })
   })
 

@@ -2167,6 +2167,48 @@ from a recommendation; a REST API surface (Server Actions + repository
 reads, matching this codebase's existing internal-operation pattern, see
 `docs/API.md`).
 
+## Milestone — Controlled Shopify product publication ✅ complete (Phase 6 of the customer-facing store)
+
+Closes the pipeline: an approved product can be checked for Shopify
+eligibility, built into a deterministic payload, created as a Shopify
+DRAFT (never live), and only then explicitly published — a genuinely
+separate, confirmation-gated action. Audited first, and the audit did
+almost all the design work: `channel_products` (Milestone 1) already had
+every column the product↔Shopify mapping needed, and
+`channel_products.workflow_state` (Milestone 4) already had a complete
+matching state machine (`listingLifecycle.ts`) and append-only history
+table, both unused until now. `assessPublicationReadiness` (Milestone 4)
+is reused wholesale as the core of the new eligibility gate.
+
+**As built:** `src/lib/marketplaces/shopify/` — `eligibility.ts`
+(reused core gate + six new content checks: title, description, images,
+selected price, variants, not-a-flagged-duplicate), `payloadBuilder.ts`
+(pure, deterministic, a real "Default Title" fallback for products with
+no captured variants), `priceOverride.ts` (re-runs the real
+profitability engine at the recommended vs. selected price, never a
+second formula), and `publicationService.ts` (the orchestrator —
+idempotent draft creation via explicit lookup, not a database upsert; a
+genuinely separate, re-checked `publishLive`). `MarketplaceConnector`
+gained a `createListing` method and `createListings` capability flag
+across all six connectors — real GraphQL mutation code in the Shopify
+Admin connector, honestly `false` because the app's configured OAuth
+scope doesn't include `write_products` (confirmed by inspection, not
+assumed), and never touched on the blocked eBay connector beyond the
+mechanical stub the interface requires.
+
+**A real idempotency bug caught before shipping:** an early draft used
+`.upsert(..., { onConflict })` against `channel_products`, whose unique
+constraint includes a nullable `variant_id` — Postgres treats two NULLs
+as distinct, so every call would have inserted a second row rather than
+updating the first. Fixed with an explicit select-then-insert-or-update
+before any test was written against the buggy version.
+
+**Deliberately not built:** Amazon/eBay product creation (Shopify-
+specific brief); any automatic publish/pause/archive; per-variant
+pricing (no price column exists on `product_variants`); a real image
+source for freshly Phase-5-imported products (correctly reported
+BLOCKED, not faked).
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

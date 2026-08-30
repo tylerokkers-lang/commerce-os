@@ -889,6 +889,7 @@ export interface Database {
           max_supplier_cost_minor: number | null
           max_candidates_per_discovery_run: number
           max_products_pending_review: number
+          min_product_images: number
         }
         Insert: {
           org_id: string
@@ -952,6 +953,7 @@ export interface Database {
           max_supplier_cost_minor?: number | null
           max_candidates_per_discovery_run?: number
           max_products_pending_review?: number
+          min_product_images?: number
         }
         Update: {
           org_id?: string
@@ -1015,6 +1017,7 @@ export interface Database {
           max_supplier_cost_minor?: number | null
           max_candidates_per_discovery_run?: number
           max_products_pending_review?: number
+          min_product_images?: number
         }
         Relationships: [
           {

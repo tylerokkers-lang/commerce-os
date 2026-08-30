@@ -7,6 +7,8 @@ import {
 } from '@/lib/demo/marketplaceData'
 import type {
   ConnectionHealth,
+  CreateListingInput,
+  CreateListingOutcome,
   FetchOptions,
   FetchOutcome,
   FulfilmentUpdateInput,
@@ -48,6 +50,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     readFees: true,
     webhooks: false,
     verifyWrites: true,
+    createListings: true,
   },
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
@@ -131,6 +134,26 @@ export class ShopifyDemoConnector implements MarketplaceConnector {
       stockQty: ShopifyDemoConnector.writtenStock.has(externalId) ? ShopifyDemoConnector.writtenStock.get(externalId)! : listing.stockQty,
       status: writtenStatus === 'paused' ? 'draft' : writtenStatus === 'active' ? 'active' : listing.status,
       reportedAt: new Date().toISOString(),
+    })
+  }
+
+  // A real, in-process "created listing" ledger — the same discipline as
+  // the price/stock/status maps above, so a demo publication flow can
+  // genuinely create a draft, then read it back, in one session.
+  private static createdListings = new Map<string, CreateListingInput>()
+
+  async createListing(input: CreateListingInput): Promise<Result<CreateListingOutcome, WriteFailure>> {
+    if (!input.title.trim()) return err({ reason: 'rejected', detail: 'A product title is required.' })
+    if (input.variants.length === 0) return err({ reason: 'rejected', detail: 'At least one variant is required.' })
+
+    const externalId = `gid://shopify-demo/Product/${input.idempotencyKey}`
+    ShopifyDemoConnector.createdListings.set(externalId, input)
+
+    return ok({
+      accepted: true,
+      externalId,
+      externalHandle: input.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+      adminUrl: `https://demo-store.myshopify.com/admin/products/${input.idempotencyKey}`,
     })
   }
 }

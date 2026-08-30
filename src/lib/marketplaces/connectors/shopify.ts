@@ -1,6 +1,8 @@
 import { err, ok, type Result } from '@/lib/core/result'
 import type {
   ConnectionHealth,
+  CreateListingInput,
+  CreateListingOutcome,
   FetchOptions,
   FetchOutcome,
   FulfilmentUpdateInput,
@@ -91,6 +93,14 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     readFees: false, // Fee reporting requires the separate Shopify Payments Payouts API, not implemented here — matches fetchFees()'s own honest error.
     webhooks: false,
     verifyWrites: false,
+    // Milestone: controlled Shopify publication (Phase 6). Confirmed by
+    // inspection: this app's configured OAuth scopes are read_products/
+    // read_orders/read_inventory/read_fulfillments only — write_products
+    // was never requested. Even with real credentials, product creation
+    // would be rejected by Shopify's own API until that scope is added
+    // in the Dev Dashboard and the app is reinstalled — a configuration
+    // step outside this codebase, not something a code change can grant.
+    createListings: false,
   },
   requiredCredentials: ['SHOPIFY_STORE_DOMAIN', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'SHOPIFY_API_VERSION'],
   // The GraphQL Admin API is cost-based (a points bucket, not a flat
@@ -566,6 +576,79 @@ export class ShopifyConnector implements MarketplaceConnector {
 
   async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
     return err(`Shopify write verification is not implemented (capabilities.verifyWrites is false) — requested for "${externalId}".`)
+  }
+
+  /**
+   * A real `productCreate` mutation against Shopify's current documented
+   * GraphQL Admin API — written and structured exactly like every read
+   * query in this file, but genuinely never reachable in this environment:
+   * `capabilities.createListings` is `false` (see the descriptor above),
+   * and the JSDoc on this method's interface already establishes that a
+   * capability-gated method must never be called at all when its flag is
+   * false, so no caller in this codebase invokes this. IMPLEMENTED, NOT
+   * LIVE-VERIFIED — the mutation shape has never been run against a real
+   * store, and could not be even with credentials, since the configured
+   * OAuth scope does not include `write_products`.
+   */
+  async createListing(input: CreateListingInput): Promise<Result<CreateListingOutcome, WriteFailure>> {
+    const creds = credentials()
+    if (!creds) return err({ reason: 'not_configured', detail: 'Shopify Admin API credentials are not configured.' })
+
+    const variants = input.variants.length > 0 ? input.variants : [{ sku: null, priceMinor: input.compareAtPriceMinor ?? 0, options: [], weightGrams: null }]
+
+    const mutation = `
+      mutation ProductCreate($input: ProductInput!) {
+        productCreate(input: $input) {
+          product {
+            id
+            handle
+            onlineStoreUrl
+          }
+          userErrors { field message }
+        }
+      }
+    `
+
+    const variables = {
+      input: {
+        title: input.title,
+        descriptionHtml: input.descriptionHtml,
+        productType: input.productType ?? undefined,
+        vendor: input.vendor ?? undefined,
+        tags: input.tags,
+        status: 'DRAFT',
+        seo: input.seoTitle || input.seoDescription ? { title: input.seoTitle ?? undefined, description: input.seoDescription ?? undefined } : undefined,
+        images: input.images.map((i) => ({ src: i.url, altText: i.altText ?? undefined })),
+        variants: variants.map((v) => ({
+          sku: v.sku ?? undefined,
+          price: (v.priceMinor / 100).toFixed(2),
+          compareAtPrice: input.compareAtPriceMinor !== null ? (input.compareAtPriceMinor / 100).toFixed(2) : undefined,
+          weight: v.weightGrams ?? undefined,
+          weightUnit: v.weightGrams !== null ? 'GRAMS' : undefined,
+          options: v.options.map((o) => o.value),
+        })),
+        options: variants[0]?.options.map((o) => o.name) ?? undefined,
+      },
+    }
+
+    const result = await graphqlRequest<{
+      productCreate: { product: { id: string; handle: string; onlineStoreUrl: string | null } | null; userErrors: readonly { field: readonly string[]; message: string }[] }
+    }>(creds, mutation, variables)
+
+    if (!result.ok) return err({ reason: 'rejected', detail: result.error })
+
+    const { product, userErrors } = result.value.productCreate
+    if (userErrors.length > 0) {
+      return err({ reason: 'rejected', detail: `Shopify rejected the product: ${userErrors.map((e) => e.message).join('; ')}` })
+    }
+    if (!product) return err({ reason: 'rejected', detail: 'Shopify returned no product and no error — treated as a rejection, never assumed successful.' })
+
+    return ok({
+      accepted: true,
+      externalId: product.id,
+      externalHandle: product.handle,
+      adminUrl: `https://${creds.storeDomain}/admin/products/${product.id.split('/').pop()}`,
+    })
   }
 }
 

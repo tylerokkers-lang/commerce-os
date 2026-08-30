@@ -61,6 +61,7 @@ export async function saveBusinessSettings(
     max_supplier_cost_minor: majorToMinorOrNull(formData.get('max_supplier_cost_major')),
     max_candidates_per_discovery_run: formData.get('max_candidates_per_discovery_run'),
     max_products_pending_review: formData.get('max_products_pending_review'),
+    min_product_images: formData.get('min_product_images'),
   })
 
   if (!parsed.success) {

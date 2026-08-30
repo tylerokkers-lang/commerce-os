@@ -49,6 +49,9 @@ export const businessSettingsSchema = z.object({
   // catalogue size, per the brief.
   max_candidates_per_discovery_run: z.coerce.number().int().min(1).max(500),
   max_products_pending_review: z.coerce.number().int().min(1).max(2000),
+
+  // Controlled Shopify publication (Phase 6).
+  min_product_images: z.coerce.number().int().min(0).max(20),
 })
   .refine((data) => !data.vat_number || data.vat_registered, {
     message: 'A VAT number cannot be recorded unless the business is VAT registered',

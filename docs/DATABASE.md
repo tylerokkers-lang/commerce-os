@@ -78,6 +78,19 @@ added: two new `business_settings` columns
 every other discovery criterion already existed from the product
 intelligence milestone or Milestone 1 and is reused unchanged.
 
+The controlled Shopify publication milestone (0040) added **one column**:
+`business_settings.min_product_images`. Everything else it needed
+already existed: `channel_products` (Milestone 1's `0005`) already had
+`external_id`/`external_sku`/`listing_url`/`status`/`price_minor`/
+`compare_at_minor`/`fulfilment_supplier_id`/`last_synced_at`/`sync_error`
+— the entire product↔Shopify mapping — and its own
+`workflow_state marketplace_listing_state` column (Milestone 4's `0015`)
+already had a complete state machine (`src/lib/marketplaces/listingLifecycle.ts`)
+and an append-only history table (`channel_listing_transitions`, with an
+`evidence jsonb` column already shaped for "what was true at the moment
+of the decision"), both confirmed unused by any application code before
+this milestone.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

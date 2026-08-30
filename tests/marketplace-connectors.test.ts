@@ -207,6 +207,7 @@ describe('capabilities are declared, not assumed', () => {
       readFees: false,
       webhooks: false,
       verifyWrites: false,
+      createListings: false,
     })
   })
 
@@ -232,6 +233,7 @@ describe('capabilities are declared, not assumed', () => {
       readFees: false,
       webhooks: false,
       verifyWrites: false,
+      createListings: false,
     })
   })
 

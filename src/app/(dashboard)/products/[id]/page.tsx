@@ -6,10 +6,12 @@ import { requireSession, canWrite } from '@/lib/security/session'
 import { getProductDetail, getChannelReadinessList } from '@/lib/products/repository'
 import { getProductIntelligence } from '@/lib/products/intelligence/repository'
 import { getSupplierOffersForProduct } from '@/lib/suppliers/discovery/repository'
+import { assembleShopifyPublicationPreview } from '@/lib/marketplaces/shopify/publicationService'
 import { DecisionControl } from '../DecisionControl'
 import { ChannelDecisionControl } from '../ChannelDecisionControl'
 import { ProductIntelligencePanel } from '../ProductIntelligencePanel'
 import { SupplierOffersPanel } from '../SupplierOffersPanel'
+import { ShopifyPublicationPanel } from '../ShopifyPublicationPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +24,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const canEdit = canWrite(session) && !session.isDemo
   const intelligence = session.isDemo ? null : await getProductIntelligence(session.orgId, product.id)
   const supplierOffers = session.isDemo ? [] : await getSupplierOffersForProduct(session.orgId, product.id)
+  const publicationPreview = session.isDemo ? null : await assembleShopifyPublicationPreview(session.orgId, product.id)
 
   return (
     <>
@@ -80,6 +83,22 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           <ProductIntelligencePanel productId={product.id} data={intelligence} canEdit={canEdit} />
         </Card>
       )}
+
+      {session.isDemo ? (
+        <Card>
+          <CardHeader title="Shopify publication" description="Draft first, always." />
+          <div className="border-t border-border px-5 py-6">
+            <EmptyState
+              title="Not modelled in demo mode"
+              description="Shopify publication needs a real Shopify connection and real product/cost data — demo mode has none of that to show honestly. Connect Supabase and Shopify to see this populate."
+            />
+          </div>
+        </Card>
+      ) : publicationPreview?.ok ? (
+        <Card>
+          <ShopifyPublicationPanel productId={product.id} preview={publicationPreview.value} canEdit={canEdit} />
+        </Card>
+      ) : null}
 
       <div>
         <h2 className="text-base font-semibold text-ink">Channel decisions</h2>

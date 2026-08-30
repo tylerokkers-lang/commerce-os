@@ -51,6 +51,7 @@ const RUNNING_SETTINGS: AutomationSettings = {
   maxSupplierCostMinor: null,
   maxCandidatesPerDiscoveryRun: 20,
   maxProductsPendingReview: 50,
+  minProductImages: 1,
 }
 
 const PAUSED_SETTINGS: AutomationSettings = { ...RUNNING_SETTINGS, automationPaused: true, automationPausedReason: 'Owner paused automation while reviewing Q3 numbers' }

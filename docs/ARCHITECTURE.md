@@ -70,7 +70,10 @@ src/lib/
                  comparison, import — hands off to products/intelligence/
                  unchanged, never a second scoring engine — see below)
   compliance/    per-channel gate reads
-  marketplaces/  connectors (Shopify/Amazon), reconciliation, publication gate
+  marketplaces/  connectors (Shopify/Amazon), reconciliation, publication
+                 gate, listing lifecycle; shopify/ (eligibility, payload
+                 builder, price override, the controlled publication
+                 orchestrator — reuses the gate above, never a second one)
   orders/        ingestion, validation, refunds, the order pipeline
   fulfilment/    lifecycle, selection, submission, tracking
   inventory/     stock reservation

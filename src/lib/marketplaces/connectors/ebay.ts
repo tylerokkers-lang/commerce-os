@@ -1,6 +1,7 @@
 import { err, ok, type Result } from '@/lib/core/result'
 import type {
   ConnectionHealth,
+  CreateListingOutcome,
   FetchOptions,
   FetchOutcome,
   FulfilmentUpdateInput,
@@ -121,6 +122,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     readFees: false, // Requires the separate Finances API, not implemented here.
     webhooks: false, // eBay's Notification API exists but is not implemented here — see HANDOVER.md.
     verifyWrites: false,
+    createListings: false, // Out of scope for the Shopify-specific Phase 6 milestone — untouched otherwise, including the blocked OAuth issue tracked as ticket #260827-000029.
   },
   requiredCredentials: ['EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET', 'EBAY_REFRESH_TOKEN'],
   // eBay's default per-app daily call limit varies by API and account tier;
@@ -639,6 +641,11 @@ export class EbayConnector implements MarketplaceConnector {
 
   async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
     return err(`eBay listing verification for ${externalId} is not implemented in this connector (capabilities.verifyWrites is false).`)
+  }
+
+  /** `capabilities.createListings` is false — out of scope for the Shopify-specific Phase 6 milestone. */
+  async createListing(): Promise<Result<CreateListingOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'eBay product creation is not implemented in this connector — out of scope for the Shopify-specific controlled publication milestone.' })
   }
 }
 

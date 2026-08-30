@@ -68,6 +68,8 @@ export interface AutomationSettings {
   maxCandidatesPerDiscoveryRun: number
   /** Ceiling on how many candidates may sit at 'new'/'duplicate' awaiting a human decision before further capture is refused. */
   maxProductsPendingReview: number
+  /** Milestone: controlled Shopify publication (Phase 6). Below this, the Shopify eligibility gate blocks on "Missing product images." */
+  minProductImages: number
 }
 
 /**
@@ -106,6 +108,7 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   maxSupplierCostMinor: null,
   maxCandidatesPerDiscoveryRun: 20,
   maxProductsPendingReview: 50,
+  minProductImages: 1,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

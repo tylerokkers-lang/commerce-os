@@ -2,6 +2,7 @@ import { err, ok, type Result } from '@/lib/core/result'
 import { demoEbayListings, demoEbayOrders } from '@/lib/demo/marketplaceData'
 import type {
   ConnectionHealth,
+  CreateListingOutcome,
   FetchOptions,
   FetchOutcome,
   FulfilmentUpdateInput,
@@ -37,6 +38,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     readFees: false,
     webhooks: false,
     verifyWrites: false,
+    createListings: false, // Out of scope for the Shopify-specific Phase 6 milestone.
   },
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
@@ -99,6 +101,11 @@ export class EbayDemoConnector implements MarketplaceConnector {
 
   async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
     return err(`eBay write verification is not modelled by this demo connector (capabilities.verifyWrites is false) — requested for "${externalId}".`)
+  }
+
+  /** `capabilities.createListings` is false — out of scope for the Shopify-specific Phase 6 milestone. */
+  async createListing(): Promise<Result<CreateListingOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'eBay product creation is not modelled by this demo connector.' })
   }
 }
 

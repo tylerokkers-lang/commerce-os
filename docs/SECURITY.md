@@ -440,6 +440,52 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What the controlled Shopify publication milestone changed here (Phase 6 of the customer-facing store)
+
+No new tables, so no new RLS to add — `channel_products` and
+`channel_listing_transitions` already had the standard policies from
+`0016_rls_marketplace.sql` (the former a managed table, the latter
+read-only, service-role-write history).
+
+The load-bearing safety property this milestone adds is at the capability
+level, exactly mirroring Phase 5's `placeOrders`/`cancelOrders`
+precedent: `MarketplaceCapabilities.createListings` is `false` on every
+one of the six connectors (asserted directly by
+`tests/shopify-publication-safety.test.ts`), and every write path in
+`publicationService.ts` checks that flag — via the connector looked up
+through the registry, typed as the shared interface — before ever
+calling `createListing()`/`setListingStatus()`. This is layered on top
+of, not instead of, the pre-existing "why is the Admin connector
+read-only" fact: even if `SHOPIFY_CLIENT_ID`/`SHOPIFY_CLIENT_SECRET`
+were both configured in this environment (they exist but the app's
+granted OAuth scope is read-only), `createListings` would still need to
+be flipped to `true` deliberately in code once that scope is verified —
+never inferred from credentials merely being present.
+
+Live publication (`publishLive`) has its own second gate beyond the
+capability check: it always reloads a **fresh**
+`assembleShopifyPublicationPreview` rather than trusting whatever the
+browser last rendered, and refuses if eligibility no longer passes — a
+stale approval (a compliance flag raised, a supplier going out of stock,
+between page load and click) cannot slip through. The UI's own
+confirmation checkbox for live publication is a genuine precondition
+(`publishShopifyListingAction` rejects the request outright when
+unchecked), not a cosmetic control the server ignores.
+
+`createDraft`/`publishLive`/`pauseListing`/`overrideSellingPrice` all
+require `requireWriteAccess()` (owner/admin) and use the user-scoped
+Supabase client, matching every other privileged write in this codebase
+— RLS itself, not just the Server Action's session check, is what stops
+a lower-privileged member from triggering any of them.
+
+**Not verified**: this milestone adds no new instance of the two
+pre-existing, unverified boundaries (real RLS enforcement under an
+authenticated session; anything requiring a live Supabase project) — no
+live Supabase project or Shopify write-scoped credentials exist in this
+environment, so the full create-draft/publish-live flow has only ever
+been exercised through its pure sub-engines' unit tests and code
+inspection, never a real Shopify API call.
+
 ## What the supplier discovery milestone changed here (Phase 5 of the customer-facing store)
 
 No new tables' RLS to add — `product_research` and `supplier_products`

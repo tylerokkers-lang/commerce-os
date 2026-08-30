@@ -2,6 +2,7 @@ import { err, ok, type Result } from '@/lib/core/result'
 import { demoAmazonFees, demoAmazonListings, demoAmazonOrders } from '@/lib/demo/marketplaceData'
 import type {
   ConnectionHealth,
+  CreateListingOutcome,
   FetchOptions,
   FetchOutcome,
   FulfilmentUpdateInput,
@@ -38,6 +39,7 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     readFees: true,
     webhooks: false,
     verifyWrites: true,
+    createListings: false, // Matches the real connector — out of scope for the Shopify-specific Phase 6 milestone.
   },
   requiredCredentials: [],
   rateLimit: { requestsPerMinute: null, requestsPerDay: null, minSecondsBetweenRuns: 0 },
@@ -121,6 +123,11 @@ export class AmazonDemoConnector implements MarketplaceConnector {
       status: writtenStatus === 'paused' ? 'archived' : writtenStatus === 'active' ? 'active' : listing.status,
       reportedAt: new Date().toISOString(),
     })
+  }
+
+  /** `capabilities.createListings` is false, matching the real connector — out of scope for the Shopify-specific Phase 6 milestone. */
+  async createListing(): Promise<Result<CreateListingOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'Amazon product creation is not simulated by this demo connector — out of scope for the Shopify-specific controlled publication milestone.' })
   }
 }
 

@@ -4703,7 +4703,189 @@ manual entry; automatic publishing or supplier purchasing from a
 recommendation; a REST API surface for discovery (Server Actions,
 matching this codebase's existing internal-operation pattern).
 
-## 59. Next step
+## 59. Milestone: controlled Shopify product publication (Phase 6 of the customer-facing store)
+
+**Audit first, exactly as instructed, and it found almost the entire
+brief already built.** Before writing anything: read `marketplaces/connectors/{types,shopify}.ts`,
+`marketplaces/publicationGate.ts`, `marketplaces/listingLifecycle.ts`, the
+`channel_products`/`channel_listing_transitions` schema, and §§55–58.
+Three findings changed the whole shape of this milestone:
+
+1. **Why the Admin connector is read-only, confirmed precisely, not
+   guessed:** the app's configured OAuth scopes are `read_products`/
+   `read_orders`/`read_inventory`/`read_fulfillments` only —
+   `write_products` was never requested. This is a Shopify-Dev-Dashboard-
+   side configuration fact, not a code limitation: no amount of code
+   changes this codebase makes can grant that scope. Even with real
+   credentials in this environment (there are none), a `productCreate`
+   call would be rejected by Shopify's own API until that scope is added
+   and the app is reinstalled.
+2. **The brief's entire "PRODUCT ↔ SHOPIFY MAPPING" already existed**:
+   `channel_products` (0005, Milestone 1) already has `external_id`/
+   `external_sku`/`listing_url`/`status`/`price_minor`/`compare_at_minor`/
+   `fulfilment_supplier_id`/`last_synced_at`/`sync_error`. No new columns
+   needed for it.
+3. **The brief's entire "PRODUCT PUBLICATION STATE MACHINE" already
+   existed too**: `channel_products.workflow_state marketplace_listing_state`
+   (0015, Milestone 4 — `discovered → evaluating → approved →
+   ready_to_list → pending_approval → published → paused/ended`, plus
+   `blocked` from anywhere) already had a complete pure state machine
+   (`src/lib/marketplaces/listingLifecycle.ts`'s `planListingTransition`)
+   and an append-only history table (`channel_listing_transitions`, with
+   an `evidence jsonb` column already built for exactly "what was true at
+   the moment of the decision"). Confirmed unused by any application
+   code before this milestone — wired up, not rebuilt. `pending_approval`
+   is used as "a Shopify draft exists, awaiting the explicit live-publish
+   action" — a natural, non-invented reading of a state whose own
+   original comment already says "sitting in the approval queue."
+   `assessPublicationReadiness` (`publicationGate.ts`, Milestone 4) is the
+   brief's "PRODUCT ELIGIBILITY GATE" — reused wholesale.
+
+**Genuinely new, minimal:** migration 0040 adds exactly one
+`business_settings` column, `min_product_images` (default 1) — every
+other eligibility input (profitability, compliance, supplier status,
+automation permission) already comes from the reused core gate.
+
+**As built**, `src/lib/marketplaces/shopify/`:
+- `eligibility.ts` — `assessShopifyEligibility`, a thin composition: the
+  reused `PublicationDecision.requirements` array plus six new,
+  Shopify-specific content checks (title, description, image count
+  against the new setting, a selected selling price, valid variants, not
+  a flagged Phase-5 duplicate). `ELIGIBLE`/`BLOCKED`, every requirement
+  carrying its own plain-English detail — the brief's exact example
+  shape ("Missing product images", "Profitability below minimum
+  threshold"), never a silent pass.
+- `payloadBuilder.ts` — pure, fully unit-tested `buildShopifyProductPayload`.
+  Takes an already-selected price (from Phase 4 or a manual override,
+  never calculated here) and real variant/image data; a product with no
+  real variants (the normal case for anything imported through Phase 5,
+  which does not capture variant data) gets exactly one implicit default
+  variant from its own SKU and the selected price — Shopify's own
+  "Default Title" convention, not a fabricated option. Every payload is
+  tagged `commerce-os:product-id:<id>` — the mitigation for the one
+  documented idempotency gap below.
+- `priceOverride.ts` — `checkPriceOverride` re-runs the real
+  `calculateProfitability` (Phase 4's own engine, `@/lib/profitability`)
+  at both the recommended and the selected price, never a second pricing
+  formula. Produces the brief's exact warning shape: "This price changes
+  estimated contribution margin from 42.0% to 18.0%. Minimum configured
+  margin is 25%."
+- `publicationService.ts` — the one server-only orchestrator.
+  `assembleShopifyPublicationPreview` composes `getChannelReadiness`
+  (Phase 3/4), `getProductIntelligence` (Phase 4), and
+  `getSupplierOffersForProduct` (Phase 5) into the brief's PRODUCT/
+  PRICING/INTELLIGENCE/SUPPLIER/PUBLICATION-STATUS preview shape — no new
+  computation, only assembly. `createDraft` is **idempotent by explicit
+  lookup**: if `channel_products.external_id` is already set, it returns
+  that record rather than attempting a second create — a genuine bug
+  caught before it shipped (see below). Capability-gated exactly like
+  every other write in this codebase: `getShopifyConnector().descriptor.capabilities.createListings`
+  is checked before ever calling `createListing()`, never called-and-
+  told-no. `publishLive` is a fully separate, explicitly-triggered
+  function that reloads a **fresh** eligibility preview (never the
+  cached one) before calling the marketplace. `overrideSellingPrice`
+  writes directly to `channel_products.price_minor` (never a marketplace
+  call) and audits the change via the existing `PRICE_CHANGED` action
+  with previous/new value and the operator's stated reason — reusing
+  `audit_logs`, no new "override" table.
+
+**A real bug caught mid-build, not shipped:** the first draft of
+`createDraft`/`overrideSellingPrice` used `.upsert(fields, { onConflict:
+'org_id,channel_id,product_id,variant_id' })` against `channel_products`.
+That table's own unique constraint includes the nullable `variant_id`
+column, and Postgres treats two `NULL`s as distinct for uniqueness by
+default — meaning every call for a product-level (no-variant) listing
+would have silently **inserted a second row** instead of updating the
+existing one, defeating idempotency at exactly the point the brief calls
+"extremely important." Fixed by replacing every upsert with an explicit
+select-then-insert-or-update (`writeChannelProductRow`), found and
+corrected before any test was written against it, not after.
+
+**Connector interface extended, honestly, across all six connectors:**
+`MarketplaceCapabilities` gained `createListings: boolean`, and
+`MarketplaceConnector` gained `createListing()` — a new method, not an
+overload of `updateListingPrice`, because creating a listing has no
+existing `externalId` to key off. `shopify.ts` — the real Admin
+connector — got a genuine `productCreate` GraphQL mutation, written and
+structured exactly like every read query in the file: **IMPLEMENTED,
+NOT LIVE-VERIFIED**, and structurally unreachable in this environment
+either way, since `createListings` stays `false` and every caller checks
+that flag first. `shopifyDemo.ts` got a real (in-process, simulated)
+implementation so demo mode can exercise the full create → verify flow.
+`amazon.ts`/`amazonDemo.ts`/`ebay.ts`/`ebayDemo.ts` got the minimal
+honest `not_supported` stub the interface now requires — **eBay's OAuth/
+credential logic was not touched at all**; the only change to that file
+is the mechanical new method, identical in spirit to its existing
+`updateListingPrice` stub, and does not touch ticket #260827-000029 in
+any way.
+
+**The one documented, not-hidden idempotency gap:** Shopify's own
+`productCreate` mutation has no first-class idempotency-key parameter.
+If a create request reaches Shopify's servers and succeeds, but the
+response is lost before this codebase records `external_id` (a timeout,
+a crashed process), a retry has no way to discover the already-created
+product from this side alone. The traceability tag every payload carries
+is the documented mitigation — a future reconciliation pass could search
+for it — but a full search-before-create check was not built this phase.
+Flagged as follow-up work, not papered over.
+
+**UI:** a "Shopify publication" panel on `/products/[id]`
+(`ShopifyPublicationPanel.tsx`) — the eligibility checklist, pricing
+comparison, a price-override control that only appears behind an
+explicit click and requires a typed reason, "Create Shopify draft"
+(disabled unless eligible), and — only once a draft exists — a genuinely
+separate "Publish live" control gated behind its own confirmation
+checkbox (unchecked by default, not cosmetic: `publishShopifyListingAction`
+refuses without it) plus a "Pause listing" control once live. No
+"Publish immediately" or "auto-publish all" action exists anywhere.
+Settings gained one new field, "Minimum product images", in a new
+"Shopify publication" card.
+
+**Tested:** 33 new tests across 4 files — eligibility (complete/
+passing, missing title, missing images using the brief's own wording,
+no price selected, failed core gate takes precedence, flagged duplicate,
+invalid variants, pending-approval-as-warning-not-block), payload
+generation (single implicit variant, real multi-variant passthrough,
+images, the traceability tag, SEO present/absent, missing-optional-data
+never errors, status always draft, currency passthrough), price override
+(no-op at the recommended price, override message shape, below-minimum
+flagging, allowed override, raising price still flagged as an override,
+independently-real margin figures), and safety (no connector — real or
+demo — has any placeOrders-shaped capability at all; `createListings`
+false on every real connector; the state machine refuses discovered→
+published and evaluating→published; a reason is mandatory for every
+transition; `ended` is terminal). 1597 total (was 1564).
+`npx tsc --noEmit`, `npm run lint`, `npm run build` (zero new routes —
+this milestone only adds a panel to the existing product page), `npm run
+db:verify` (79 tables, unchanged — one new column) all clean. **Verified
+live in the browser** (demo mode, no Shopify/Supabase credentials
+exist): the new panel renders its honest "not modelled in demo mode"
+state on `/products/[id]`, the new Settings card renders correctly, no
+console errors either place. **Not live-verified**: the entire
+create-draft → publish-live flow against a real Shopify store — no live
+Supabase project or Shopify write-scoped credentials exist in this
+environment, so `publicationService.ts` is proven only through its pure
+sub-engines' unit tests, `tsc`, and code inspection.
+
+**Deliberately not built, per the brief's own explicit instructions and
+genuine scope limits found during the audit:** Amazon/eBay product
+creation (the brief is explicitly Shopify-specific; Amazon's own
+Listings Items API uses per-product-type JSON schemas, a substantially
+larger undertaking correctly left out of scope rather than half-built);
+CSV/bulk publication of any kind; any automatic publish/pause/archive
+triggered by a score or a schedule (`Shopify publication` remains
+"Product creation = Assisted, Draft creation = Approval required, Live
+publication = Explicit approval required", exactly the brief's own
+stated starting posture); per-variant pricing (`product_variants` has no
+price column at all — every variant of a multi-variant product currently
+shares the product-level selected price, a genuine, documented schema
+limitation, not an oversight); a real image source for a product that
+has never previously been listed anywhere (Phase 5's candidate capture
+does not collect image URLs, so `imageCount` is honestly `0` for any
+freshly-imported product today — correctly reported as BLOCKED by
+eligibility rather than faked).
+
+## 60. Next step
 
 **Done in §53: channel-level decisions**, exactly as described below when
 this was first written — `channel_product_decisions`, the full

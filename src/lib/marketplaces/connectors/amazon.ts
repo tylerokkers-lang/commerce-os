@@ -2,6 +2,7 @@ import { err, ok, type Result } from '@/lib/core/result'
 import { signAwsRequestV4, type AwsCredentials } from './amazonSigning'
 import type {
   ConnectionHealth,
+  CreateListingOutcome,
   FetchOptions,
   FetchOutcome,
   FulfilmentUpdateInput,
@@ -48,6 +49,14 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     readFees: true,
     webhooks: true, // Amazon calls these "Notifications", delivered via SQS/EventBridge rather than a plain webhook URL.
     verifyWrites: true,
+    // Milestone: controlled Shopify publication (Phase 6) — out of scope
+    // for that milestone, which is Shopify-specific. Amazon's own listing
+    // creation (the Listings Items API, driven by per-product-type JSON
+    // schemas rather than a single generic payload shape) is real, but
+    // substantially more involved than Shopify's, and was not written
+    // this phase — false here is an honest "not built", not "no
+    // credentials", exactly like `createListing()` below states directly.
+    createListings: false,
   },
   requiredCredentials: [
     'AMAZON_SP_CLIENT_ID',
@@ -344,6 +353,11 @@ export class AmazonConnector implements MarketplaceConnector {
     // different, batch-oriented call. A targeted single-ASIN verification
     // is left for when a real write exists to verify.
     return err(`Single-listing verification for ${externalId} is not yet implemented in this connector.`)
+  }
+
+  /** `capabilities.createListings` is false — see the descriptor's own comment. Not attempted, per the Shopify-scoped Phase 6 milestone. */
+  async createListing(): Promise<Result<CreateListingOutcome, WriteFailure>> {
+    return err({ reason: 'not_supported', detail: 'Amazon product creation (Listings Items API, per-product-type schemas) is not implemented in this connector — out of scope for the Shopify-specific controlled publication milestone.' })
   }
 }
 
