@@ -72,6 +72,7 @@ export default async function SupplierDiscoveryPage() {
                   <th className="px-3 py-2">Supplier</th>
                   <th className="px-3 py-2">Cost</th>
                   <th className="px-3 py-2">Shipping</th>
+                  <th className="px-3 py-2">Delivery</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Action</th>
                 </tr>

@@ -6,6 +6,7 @@ import { recordAudit } from '@/lib/audit'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { computeProductIntelligence } from '@/lib/products/intelligence/assemble'
 import { captureAndValidateMedia } from '@/lib/products/media/assemble'
+import { fetchAndAssessShipping } from '@/lib/suppliers/shippingQuotes'
 import { detectDuplicateCandidate, type CandidateIdentity, type DuplicateCheckResult } from './duplicateDetection'
 import { validateCandidateInput, generateCandidateSku } from './validation'
 
@@ -391,6 +392,33 @@ export async function importCandidate(
       } catch (error) {
         console.error('[supplier-discovery] variant media capture failed after import', { productId: product.id, error })
       }
+    }
+  }
+
+  // Real, destination-aware shipping quote (Milestone: shipping-aware
+  // publication, Phase 9) — only possible for a connector-sourced
+  // candidate that actually carries a connector product reference. A
+  // manually-captured candidate has none, and correctly gets no
+  // shipping quote: the Shopify eligibility gate will honestly read
+  // that as "no shipping quote has been fetched yet" rather than a
+  // silent pass. UK ('GB') is this business's primary destination
+  // today — never hard-coded elsewhere, this is the one call site that
+  // chooses it, so a future second destination is a one-line change
+  // here, not a rewrite.
+  if (candidate.raw_signals?.connectorKey && candidate.raw_signals?.connectorProductRef) {
+    try {
+      await fetchAndAssessShipping({
+        orgId,
+        supplierId: candidate.supplier_id,
+        productId: product.id,
+        connectorKey: candidate.raw_signals.connectorKey,
+        connectorProductRef: candidate.raw_signals.connectorProductRef,
+        destinationCountry: 'GB',
+        actorUserId: actor.userId,
+        actorLabel: actor.label,
+      })
+    } catch (error) {
+      console.error('[supplier-discovery] shipping quote fetch failed after import', { productId: product.id, error })
     }
   }
 

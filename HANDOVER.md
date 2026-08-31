@@ -5325,7 +5325,168 @@ brief's own "no fake data" instruction (§33) and the fact that
 made a demo connector for one specific, named, real supplier both
 unnecessary and risky to build honestly.
 
-## 62. Next step
+## 62. Milestone: Shipping-aware publication & real CJ verification (Phase 9 of the customer-facing store)
+
+**Audit first, exactly as instructed, and it found the exact gap the
+brief named:** `shippingPolicy.ts` and `supplier_shipping_quotes`
+(Phase 8) existed, but grepping the codebase for
+`fetchAndAssessShipping` found **zero callers anywhere** — the write
+path was built but never wired to anything, and Phase 6's
+`assessShopifyEligibility` had no shipping input at all. This milestone
+closes exactly that gap, and only that gap, plus the CJ live
+verification the brief asks to attempt.
+
+**CJ live verification — genuinely attempted, honestly not possible:**
+checked `process.env.CJ_API_KEY` directly, `.env.local`, and `.env` —
+none exist in this environment (confirmed with `env | grep`, direct
+file greps, and a dotenv-load check). No live call was made; nothing
+was fabricated. Status: **IMPLEMENTED, NOT CONFIGURED, NOT
+LIVE-VERIFIED** — identical to Phase 8's own honest conclusion, because
+nothing about this environment changed.
+
+**Shipping suitability, wired into the one authoritative gate, not a
+second one:** `eligibility.ts` gained `shippingStatus`/`shippingReason`
+inputs and one new requirement, `shipping`, evaluated exactly like
+every other requirement in the array — satisfied only when
+`shippingStatus === 'approved'`. `publicationService.ts`'s
+`assembleShopifyPublicationPreview` calls the new
+`getShippingSuitability(orgId, productId, 'GB')` and passes its result
+straight in. `createDraft`'s own existing `if
+(!preview.eligibility.eligible) return err(...)` guard (unchanged since
+Phase 6) now automatically refuses a product whose shipping is
+`rejected` or `review_required` — no new check was needed there, and no
+second gate was built, because the existing single gate was extended
+correctly.
+
+**Freshness, the smallest real mechanism, not a new setting:**
+`shippingPolicy.ts` gained a `SHIPPING_QUOTE_MAX_AGE_DAYS = 14`
+constant (a documented technical default, deliberately not a
+`business_settings` column — the brief's own "smallest possible
+mechanism" instruction) and a `quotedAt`/`now` input. A stale quote is
+`review_required` regardless of what it once said — a fact this file's
+own comment makes explicit: an old "approved" is no more trustworthy
+than an old "rejected," since a supplier's shipping situation can
+change. `supplier_shipping_quotes.quoted_at` (already existed, Phase 8)
+is the only timestamp this needed; no migration was required.
+
+**`max_delivery_days` reused, not duplicated:** confirmed via `grep`
+that no `shopify_max_delivery_days` or equivalent was created — the
+brief's own explicit prohibition. The existing `business_settings`
+column (Milestone 1, `0001_core.sql`) is read by
+`getShippingSuitability` on every call, so an operator changing it in
+Settings changes the verdict immediately, without a new fetch.
+
+**As built**, `src/lib/suppliers/`:
+- `shippingPolicy.ts` — `assessShippingSuitability` extended with the
+  freshness rule above (`quotedAt`, `now`, `SHIPPING_QUOTE_MAX_AGE_DAYS`).
+- `shippingQuotes.ts` — two new functions. `getShippingSuitability`
+  reads the single most recent fetch batch of quotes for a
+  product+destination (identified by their shared `quoted_at` — one
+  `fetchAndAssessShipping` call inserts a whole batch together) and
+  re-assesses them against the org's *current* settings and the
+  *current* time, so a setting change or the passage of time changes
+  the verdict without a new fetch. `refreshShippingQuoteForProduct` is
+  the "check/refresh" action a product page needs: it recovers the
+  connector reference from the product's own originating
+  `product_research` row (`raw_signals.connectorKey`/
+  `connectorProductRef`, already stored there since Phase 8) rather
+  than a new column, and refuses honestly ("no connector-sourced
+  reference is on file") for a manually-captured product with nothing
+  to check against.
+
+**Import wiring — the missing link:** `importCandidate`
+(`suppliers/discovery/ingestion.ts`) now calls `fetchAndAssessShipping`
+immediately after media capture, but only when the imported candidate's
+`raw_signals` carries a `connectorKey`/`connectorProductRef` — i.e.,
+only for CJ-sourced imports, exactly mirroring how connector-sourced
+media capture already worked. A manually-captured candidate gets no
+shipping quote, honestly, and will read as `review_required` ("no
+shipping quote has been fetched yet") until an admin runs the new
+"Check/refresh UK shipping" action. **This is a deliberate, disclosed
+tightening of the Shopify publication gate**: every product without a
+fetched-and-approved shipping quote — including every product imported
+before this feature existed — now blocks on the new `shipping`
+requirement until checked. Not a bug; the brief's own central
+requirement.
+
+**UK-first, never hard-coded UK-only:** `PRIMARY_DESTINATION_COUNTRY =
+'GB'` is one named constant in `publicationService.ts`; every function
+underneath it (`getShippingSuitability`, `assessShippingSuitability`,
+`fetchAndAssessShipping`) takes `destinationCountry` as a parameter, so
+a second destination is a call-site change, not a rewrite — matching
+the brief's explicit "do not hard-code UK-only architecture" instruction.
+
+**Admin UI:** a new "Supplier & shipping" card on `/products/[id]`
+(`ShippingPanel.tsx`, between Product media and Shopify publication) —
+supplier name, supplier cost (in the product's real currency, not
+assumed GBP), shipping cost, delivery estimate, destination, tracking,
+the APPROVED/REVIEW REQUIRED/REJECTED decision with its exact reason
+text, and (for editors) the "Check / refresh UK shipping" action.
+`ShopifyPublicationPanel.tsx` needed **no code change at all** — it
+already generically renders every entry in
+`preview.eligibility.requirements`, so the new `shipping` requirement
+appears in its existing ✓/✕ checklist automatically, exactly the
+brief's own example format. `/suppliers/discovery`'s queue table gained
+a "Delivery" column reading the estimated delivery range already
+captured at Phase 8 capture time but never previously displayed —
+`Unknown` when genuinely absent, never a guess.
+
+**Tests:** 9 new (5 shipping-policy — freshness within/past/at-boundary
+the limit, a stale quote that would otherwise reject staying
+`review_required` not silently kept `rejected`, an unsupported
+destination with no quotes; 4 eligibility — shipping approved is
+eligible, shipping review_required blocks, shipping rejected blocks
+with the specific reason, a rejected shipping decision is the *only*
+failing requirement when everything else passes). 1683 total (was
+1674). `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run
+db:verify` (81 tables, unchanged — **no migration this phase**,
+confirmed unnecessary by inspecting `supplier_shipping_quotes` and
+`business_settings` first) all clean. **Verified live in the browser**,
+desktop and mobile, zero console errors: `/products/[id]`'s new
+"Supplier & shipping" card renders its honest empty state in demo mode
+in the correct position; `/suppliers/connectors` and `/settings`
+unaffected and correct; `/suppliers/discovery` still correctly hides
+its entire content (including the new Delivery column) behind demo
+mode's honest empty state.
+
+**Not live-verified, stated plainly:** no CJ account exists in this
+environment — nothing in this phase has been proven against a real CJ
+response, only mocked tests and code inspection, same as Phase 8. The
+full real pipeline (CJ → discovery → product → shipping quote →
+eligibility → Shopify draft) has never run end to end against real
+infrastructure; every stage is proven only in isolation.
+
+**Deliberately not built, stated plainly:** CJ's own
+`/logistic/unavailableShippingMethods` endpoint (documented, real, not
+called) — this connector cannot yet distinguish "the supplier
+explicitly confirmed no shipping option to this destination" from "no
+positive quote was returned," so both currently resolve to
+`review_required`, never a guessed `rejected`. This is the *safe*
+direction of error (never wrongly blocks a viable product without a
+human check) but is not yet the strongest form of automatic rejection
+the brief's own example describes; flagged as a real, bounded follow-up,
+not silently glossed over. Variant-level and per-shipping-method
+storage beyond the "best quote" summary shown in the UI (every quote in
+a batch is persisted; the UI shows only the fastest). Phase 4's
+profitability engine was **not touched** — it already consumes
+`supplier_products.shipping_cost_minor`, which Phase 8's own capture
+flow already populates from the real CJ shipping quote, confirmed
+unchanged by inspection; no second profitability engine, no rewrite,
+exactly as instructed.
+
+## 63. Next step
+
+**Recommended Phase 10, following directly from §62:** a real
+`CJ_API_KEY` would let the shipping-aware pipeline built in §62 be
+proven for the first time against a real product — a genuine
+end-to-end run (CJ discovery → capture → import → real shipping quote
+→ eligibility → Shopify draft, exactly the chain §27 of the Phase 9
+brief describes) rather than the mocked/inspected proof it has today.
+A smaller, bounded follow-up if a real account exists sooner: wire
+CJ's `/logistic/unavailableShippingMethods` endpoint (documented in
+§61's connector, never called) so an explicit "this supplier cannot
+ship here" fact can become a genuine `rejected`, not just
+`review_required` — see §62's own "deliberately not built" note.
 
 **Recommended Phase 9, following directly from §61:** two natural,
 bounded follow-ups, neither requiring a redesign. (1) Wire

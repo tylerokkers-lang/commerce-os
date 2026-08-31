@@ -2318,11 +2318,70 @@ this environment — every method is proven only by documentation-derived
 mocked tests and code inspection, never a real API call.
 **Deliberately not built:** any order-placement capability (none
 exists on the interface); Phase 6 Shopify eligibility does not yet
-consult the new shipping-suitability result (flagged as the immediate
-next step); a simulated `cjdropshippingDemo.ts` connector (the brief's
+consult the new shipping-suitability result (**closed in Phase 9
+below**); a simulated `cjdropshippingDemo.ts` connector (the brief's
 own "no fake data" instruction, and `/suppliers/discovery` already
 hides its entire contents in demo mode, made this both unnecessary and
 inadvisable to build for one specific, named, real supplier).
+
+## Milestone — Shipping-aware publication & real CJ verification ✅ complete (Phase 9 of the customer-facing store)
+
+Closes the exact gap the audit found: Phase 8 built
+`fetchAndAssessShipping` but nothing called it, and Phase 6's
+`assessShopifyEligibility` had no shipping input — a product could
+reach a Shopify draft with no shipping suitability check at all.
+CJ live verification was genuinely attempted first (checked shell env,
+`.env.local`, `.env`) — no `CJ_API_KEY` exists in this environment, so
+nothing was fabricated: **IMPLEMENTED, NOT CONFIGURED, NOT
+LIVE-VERIFIED**, unchanged from Phase 8's own honest conclusion.
+
+**As built:** `shippingPolicy.ts` gained a freshness rule
+(`SHIPPING_QUOTE_MAX_AGE_DAYS = 14`, a code constant per the brief's
+"smallest possible mechanism" instruction, not a new setting) — a stale
+quote is `review_required` regardless of what it once said.
+`shippingQuotes.ts` gained `getShippingSuitability` (reads the most
+recent quote batch for a product+destination, re-assessed against the
+org's *current* settings and time) and `refreshShippingQuoteForProduct`
+(the admin "check/refresh" action, recovering its connector reference
+from the product's own `product_research.raw_signals` rather than a new
+column). `importCandidate` now calls `fetchAndAssessShipping`
+immediately after media capture for connector-sourced imports — the
+missing wire. `eligibility.ts` gained a `shipping` requirement,
+satisfied only when the status is `approved`; `createDraft`'s existing,
+unchanged eligibility check now automatically refuses shipping-blocked
+products — no second gate was built.
+
+**A deliberate, disclosed tightening:** every product without a
+fetched-and-approved shipping quote — including every product imported
+before this feature existed — now blocks on the new requirement until
+checked. Stated plainly in `HANDOVER.md` §62 as the brief's own central
+requirement, not an oversight.
+
+**UI:** a new "Supplier & shipping" card on `/products/[id]`
+(supplier, cost, shipping cost, delivery estimate, destination,
+tracking, the decision, and its exact reason, plus a refresh action).
+`ShopifyPublicationPanel.tsx` needed no code change — it already
+generically renders every eligibility requirement, so `shipping`
+appears in its existing checklist automatically. `/suppliers/discovery`
+gained a "Delivery" column using data already captured but never shown.
+
+**Tested:** 9 new (5 shipping-policy freshness/destination, 4
+eligibility shipping-requirement), 1683 total. `tsc`/`lint`/`build`/
+`db:verify` (81 tables, **zero new migrations** — audited first, the
+one column needed, `quoted_at`, already existed) all clean.
+Browser-verified on desktop and mobile across all four required pages,
+zero console errors.
+
+**Not live-verified:** the full CJ → discovery → shipping → eligibility
+→ Shopify draft chain has never run against real infrastructure — no
+CJ account or live Supabase project exists here; every stage is proven
+only in isolation (mocked tests, unit tests, code inspection).
+**Deliberately not built:** CJ's `/logistic/unavailableShippingMethods`
+endpoint — an explicit supplier "cannot ship here" fact currently
+resolves to `review_required`, not a distinguishable `rejected`; the
+safe direction of error, but not yet the brief's strongest example.
+Phase 4's profitability engine was not touched — it already consumes
+the real CJ shipping cost via Phase 8's existing capture flow.
 
 ## Cross-cutting, ongoing
 

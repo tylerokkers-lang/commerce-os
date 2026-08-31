@@ -70,16 +70,19 @@ src/lib/
                  orchestrators — see below)
   suppliers/     supplier scoring, redundancy, connectors/ (manual, and
                  the real CJdropshipping connector — Phase 8);
-                 shippingPolicy.ts + shippingQuotes.ts (destination-aware
-                 shipping suitability, Phase 8); discovery/ (candidate
-                 capture, duplicate detection, offer comparison, import —
-                 hands off to products/intelligence/ unchanged, never a
-                 second scoring engine — see below)
+                 shippingPolicy.ts (deterministic shipping suitability +
+                 freshness, Phase 8/9) + shippingQuotes.ts (fetch,
+                 persist, and read back for the Shopify eligibility gate
+                 — Phase 8/9); discovery/ (candidate capture, duplicate
+                 detection, offer comparison, import — hands off to
+                 products/intelligence/ unchanged, never a second scoring
+                 engine — see below)
   compliance/    per-channel gate reads
   marketplaces/  connectors (Shopify/Amazon), reconciliation, publication
-                 gate, listing lifecycle; shopify/ (eligibility, payload
-                 builder, price override, the controlled publication
-                 orchestrator — reuses the gate above, never a second one)
+                 gate, listing lifecycle; shopify/ (eligibility — now
+                 shipping-aware, Phase 9 — payload builder, price
+                 override, the controlled publication orchestrator —
+                 reuses the gate above, never a second one)
   orders/        ingestion, validation, refunds, the order pipeline
   fulfilment/    lifecycle, selection, submission, tracking
   inventory/     stock reservation

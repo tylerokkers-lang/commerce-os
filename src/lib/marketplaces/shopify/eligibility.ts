@@ -1,5 +1,6 @@
 import type { PublicationDecision, PublicationRequirement } from '../publicationGate'
 import type { MediaReadinessStatus } from '@/lib/products/media/mediaScore'
+import type { ShippingSuitabilityStatus } from '@/lib/suppliers/shippingPolicy'
 
 /**
  * Shopify publication eligibility (Milestone: controlled Shopify
@@ -25,6 +26,9 @@ export interface ShopifyEligibilityInputs {
   hasDescription: boolean
   mediaReadiness: MediaReadinessStatus
   mediaReadinessReason: string
+  /** Milestone: shipping-aware publication (Phase 9). From `shippingQuotes.ts`'s `getShippingSuitability` — a fresh, known, within-limit quote is `approved`; anything else (no quote yet, unknown estimate, stale, or too slow) blocks eligibility, never a silent pass. */
+  shippingStatus: ShippingSuitabilityStatus
+  shippingReason: string
   selectedPriceMinor: number | null
   variantsValid: boolean
   variantIssue: string | null
@@ -52,6 +56,7 @@ export function assessShopifyEligibility(input: ShopifyEligibilityInputs): Shopi
       input.hasDescription ? 'Description is set.' : 'No customer-facing description on file.',
     ),
     req('images', 'Product images', input.mediaReadiness === 'media_ready', input.mediaReadinessReason),
+    req('shipping', 'Supplier shipping suitability', input.shippingStatus === 'approved', input.shippingReason),
     req(
       'selling_price',
       'Selling price selected',

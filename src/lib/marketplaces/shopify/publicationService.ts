@@ -8,6 +8,8 @@ import { getProductIntelligence } from '@/lib/products/intelligence/repository'
 import { getSupplierOffersForProduct } from '@/lib/suppliers/discovery/repository'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { getProductMedia, getApprovedMediaForPublication } from '@/lib/products/media/repository'
+import { getShippingSuitability } from '@/lib/suppliers/shippingQuotes'
+import type { ShippingSuitabilityStatus } from '@/lib/suppliers/shippingPolicy'
 import { getMarketplaceConnector } from '../connectors/registry'
 import type { CreateListingImage, CreateListingVariant, MarketplaceConnector } from '../connectors/types'
 import { planListingTransition, type ListingState } from '../listingLifecycle'
@@ -15,6 +17,9 @@ import { assessShopifyEligibility, type ShopifyEligibilityResult } from './eligi
 import { buildShopifyProductPayload } from './payloadBuilder'
 import { checkPriceOverride, type PriceOverrideResult } from './priceOverride'
 import type { TablesUpdate } from '@/lib/supabase/database.types'
+
+/** This business's primary sales destination today — Shopify UK-first, per Phase 8/9's own design. Never hard-coded anywhere else; every other call site reads it from here. */
+const PRIMARY_DESTINATION_COUNTRY = 'GB'
 
 /**
  * Looked up through the registry (typed as the shared `MarketplaceConnector`
@@ -68,6 +73,18 @@ export interface ShopifyPublicationPreview {
   } | null
   supplier: { supplierId: string; supplierName: string; unitCostMinor: number; shippingCostMinor: number } | null
   currentListing: { externalId: string | null; listingUrl: string | null; status: string; workflowState: ListingState } | null
+  /** Milestone: shipping-aware publication (Phase 9) — the same result `eligibility`'s "shipping" requirement is built from, exposed directly so the UI never has to re-derive it. */
+  shipping: {
+    status: ShippingSuitabilityStatus
+    reason: string
+    destinationCountry: string
+    method: string | null
+    shippingCostMinor: number | null
+    currency: string | null
+    totalDeliveryDaysMin: number | null
+    totalDeliveryDaysMax: number | null
+    providesTracking: boolean | 'unknown' | null
+  }
 }
 
 async function loadChannelProductRow(orgId: string, productId: string) {
@@ -144,6 +161,7 @@ export async function assembleShopifyPublicationPreview(orgId: string, productId
   const intelligence = await getProductIntelligence(orgId, productId)
   const offers = await getSupplierOffersForProduct(orgId, productId)
   const mediaState = await getProductMedia(orgId, productId)
+  const shipping = await getShippingSuitability(orgId, productId, PRIMARY_DESTINATION_COUNTRY)
 
   const selectedPriceMinor = listing?.price_minor ?? intelligence?.recommendedPriceMinor ?? null
   const preferredOffer = offers[0] ?? null
@@ -154,6 +172,8 @@ export async function assembleShopifyPublicationPreview(orgId: string, productId
     hasDescription: Boolean(product.description?.trim()),
     mediaReadiness: mediaState.readiness.status,
     mediaReadinessReason: mediaState.readiness.reason,
+    shippingStatus: shipping.status,
+    shippingReason: shipping.reason,
     selectedPriceMinor,
     variantsValid: true, // A product with zero variants gets Shopify's own implicit default variant — never invalid on its own.
     variantIssue: null,
@@ -176,6 +196,17 @@ export async function assembleShopifyPublicationPreview(orgId: string, productId
       : null,
     supplier: preferredOffer ? { supplierId: preferredOffer.supplierId, supplierName: preferredOffer.supplierName, unitCostMinor: preferredOffer.unitCostMinor, shippingCostMinor: preferredOffer.shippingCostMinor } : null,
     currentListing: listing ? { externalId: listing.external_id, listingUrl: listing.listing_url, status: listing.status, workflowState: listing.workflow_state } : null,
+    shipping: {
+      status: shipping.status,
+      reason: shipping.reason,
+      destinationCountry: PRIMARY_DESTINATION_COUNTRY,
+      method: shipping.bestQuote?.method ?? null,
+      shippingCostMinor: shipping.bestQuote?.shippingCost.minor ?? null,
+      currency: shipping.bestQuote?.shippingCost.currency ?? null,
+      totalDeliveryDaysMin: shipping.bestQuote?.totalDeliveryDaysMin ?? null,
+      totalDeliveryDaysMax: shipping.bestQuote?.totalDeliveryDaysMax ?? null,
+      providesTracking: shipping.bestQuote?.providesTracking ?? null,
+    },
   })
 }
 

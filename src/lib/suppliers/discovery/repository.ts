@@ -19,6 +19,11 @@ export interface DiscoveryCandidate {
   statusReason: string | null
   productId: string | null
   collectedAt: string
+  /** Milestone: shipping-aware publication (Phase 9). The supplier's own estimated delivery range, where a connector reported one at capture time — `null` means genuinely not reported, never assumed. */
+  deliveryDaysMin: number | null
+  deliveryDaysMax: number | null
+  /** Which connector this candidate came from, if any — `null` for a manually-typed entry. */
+  connectorKey: string | null
 }
 
 /**
@@ -35,28 +40,34 @@ export async function getDiscoveryQueue(): Promise<readonly DiscoveryCandidate[]
   const supabase = await createServerSupabase()
   const { data } = await supabase
     .from('product_research')
-    .select('id, candidate_title, category, source, source_reference, supplier_id, supplier_sku, estimated_unit_cost_minor, estimated_shipping_minor, currency, status, rejected_reason, product_id, collected_at, suppliers(name)')
+    .select('id, candidate_title, category, source, source_reference, supplier_id, supplier_sku, estimated_unit_cost_minor, estimated_shipping_minor, currency, status, rejected_reason, product_id, collected_at, raw_signals, suppliers(name)')
     .eq('org_id', session.orgId)
     .order('collected_at', { ascending: false })
     .limit(200)
 
-  return (data ?? []).map((row) => ({
-    id: row.id,
-    candidateTitle: row.candidate_title,
-    category: row.category,
-    source: row.source,
-    sourceReference: row.source_reference,
-    supplierId: row.supplier_id,
-    supplierName: (row.suppliers as unknown as { name: string } | null)?.name ?? null,
-    supplierSku: row.supplier_sku,
-    unitCostMinor: row.estimated_unit_cost_minor,
-    shippingCostMinor: row.estimated_shipping_minor,
-    currency: row.currency,
-    status: row.status,
-    statusReason: row.rejected_reason,
-    productId: row.product_id,
-    collectedAt: row.collected_at,
-  }))
+  return (data ?? []).map((row) => {
+    const rawSignals = row.raw_signals as { deliveryDaysMin?: number | null; deliveryDaysMax?: number | null; connectorKey?: string | null } | null
+    return {
+      id: row.id,
+      candidateTitle: row.candidate_title,
+      category: row.category,
+      source: row.source,
+      sourceReference: row.source_reference,
+      supplierId: row.supplier_id,
+      supplierName: (row.suppliers as unknown as { name: string } | null)?.name ?? null,
+      supplierSku: row.supplier_sku,
+      unitCostMinor: row.estimated_unit_cost_minor,
+      shippingCostMinor: row.estimated_shipping_minor,
+      currency: row.currency,
+      status: row.status,
+      statusReason: row.rejected_reason,
+      productId: row.product_id,
+      collectedAt: row.collected_at,
+      deliveryDaysMin: rawSignals?.deliveryDaysMin ?? null,
+      deliveryDaysMax: rawSignals?.deliveryDaysMax ?? null,
+      connectorKey: rawSignals?.connectorKey ?? null,
+    }
+  })
 }
 
 export interface SupplierOfferSummary {

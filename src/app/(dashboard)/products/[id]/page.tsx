@@ -15,6 +15,7 @@ import { ProductIntelligencePanel } from '../ProductIntelligencePanel'
 import { SupplierOffersPanel } from '../SupplierOffersPanel'
 import { ShopifyPublicationPanel } from '../ShopifyPublicationPanel'
 import { MediaPanel } from '../MediaPanel'
+import { ShippingPanel } from '../ShippingPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -101,6 +102,22 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       ) : mediaState ? (
         <Card>
           <MediaPanel productId={product.id} media={mediaState.media} readiness={mediaState.readiness} canEdit={canEdit} canRemove={canEdit && canApprove(session)} />
+        </Card>
+      ) : null}
+
+      {session.isDemo ? (
+        <Card>
+          <CardHeader title="Supplier & shipping" description="Can this supplier realistically deliver this product to the customer, and is that fast enough?" />
+          <div className="border-t border-border px-5 py-6">
+            <EmptyState
+              title="Not modelled in demo mode"
+              description="Shipping suitability needs a real connector-sourced product and a real supplier API to check against — demo mode has none of that to show honestly. Connect Supabase and CJ_API_KEY to see this populate."
+            />
+          </div>
+        </Card>
+      ) : publicationPreview?.ok ? (
+        <Card>
+          <ShippingPanel productId={product.id} supplier={publicationPreview.value.supplier} supplierCurrency={publicationPreview.value.pricing.currency} shipping={publicationPreview.value.shipping} canEdit={canEdit} />
         </Card>
       ) : null}
 

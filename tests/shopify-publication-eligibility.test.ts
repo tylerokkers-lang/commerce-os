@@ -29,6 +29,8 @@ const BASE: ShopifyEligibilityInputs = {
   hasDescription: true,
   mediaReadiness: 'media_ready',
   mediaReadinessReason: '2 approved images, including a primary image.',
+  shippingStatus: 'approved',
+  shippingReason: 'DHL Express can reach GB in up to 5 days, within the 7-day limit.',
   selectedPriceMinor: 1999,
   variantsValid: true,
   variantIssue: null,
@@ -96,6 +98,34 @@ describe('Shopify publication eligibility', () => {
     expect(keys).toContain('compliance')
     expect(keys).toContain('images')
     expect(keys).toContain('selling_price')
+    expect(keys).toContain('shipping')
+  })
+
+  it('shipping approved → eligible (Phase 9)', () => {
+    const result = assessShopifyEligibility(BASE)
+    const shippingReq = result.requirements.find((r) => r.key === 'shipping')
+    expect(shippingReq?.satisfied).toBe(true)
+    expect(result.eligible).toBe(true)
+  })
+
+  it('shipping review_required blocks eligibility, never a silent pass (Phase 9)', () => {
+    const result = assessShopifyEligibility({ ...BASE, shippingStatus: 'review_required', shippingReason: 'No shipping quote has been fetched for GB yet.' })
+    const shippingReq = result.requirements.find((r) => r.key === 'shipping')
+    expect(shippingReq?.satisfied).toBe(false)
+    expect(result.eligible).toBe(false)
+    expect(result.blockingReasons.some((r) => r.includes('No shipping quote'))).toBe(true)
+  })
+
+  it('shipping rejected blocks eligibility with the specific reason (Phase 9)', () => {
+    const result = assessShopifyEligibility({ ...BASE, shippingStatus: 'rejected', shippingReason: 'Supplier delivery estimate is 18 days and configured maximum is 10 days.' })
+    expect(result.eligible).toBe(false)
+    expect(result.blockingReasons).toContain('Supplier delivery estimate is 18 days and configured maximum is 10 days.')
+  })
+
+  it('a rejected shipping decision blocks eligibility even when every other gate passes (Phase 9)', () => {
+    const result = assessShopifyEligibility({ ...BASE, shippingStatus: 'rejected', shippingReason: 'Delivery too slow.' })
+    const failingKeys = result.requirements.filter((r) => !r.satisfied).map((r) => r.key)
+    expect(failingKeys).toEqual(['shipping'])
   })
 
   it('media_review_required blocks eligibility (approved but no primary, or awaiting review) without claiming it is ready', () => {

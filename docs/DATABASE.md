@@ -130,6 +130,18 @@ read-only through RLS, service-role write — and the table is
 migration, reused here): a superseding quote is a new row, a fresh
 historical fact, never an edit to an old one. 81 tables total (was 80).
 
+The shipping-aware publication milestone (Phase 9) added **zero new
+migrations** — audited first, and `supplier_shipping_quotes` (0043)
+already carried the one column this needed, `quoted_at`, added in Phase
+8 and simply unused by any live decision until now. `assessShippingSuitability`'s
+new freshness rule (`SHIPPING_QUOTE_MAX_AGE_DAYS`) is a code constant,
+not a column — deliberately, per the brief's own "smallest possible
+mechanism" instruction, since it is a technical "how current is
+current" default rather than a business policy an operator would
+reasonably tune per-org. `business_settings.max_delivery_days` (already
+reused unchanged by Phase 8, above) gained its first real caller this
+milestone. 81 tables total, unchanged from Phase 8.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

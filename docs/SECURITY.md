@@ -440,6 +440,37 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What the shipping-aware publication milestone changed here (Phase 9 of the customer-facing store)
+
+No new external call surface — this milestone reads Phase 8's own
+`SupplierShippingQuote` values back out of the database and feeds them
+into a deterministic policy check; it makes no new network request of
+its own. The one relevant property is that **a connector failure can
+never produce a false "approved."** Traced explicitly: if
+`connector.readProductDetail` errors (auth failure, network error,
+malformed response), `fetchAndAssessShipping` returns that error
+directly and **no row is ever inserted** into `supplier_shipping_quotes`.
+The next time `getShippingSuitability` is called, it finds zero rows
+for that product/destination and — by `assessShippingSuitability`'s own
+first rule — returns `review_required` ("no shipping quote has been
+fetched yet"), never `approved`. `approved` is structurally reachable
+only through a real, successfully-persisted quote row with a real,
+within-limit delivery estimate; there is no code path from "the
+supplier's API failed" to "the product is eligible." This is proven by
+the pure `assessShippingSuitability` engine's own unit tests (empty
+quotes, and now a stale-quote case, both routing to `review_required`
+regardless of what the underlying data might otherwise suggest), not by
+a new integration test, since the write orchestrator is `server-only`
+and untestable directly in this codebase's existing Vitest setup.
+
+`refreshShippingQuoteForProduct` (the new "check/refresh" admin action)
+recovers its connector reference from `product_research.raw_signals` —
+already-trusted, already-validated data this codebase itself wrote
+during a prior capture, not new untrusted input — and refuses
+explicitly, with no network call, when no such reference exists for a
+product. No new credential, secret, or external identifier is
+introduced or logged by this milestone.
+
 ## What the real supplier connector milestone changed here (Phase 8 of the customer-facing store)
 
 The second external network call this codebase makes to an

@@ -52,6 +52,15 @@ export function QueueRow({ candidate }: { candidate: DiscoveryCandidate }) {
       <td className="px-3 py-3 text-sm text-ink">{candidate.supplierName ?? <span className="text-ink-subtle">None</span>}</td>
       <td className="px-3 py-3 text-sm text-ink tabular-nums">{formatMoney(candidate.unitCostMinor, candidate.currency)}</td>
       <td className="px-3 py-3 text-sm text-ink tabular-nums">{formatMoney(candidate.shippingCostMinor, candidate.currency)}</td>
+      <td className="px-3 py-3 text-sm text-ink">
+        {candidate.deliveryDaysMin === null && candidate.deliveryDaysMax === null ? (
+          <span className="text-ink-subtle">Unknown</span>
+        ) : candidate.deliveryDaysMin !== null && candidate.deliveryDaysMax !== null && candidate.deliveryDaysMin !== candidate.deliveryDaysMax ? (
+          `${candidate.deliveryDaysMin}–${candidate.deliveryDaysMax}d`
+        ) : (
+          `${candidate.deliveryDaysMax ?? candidate.deliveryDaysMin}d`
+        )}
+      </td>
       <td className="px-3 py-3">
         <Badge tone={STATUS_TONES[candidate.status] ?? 'neutral'}>{STATUS_LABELS[candidate.status] ?? candidate.status}</Badge>
         {candidate.statusReason ? <p className="mt-1 max-w-xs text-xs text-ink-subtle">{candidate.statusReason}</p> : null}
