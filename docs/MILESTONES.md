@@ -2431,6 +2431,61 @@ cannot be created until that scope is added in the Shopify Partner
 Dashboard and the merchant re-consents, a configuration action outside
 this codebase entirely.
 
+## Milestone — Production connection & controlled live activation ⚠️ critical bug found and fixed; still blocked on missing credentials (Phase 11 of the customer-facing store)
+
+The actual deliverable of this milestone was not a feature — it was
+finding and fixing a genuine, critical, previously-undiscovered bug in
+the demo/live mode switch itself, the exact mechanism every prior
+milestone's "not configured, nothing fabricated" honesty had depended
+on being trustworthy.
+
+**The bug:** `core/env.ts`'s `isDemoMode()` returned
+`isSupabaseConfigured()` un-negated — the precise inverse of its own
+documented behaviour. With `COMMERCE_OS_MODE=live` set, live mode could
+never actually activate while Supabase was genuinely configured, and
+would have (nonsensically) reported itself live with no Supabase
+configuration at all. Uncaught through ten prior milestones because
+`COMMERCE_OS_MODE=live` had never once been set in any environment this
+codebase had run in — this milestone's own task is what finally
+exercised the branch. Found via a real, deliberate failure-injection
+test (a temporary, git-ignored `.env.development.local` with a
+syntactically-valid, never-real Supabase URL/key, plus a temporarily
+instrumented `/api/health`, both fully reverted after use) — not by
+inspection. Fixed with the one missing negation; a new,
+`tests/core-env-live-mode.test.ts` regression suite (7 tests) now
+exists and was verified to actually fail against the original bug
+before confirming it passes against the fix.
+
+**Two related fixes, same class:** `proxy.ts` and `(auth)/login/actions.ts`
+both previously treated a genuine Supabase connectivity failure exactly
+like an ordinary "not logged in"/"wrong password" case — the first
+silently redirecting to `/login` with no error anywhere, the second
+actively misleading a real administrator into thinking they had mistyped
+a password during an actual outage. Both now check Supabase's own
+`isAuthRetryableFetchError` against the real, resolved error value
+(verified directly that Supabase's client never throws for a network
+failure, so a try/catch alone would not have caught this).
+`(dashboard)/layout.tsx` now catches a new `LiveConnectionError` from
+`getSession()` server-side (before Next.js's production error redaction
+would strip the detail) and shows an honest "database connection
+unavailable" message; a general `(dashboard)/error.tsx` safety net was
+also added, since none existed anywhere in the app before.
+
+**Verified live in the browser** against a real (deliberately
+unreachable) Supabase endpoint: the login page renders once live mode
+is genuinely active, and submitting it produces the new honest
+connection-failure message. **Tested:** 7 new, 1693 total.
+`tsc`/`lint`/`build`/`db:verify` (81 tables, zero migrations) all clean.
+Client-bundle secret scan performed directly against the real
+production build output, not assumed from architecture — clean.
+
+**Not attempted, stated plainly:** every part of this milestone's own
+brief requiring a real Supabase project or `CJ_API_KEY` (RLS live
+verification, CJ discovery, Shopify write re-consent, the first real
+product and everything downstream) — neither exists in this
+environment, and provisioning them is outside what this session can do.
+Nothing was fabricated to simulate them.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

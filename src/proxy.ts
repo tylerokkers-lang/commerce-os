@@ -1,5 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
+import { isAuthRetryableFetchError } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
+import { isDemoMode } from '@/lib/core/env'
 
 /**
  * Runs before every matched request.
@@ -23,14 +25,17 @@ function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))
 }
 
-function isDemo(): boolean {
-  const configured =
-    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) && Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
-  return process.env.COMMERCE_OS_MODE !== 'live' || !configured
-}
-
 export async function proxy(request: NextRequest) {
-  if (isDemo()) return NextResponse.next()
+  // Milestone: live infrastructure activation (Phase 11). Previously a
+  // second, independent copy of this check lived here — `core/env.ts`'s
+  // `isDemoMode()` had a genuine inverted-logic bug (see its own comment)
+  // that this local duplicate did not share, which is exactly the risk
+  // duplicated logic carries: two copies silently drifting apart with no
+  // way to notice until one of them is actually exercised. `core/env.ts`
+  // has no imports of its own (pure `process.env` reads), so it is fully
+  // Edge-runtime-safe to import directly here — there was never a real
+  // reason for a separate copy.
+  if (isDemoMode()) return NextResponse.next()
 
   let response = NextResponse.next({ request })
 
@@ -56,7 +61,31 @@ export async function proxy(request: NextRequest) {
   )
 
   // Revalidates the token against Supabase rather than trusting the cookie.
-  const { data } = await supabase.auth.getUser()
+  //
+  // Milestone: live infrastructure activation (Phase 11). A genuine
+  // connection failure here (network error, wrong URL, a paused project)
+  // must never be treated the same as "no valid session." Verified
+  // directly (not assumed): Supabase's own client never *throws* from
+  // `getUser()` for a network failure — it always resolves cleanly with
+  // `{ data: { user: null }, error }`, wrapping even a DNS/connection
+  // failure into that same shape a routine "not logged in" response uses.
+  // A `try/catch` here would silently never fire — confirmed by directly
+  // testing the real client against an unreachable host during this
+  // milestone's work, which is exactly why this checks the *resolved*
+  // error's real type instead, via Supabase's own `isAuthRetryableFetchError`
+  // (the class it documents itself as using specifically for a transient
+  // fetch failure, distinct from every genuine "no valid session" error
+  // shape). On a real connectivity failure this lets the request through
+  // unredirected: the page itself (`(dashboard)/layout.tsx`) calls
+  // `getUser()` again via `getSession()`, whose own equivalent check *can*
+  // render a real "database connection unavailable" message, unlike this
+  // proxy, which can only redirect or pass through. This proxy's job stays
+  // narrow: refresh the cookie and gate genuinely-unauthenticated
+  // visitors, never diagnose an outage.
+  const { data, error } = await supabase.auth.getUser()
+  if (error && isAuthRetryableFetchError(error)) {
+    return response
+  }
 
   if (!data.user && !isPublic(request.nextUrl.pathname)) {
     const loginUrl = new URL('/login', request.url)

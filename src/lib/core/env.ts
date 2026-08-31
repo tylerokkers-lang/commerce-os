@@ -114,9 +114,27 @@ export const isConfigured = (key: string): boolean =>
  * Demo mode is on unless Supabase is configured AND the owner has explicitly
  * turned it off. Defaulting to demo means a fresh checkout is safe to explore
  * and can never accidentally touch a real marketplace.
+ *
+ * CRITICAL BUG FOUND AND FIXED (Milestone: live infrastructure activation,
+ * Phase 11): this previously read `return isSupabaseConfigured()` — the
+ * *un-negated* value — which means demo mode was reported as *on* whenever
+ * Supabase *was* correctly configured, and (worse) reported as genuinely
+ * live whenever `COMMERCE_OS_MODE=live` was set with Supabase *missing*.
+ * The exact inverse of the intended, documented behaviour above. This had
+ * never been caught because `COMMERCE_OS_MODE=live` had never once been
+ * set in any environment this codebase had run in before this milestone —
+ * the buggy branch was unreachable in practice until the first real
+ * attempt to activate live mode, which is exactly what surfaced it. Found
+ * via a deliberate, temporary failure-injection test (real `next dev`
+ * process, `COMMERCE_OS_MODE=live` plus a syntactically-valid but
+ * non-functional Supabase URL/key, `/api/health` instrumented temporarily
+ * to compare `isDemoMode()`'s output against the raw env values directly)
+ * — not found by inspection alone. With the fix, live mode now genuinely
+ * requires both `COMMERCE_OS_MODE=live` and real Supabase configuration,
+ * and reports itself honestly either way.
  */
 export function isDemoMode(): boolean {
-  if (read('COMMERCE_OS_MODE') === 'live') return isSupabaseConfigured()
+  if (read('COMMERCE_OS_MODE') === 'live') return !isSupabaseConfigured()
   return true
 }
 

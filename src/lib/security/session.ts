@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { cache } from 'react'
+import { isAuthRetryableFetchError } from '@supabase/supabase-js'
 import { isDemoMode, isSupabaseConfigured } from '@/lib/core/env'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { canWrite } from './roles'
@@ -36,6 +37,38 @@ export const DEMO_SESSION: SessionContext = {
 }
 
 /**
+ * Thrown by `getSession()` when `COMMERCE_OS_MODE=live` is set and Supabase
+ * is genuinely unreachable — a network failure, a wrong URL, a paused
+ * project (Milestone: live infrastructure activation, Phase 11). Distinct
+ * from "not authenticated": a real Supabase connection cleanly reporting
+ * "no valid session" still correctly returns `null` below and redirects to
+ * `/login`, exactly as before. This class exists so that case can never be
+ * confused with an actual outage — before this, both looked identical to a
+ * caller (`getSession()` returning `null`), which meant an admin hitting a
+ * genuine live-mode database outage was silently bounced to the login
+ * screen with no indication anything was actually broken, rather than
+ * seeing an honest "database connection unavailable" message.
+ *
+ * Verified directly, not assumed: Supabase's own auth client never
+ * *throws* from `getUser()` for a network failure — confirmed by testing
+ * the real client against an unreachable host during this milestone's own
+ * work, which resolved cleanly to `{ data: { user: null }, error }` every
+ * time, `error` being `AuthRetryableFetchError` (Supabase's own documented
+ * class specifically for a transient fetch failure). A `try/catch` around
+ * the call would silently never fire. `isAuthRetryableFetchError` (from
+ * `@supabase/supabase-js`, already a direct dependency) is the real,
+ * reliable signal checked below instead. Caught by `(dashboard)/layout.tsx`
+ * server-side, before Next.js's client-side error redaction would strip
+ * this message's detail in a production build.
+ */
+export class LiveConnectionError extends Error {
+  constructor(detail: string) {
+    super(`Live mode is enabled (COMMERCE_OS_MODE=live) but the Supabase connection failed: ${detail}`)
+    this.name = 'LiveConnectionError'
+  }
+}
+
+/**
  * Resolves the session for the current request.
  *
  * `cache` deduplicates this within a single render pass, so a layout and five
@@ -48,15 +81,20 @@ export const getSession = cache(async (): Promise<SessionContext | null> => {
   // getUser revalidates the token against Supabase. getSession would trust
   // whatever is in the cookie, which is not good enough for an auth check.
   const { data, error } = await supabase.auth.getUser()
+  if (error && isAuthRetryableFetchError(error)) throw new LiveConnectionError(error.message)
   if (error || !data.user) return null
 
-  const { data: membership } = await supabase
+  const { data: membership, error: membershipError } = await supabase
     .from('memberships')
     .select('org_id, role, organisations(name)')
     .eq('user_id', data.user.id)
     .limit(1)
     .maybeSingle()
-
+  // A Postgrest error here (as opposed to a clean "no row") means the
+  // query itself could not be answered — a connection/configuration
+  // problem, not "this user has no membership." Never silently treated
+  // as `null` (which would look like an access issue, not an outage).
+  if (membershipError) throw new LiveConnectionError(membershipError.message)
   if (!membership) return null
 
   const organisation = membership.organisations as unknown as { name: string } | null

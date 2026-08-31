@@ -688,6 +688,23 @@ profitability engine. Live mode requires Supabase to be configured *and*
 `COMMERCE_OS_MODE=live` to be set explicitly. Nothing can reach a real
 marketplace by accident.
 
+**A critical bug in exactly this switch was found and fixed in Phase 11**
+(`HANDOVER.md` §64) — `isDemoMode()` had read the un-negated
+`isSupabaseConfigured()` instead of its negation, meaning live mode
+could never actually activate even with fully valid credentials, and
+had gone uncaught through ten prior milestones simply because
+`COMMERCE_OS_MODE=live` had never once been set in any environment this
+codebase had run in. The lesson generalises: **a safety switch that has
+never been flipped is unverified, not proven** — `db:verify`,
+`tsc`, and 1600+ passing tests all stayed green the entire time this bug
+existed, because none of them exercised the one specific branch it lived
+in. Phase 11 also found and fixed two related cases where a genuine
+Supabase connectivity failure (as opposed to "no valid session") was
+being silently treated as an ordinary logged-out state — `proxy.ts` and
+`(auth)/login/actions.ts` — using Supabase's own `isAuthRetryableFetchError`
+to tell the two apart, since the client library never throws for a
+network failure, it resolves cleanly either way.
+
 **Empty is not the same as unknown.** A live business with no orders shows
 zeros, not demo figures. Aggregates that are not yet implemented return honest
 empties rather than plausible numbers.

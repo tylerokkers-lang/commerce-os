@@ -150,6 +150,17 @@ changed. `npm run db:verify`'s PGlite-based check (81 tables, unchanged)
 confirms the schema is internally correct; it is not, and is never
 described as, a live Supabase connection.
 
+The production connection & controlled live activation milestone
+(Phase 11) also added **zero migrations and touched no table** — its
+work was entirely in the application layer governing *whether* a real
+Supabase connection is used at all (see `docs/ARCHITECTURE.md`'s demo
+mode section and `HANDOVER.md` §64 for the critical `isDemoMode()` bug
+found and fixed), not in the schema itself. `db:verify` still reports
+81 tables, and every RLS policy this project has ever written remains
+exactly as previously verified by schema inspection — genuinely live
+RLS enforcement under a real, authenticated multi-org session is still
+unproven, since no live Supabase project exists to prove it against.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a
