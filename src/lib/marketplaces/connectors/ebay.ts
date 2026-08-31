@@ -505,6 +505,7 @@ export class EbayConnector implements MarketplaceConnector {
       apiVersion: result.status === 'NOT_CONFIGURED' ? null : 'v1',
       checkedAt: result.checkedAt,
       detail: result.status === 'CONNECTED' ? null : result.detail,
+      grantedScope: result.oauthScopesGranted.length > 0 ? result.oauthScopesGranted.join(',') : null,
     })
   }
 

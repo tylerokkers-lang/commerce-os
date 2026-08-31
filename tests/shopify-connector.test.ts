@@ -116,7 +116,29 @@ describe('3. Successful token response parsing', () => {
     try {
       const result = await shopifyInternal.getAccessToken(CREDS)
       expect(result.ok).toBe(true)
-      if (result.ok) expect(result.value).toBe('a-real-token')
+      if (result.ok) expect(result.value.accessToken).toBe('a-real-token')
+    } finally {
+      restore()
+    }
+  })
+
+  it('captures the real scope string from the token response — never discarded (Phase 10)', async () => {
+    const { restore } = mockFetchSequence([tokenResponse('a-real-token')])
+    try {
+      const result = await shopifyInternal.getAccessToken(CREDS)
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.scope).toBe('read_products,read_orders')
+    } finally {
+      restore()
+    }
+  })
+
+  it('a token response with no scope field reports scope as null, never fabricated (Phase 10)', async () => {
+    const { restore } = mockFetchSequence([new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 })])
+    try {
+      const result = await shopifyInternal.getAccessToken(CREDS)
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.scope).toBeNull()
     } finally {
       restore()
     }
@@ -278,7 +300,7 @@ describe('7. Successful shop query parsing (getConnectionHealth)', () => {
     try {
       const result = await shopifyInternal.graphqlRequest<{ shop: { name: string } }>(CREDS, 'query { shop { name } }')
       expect(result.ok).toBe(true)
-      if (result.ok) expect(result.value.shop.name).toBe('Test Shop')
+      if (result.ok) expect(result.value.data.shop.name).toBe('Test Shop')
     } finally {
       restore()
     }
@@ -288,6 +310,20 @@ describe('7. Successful shop query parsing (getConnectionHealth)', () => {
     const health = await shopifyConnector.getConnectionHealth()
     expect(health.ok).toBe(true)
     if (health.ok) expect(health.value.status).toBe('not_configured')
+    if (health.ok) expect(health.value.grantedScope).toBeNull()
+  })
+})
+
+describe('7b. Live-verifiable OAuth scope reporting (Phase 10)', () => {
+  it('a successful connection surfaces the real granted scope, so read-only vs write access is a live-checkable fact, not just an assumption', async () => {
+    const { restore } = mockFetchSequence([tokenResponse(), new Response(JSON.stringify({ data: { shop: { name: 'Test Shop' } } }), { status: 200 })])
+    try {
+      const result = await shopifyInternal.graphqlRequest<{ shop: { name: string } }>(CREDS, 'query { shop { name } }')
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.scope).toBe('read_products,read_orders')
+    } finally {
+      restore()
+    }
   })
 })
 

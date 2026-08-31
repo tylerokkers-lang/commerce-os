@@ -98,6 +98,18 @@ export interface ConnectionHealth {
   checkedAt: string
   /** Present only when status is 'error' or 'degraded'. */
   detail: string | null
+  /**
+   * Milestone: live infrastructure activation (Phase 10). The real,
+   * comma-separated scope string the OAuth token exchange itself
+   * returned on a successful connection — not a secret, an OAuth
+   * permission grant, safe to display — so "does this app actually have
+   * write_products" is a live-verified fact surfaced in the UI, never
+   * only an assumption from how the connector was written. `null` when
+   * the connector's own auth flow doesn't report a scope (not every
+   * connector's OAuth grant does), or when the connection was never
+   * successfully established.
+   */
+  grantedScope: string | null
 }
 
 /** One listing as the marketplace itself reports it — for reconciliation. */

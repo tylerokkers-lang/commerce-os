@@ -440,6 +440,41 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What the live infrastructure activation milestone changed here (Phase 10 of the customer-facing store)
+
+The first milestone in this codebase to perform a genuine, credentialed,
+read-only live call against a real external account as part of the
+development process itself (Shopify), rather than only ever writing
+code that *would* do so. The verification followed the exact discipline
+every prior live-verification note in this document already
+establishes: a temporary, standalone script outside the tracked
+repository (in the session's own scratchpad directory, never inside
+`commerce-os/`), performing only the client-credentials token exchange
+and two read-only GraphQL queries (`{ shop { name } }` and a limit-1
+product read) — no mutation of any kind. The real access token and
+client secret were never printed, logged, or written to any file; only
+structural facts (success/failure, HTTP status, the shop's own public
+name, a product count, the granted OAuth scope string) were surfaced.
+The script was deleted immediately after the run, confirmed by both a
+repo-wide `git status`/`git diff` scan and a direct listing of the
+scratchpad directory finding nothing left behind.
+
+**The one durable code change this produced**: `ConnectionHealth`
+(shared across every marketplace connector) gained `grantedScope`, a
+field the OAuth token exchange's own response already returns and this
+codebase was previously discarding. This is explicitly **not a
+secret** — an OAuth scope grant is a permission list, not a credential,
+and is exactly as safe to store/display as the rest of `ConnectionHealth`
+already is; nothing about this change stores or displays a token,
+key, or secret anywhere it wasn't already handled correctly.
+
+**No Supabase connection exists in this environment**, confirmed
+directly (`NEXT_PUBLIC_SUPABASE_URL`/`_ANON_KEY` absent). No live
+database read or write of any kind was possible or attempted this
+milestone — every claim about the discovery→import→eligibility→draft
+chain's readiness in `HANDOVER.md` §63 is a code-inspection claim,
+explicitly labelled as such, never presented as a live database test.
+
 ## What the shipping-aware publication milestone changed here (Phase 9 of the customer-facing store)
 
 No new external call surface — this milestone reads Phase 8's own

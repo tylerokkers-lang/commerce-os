@@ -2383,6 +2383,54 @@ safe direction of error, but not yet the brief's strongest example.
 Phase 4's profitability engine was not touched — it already consumes
 the real CJ shipping cost via Phase 8's existing capture flow.
 
+## Milestone — Live infrastructure activation & first real product ⚠️ blocked on missing credentials (Phase 10 of the customer-facing store)
+
+Audited the actual environment before writing anything: no
+`NEXT_PUBLIC_SUPABASE_URL`/`_ANON_KEY` and no `COMMERCE_OS_MODE=live`
+exist, so `isDemoMode()` returns `true` unconditionally — every session
+in this codebase is demo mode regardless of any other credential. No
+`CJ_API_KEY` exists either. Real Shopify Admin credentials
+(`SHOPIFY_STORE_DOMAIN`/`CLIENT_ID`/`CLIENT_SECRET`/`API_VERSION`) do
+exist, and were the one thing this milestone could genuinely,
+live-verify.
+
+**Live-verified (real, read-only, against the account holder's real
+store):** OAuth authentication, store identity read, product read, and
+— the specific fact the brief asked to confirm — the actual granted
+OAuth scope: `read_fulfillments,read_inventory,read_orders,read_products`,
+**no `write_products`**. This confirms, live, what the existing
+`createListings: false` declaration already assumed by inspection.
+
+**As built:** `shopify.ts`'s `getAccessToken` now captures and returns
+the real `scope` field from Shopify's own token response (previously
+discarded); `ConnectionHealth` (shared across all marketplace
+connectors) gained `grantedScope: string | null`, wired for real in
+Shopify and eBay (which already computed but never surfaced
+`oauthScopesGranted`), `null` for Amazon and the demo connectors. Not a
+secret — an OAuth permission grant.
+
+**Not attempted, honestly:** any real CJ call (no key), any live
+Supabase read or write (no connection), the first real product test
+(§§7-27 of the brief) — none of it can run without a real Supabase
+project, regardless of CJ or Shopify credentials. Nothing was
+simulated or mocked and presented as a live result.
+
+**Tested:** 3 new (Shopify's scope capture, null-scope handling, and
+end-to-end scope threading through a successful call), 1686 total.
+`tsc`/`lint`/`build`/`db:verify` (81 tables, zero migrations) all
+clean. Browser-verified, desktop and mobile, zero console errors, on
+every page this milestone's brief names. Secret scan clean, including
+the real Shopify credential values themselves, confirmed absent from
+the tracked diff. `informax-site` unaffected.
+
+**Genuine remaining blockers, none fixable from within this
+repository:** (1) a live Supabase project plus `COMMERCE_OS_MODE=live`;
+(2) a real `CJ_API_KEY`; (3) even with both, the connected Shopify
+app's own OAuth scope has no `write_products` — a real Shopify draft
+cannot be created until that scope is added in the Shopify Partner
+Dashboard and the merchant re-consents, a configuration action outside
+this codebase entirely.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

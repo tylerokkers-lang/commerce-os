@@ -191,16 +191,16 @@ export class AmazonConnector implements MarketplaceConnector {
     const aws = awsCredentials()
     const now = new Date().toISOString()
     if (!creds || !aws) {
-      return ok({ status: 'not_configured', apiVersion: null, checkedAt: now, detail: null })
+      return ok({ status: 'not_configured', apiVersion: null, checkedAt: now, detail: null, grantedScope: null })
     }
 
     // The Sellers API's marketplace-participations endpoint is the
     // recommended lightweight call for verifying that credentials work.
     const result = await spApiRequest(creds, aws, '/sellers/v1/marketplaceParticipations')
     if (!result.ok) {
-      return ok({ status: 'error', apiVersion: 'v1', checkedAt: now, detail: result.error })
+      return ok({ status: 'error', apiVersion: 'v1', checkedAt: now, detail: result.error, grantedScope: null })
     }
-    return ok({ status: 'connected', apiVersion: 'v1', checkedAt: now, detail: null })
+    return ok({ status: 'connected', apiVersion: 'v1', checkedAt: now, detail: null, grantedScope: null })
   }
 
   async fetchListings(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceListingSnapshot>, string>> {

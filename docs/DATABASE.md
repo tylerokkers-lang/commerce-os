@@ -142,6 +142,14 @@ reasonably tune per-org. `business_settings.max_delivery_days` (already
 reused unchanged by Phase 8, above) gained its first real caller this
 milestone. 81 tables total, unchanged from Phase 8.
 
+The live infrastructure activation milestone (Phase 10) added **zero
+migrations and touched no table** — no live Supabase project exists in
+this environment (`NEXT_PUBLIC_SUPABASE_URL`/`_ANON_KEY` both absent),
+so the schema itself was neither exercised against real data nor
+changed. `npm run db:verify`'s PGlite-based check (81 tables, unchanged)
+confirms the schema is internally correct; it is not, and is never
+described as, a live Supabase connection.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

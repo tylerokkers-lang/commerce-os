@@ -169,7 +169,13 @@ function credentials(): ShopifyCredentials | null {
  * form body. Returns `access_token` (always expires in 86399s / 24h) and
  * the granted `scope`. Never cached across calls — see module comment.
  */
-async function getAccessToken(creds: ShopifyCredentials): Promise<Result<string, string>> {
+interface ShopifyAccessToken {
+  accessToken: string
+  /** The real, comma-separated scope string Shopify's own token response returned — not a secret, an OAuth permission grant. `null` only if Shopify's response genuinely omitted it. */
+  scope: string | null
+}
+
+async function getAccessToken(creds: ShopifyCredentials): Promise<Result<ShopifyAccessToken, string>> {
   try {
     const response = await fetch(`https://${creds.storeDomain}/admin/oauth/access_token`, {
       method: 'POST',
@@ -184,9 +190,9 @@ async function getAccessToken(creds: ShopifyCredentials): Promise<Result<string,
       const bodyText = await response.text().catch(() => '')
       return err(`Shopify token exchange failed: ${response.status} ${response.statusText}${bodyText ? ` — ${bodyText.slice(0, 300)}` : ''}`)
     }
-    const body = (await response.json()) as { access_token?: string }
+    const body = (await response.json()) as { access_token?: string; scope?: string }
     if (!body.access_token) return err('Shopify token exchange returned no access token.')
-    return ok(body.access_token)
+    return ok({ accessToken: body.access_token, scope: body.scope ?? null })
   } catch (error) {
     return err(`Shopify token exchange threw: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -210,7 +216,7 @@ interface ShopifyGraphqlEnvelope<T> {
  * inside a 200, not only via HTTP 429), so a successful HTTP status alone
  * is never treated as success here.
  */
-async function graphqlRequest<T>(creds: ShopifyCredentials, query: string, variables?: Record<string, unknown>): Promise<Result<T, string>> {
+async function graphqlRequest<T>(creds: ShopifyCredentials, query: string, variables?: Record<string, unknown>): Promise<Result<{ data: T; scope: string | null }, string>> {
   const tokenResult = await getAccessToken(creds)
   if (!tokenResult.ok) return tokenResult
 
@@ -220,7 +226,7 @@ async function graphqlRequest<T>(creds: ShopifyCredentials, query: string, varia
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': tokenResult.value,
+        'X-Shopify-Access-Token': tokenResult.value.accessToken,
       },
       body: JSON.stringify({ query, variables }),
     })
@@ -267,7 +273,7 @@ async function graphqlRequest<T>(creds: ShopifyCredentials, query: string, varia
     return err('Shopify GraphQL returned no data and no errors — an empty response.')
   }
 
-  return ok(envelope.data)
+  return ok({ data: envelope.data, scope: tokenResult.value.scope })
 }
 
 const SHOP_QUERY = `query { shop { name } }`
@@ -454,16 +460,16 @@ export class ShopifyConnector implements MarketplaceConnector {
     const creds = credentials()
     const now = new Date().toISOString()
     if (!creds) {
-      return ok({ status: 'not_configured', apiVersion: null, checkedAt: now, detail: null })
+      return ok({ status: 'not_configured', apiVersion: null, checkedAt: now, detail: null, grantedScope: null })
     }
 
     // The cheapest authenticated query Shopify's GraphQL API offers — the
     // GraphQL equivalent of the old REST connectivity check.
     const result = await graphqlRequest<ShopQueryResult>(creds, SHOP_QUERY)
     if (!result.ok) {
-      return ok({ status: 'error', apiVersion: creds.apiVersion, checkedAt: now, detail: result.error })
+      return ok({ status: 'error', apiVersion: creds.apiVersion, checkedAt: now, detail: result.error, grantedScope: null })
     }
-    return ok({ status: 'connected', apiVersion: creds.apiVersion, checkedAt: now, detail: null })
+    return ok({ status: 'connected', apiVersion: creds.apiVersion, checkedAt: now, detail: null, grantedScope: result.value.scope })
   }
 
   async fetchListings(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceListingSnapshot>, string>> {
@@ -473,8 +479,8 @@ export class ShopifyConnector implements MarketplaceConnector {
     const result = await graphqlRequest<ProductsQueryResult>(creds, PRODUCTS_QUERY, { first: options.limit })
     if (!result.ok) return result
 
-    const currency = result.value.shop.currencyCode
-    const records = result.value.products.edges.map((edge) => mapListing(edge.node, currency))
+    const currency = result.value.data.shop.currencyCode
+    const records = result.value.data.products.edges.map((edge) => mapListing(edge.node, currency))
     return ok({ records, requestsMade: 1, warnings: [] })
   }
 
@@ -485,7 +491,7 @@ export class ShopifyConnector implements MarketplaceConnector {
     const result = await graphqlRequest<InventoryQueryResult>(creds, INVENTORY_QUERY, { first: options.limit })
     if (!result.ok) return result
 
-    const records: MarketplaceInventorySnapshot[] = result.value.products.edges.map((edge) => {
+    const records: MarketplaceInventorySnapshot[] = result.value.data.products.edges.map((edge) => {
       const variant = edge.node.variants.edges[0]?.node
       const levels = variant?.inventoryItem?.inventoryLevels.edges ?? []
       const stockQty = levels.reduce((sum, level) => {
@@ -514,7 +520,7 @@ export class ShopifyConnector implements MarketplaceConnector {
     const result = await graphqlRequest<OrdersQueryResult>(creds, ORDERS_QUERY, { first: options.limit, query: searchQuery })
     if (!result.ok) return result
 
-    const records: MarketplaceOrderSnapshot[] = result.value.orders.edges.map((edge) => {
+    const records: MarketplaceOrderSnapshot[] = result.value.data.orders.edges.map((edge) => {
       const node = edge.node
       return {
         externalId: node.id,
@@ -637,7 +643,7 @@ export class ShopifyConnector implements MarketplaceConnector {
 
     if (!result.ok) return err({ reason: 'rejected', detail: result.error })
 
-    const { product, userErrors } = result.value.productCreate
+    const { product, userErrors } = result.value.data.productCreate
     if (userErrors.length > 0) {
       return err({ reason: 'rejected', detail: `Shopify rejected the product: ${userErrors.map((e) => e.message).join('; ')}` })
     }

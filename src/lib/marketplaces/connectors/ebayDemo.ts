@@ -57,7 +57,7 @@ export class EbayDemoConnector implements MarketplaceConnector {
   }
 
   async getConnectionHealth(): Promise<Result<ConnectionHealth, string>> {
-    return ok({ status: 'demo', apiVersion: 'demo', checkedAt: new Date().toISOString(), detail: null })
+    return ok({ status: 'demo', apiVersion: 'demo', checkedAt: new Date().toISOString(), detail: null, grantedScope: null })
   }
 
   async fetchListings(options: FetchOptions): Promise<Result<FetchOutcome<MarketplaceListingSnapshot>, string>> {

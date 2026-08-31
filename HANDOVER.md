@@ -5474,7 +5474,156 @@ flow already populates from the real CJ shipping quote, confirmed
 unchanged by inspection; no second profitability engine, no rewrite,
 exactly as instructed.
 
-## 63. Next step
+## 63. Milestone: Live infrastructure activation & first real product (Phase 10 of the customer-facing store)
+
+**The honest, load-bearing finding of this milestone: no live product
+pipeline could run, and that is a fact about this environment, not
+about the code.** `getSession()` (`src/lib/security/session.ts`) returns
+`DEMO_SESSION` whenever `isDemoMode()` is true, and `isDemoMode()`
+(`src/lib/core/env.ts`) returns `true` unless `COMMERCE_OS_MODE=live`
+**and** `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` are
+both set. Neither exists in this environment — confirmed by direct
+inspection of `.env.local`'s variable names (values never read into
+this document) and the shell environment. Every page in this codebase
+therefore runs in demo mode regardless of any other credential,
+including the real Shopify credentials found below. This is the single
+fact that determined the shape of this milestone's work.
+
+**Environment audit (§2 of the brief), variable names only:**
+
+| Variable | Status |
+|---|---|
+| `CJ_API_KEY` | NOT CONFIGURED |
+| `SHOPIFY_STORE_DOMAIN` | CONFIGURED |
+| `SHOPIFY_CLIENT_ID` | CONFIGURED |
+| `SHOPIFY_CLIENT_SECRET` | CONFIGURED |
+| `SHOPIFY_API_VERSION` | CONFIGURED |
+| `SHOPIFY_STOREFRONT_ACCESS_TOKEN` | NOT CONFIGURED |
+| `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL` | NOT CONFIGURED |
+| `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | NOT CONFIGURED |
+| `SUPABASE_SERVICE_ROLE_KEY` | NOT CONFIGURED |
+| `COMMERCE_OS_MODE` | NOT CONFIGURED (so `isDemoMode()` is unconditionally `true`) |
+
+Business settings could only be read as their code-level demo defaults
+(`DEMO_AUTOMATION_SETTINGS`) — `availableOperatingCapitalMinor`/
+`cashBufferMinor`/`maxSupplierCostMinor` all `null` (unset, not zero),
+`maxDeliveryDays: 7`, `minProductImages: 1`,
+`minImageWidthPx`/`minImageHeightPx: 800`,
+`maxImageFileSizeBytes: 5242880`, `allowedImageFormats: ['jpeg','png','webp']`
+— **not a real organisation's configured values**, since none exists
+without Supabase. Stated explicitly so this is never mistaken for a
+live business's real settings.
+
+**Real Shopify credentials exist — and were genuinely, live,
+read-only verified**, the one piece of this milestone that could
+actually run against a real external service. A temporary,
+standalone script (mirroring `shopify.ts`'s own token-exchange and
+query shapes exactly, no dependency on this codebase's module system)
+performed: (1) the real client-credentials token exchange against
+`https://{real store}/admin/oauth/access_token` — succeeded; (2) a
+real `{ shop { name } }` GraphQL query — succeeded, returning the
+store's real name and `myshopifyDomain`; (3) a real, limit-1 product
+read query — succeeded. **The real granted OAuth scope, read directly
+from the token response, is exactly `read_fulfillments,read_inventory,
+read_orders,read_products` — no `write_products`.** This is now a
+**live-verified fact**, not merely the "confirmed by inspection of the
+Partner Dashboard" state every prior Shopify section of this document
+described — and it confirms, rather than changes, `createListings: false`
+on the existing descriptor. The store connected is the account holder's
+own real Shopify store — its name is not repeated here since it is the
+same real business other parts of this repository's history are scoped
+around, not because it is secret; no value read during this check
+(access token, client secret) was ever printed, logged, or persisted,
+and the temporary script was deleted immediately after the run —
+confirmed by a repo-wide and scratchpad-directory scan finding nothing.
+
+**A small, real, motivated code change followed directly from that
+check:** `getAccessToken` (`shopify.ts`) previously discarded the
+`scope` field Shopify's own token response returns — this milestone's
+own live check had to reconstruct it by hand in a throwaway script.
+Fixed properly: `getAccessToken` now returns `{ accessToken, scope }`,
+`graphqlRequest` threads the scope through every call, and the shared
+`ConnectionHealth` type (`marketplaces/connectors/types.ts`) gained one
+new field, `grantedScope: string | null` — populated for real by
+Shopify's `getConnectionHealth()`, and wired for eBay too (whose own
+`verifyEbayConnection()` already computed `oauthScopesGranted` but
+never surfaced it here either — the same latent gap, closed the same
+way). Amazon and the three demo connectors report `grantedScope: null`
+honestly, since neither has an equivalent live-checkable scope concept
+today. Not a secret — an OAuth permission grant, exactly as safe to
+display as the rest of `ConnectionHealth`.
+
+**CJ verification: genuinely attempted, genuinely not possible.**
+Identical conclusion to Phases 8 and 9 — `CJ_API_KEY` does not exist
+anywhere in this environment. Nothing was fabricated.
+
+**The first real product test (§§7-27 of the brief): did not run, and
+stating why is the correct, non-evasive answer.** With no Supabase
+connection, `requireSession()` never returns a real, non-demo session
+anywhere in this codebase — there is no code path capable of writing a
+`product_research` row, a `product`, a `supplier_shipping_quotes` row,
+or anything else this milestone's pipeline needs, regardless of
+CJ/Shopify credentials. This was not worked around, not simulated, and
+not silently skipped — it is reported here as the actual, current
+production-readiness state. **What *is* genuinely ready, verified by
+inspection and the unbroken chain of unit tests across Phases 5, 7, 8
+and 9**: `importCandidate` → media capture → shipping-quote fetch →
+`assembleShopifyPublicationPreview` (product/media/shipping/
+profitability/capital/risk via the reused Phase 4 engine, unchanged) →
+`assessShopifyEligibility` → `createDraft`'s existing idempotency guard
+(`if (existingListing?.external_id) return` the existing record,
+confirmed still intact, unchanged this phase) → the same, single,
+unmodified eligibility gate. No second Phase 10 eligibility system was
+built — the brief's own explicit instruction, and there was nothing to
+build: the existing one already covers every input listed.
+
+**Tests:** 3 new (Shopify's `getAccessToken` genuinely captures the
+real `scope` field rather than discarding it; a token response with no
+`scope` field reports `null`, never fabricated; `graphqlRequest`
+threads a real scope through to a successful call. 1686 total (was
+1683). `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run
+db:verify` (81 tables, unchanged — no migration) all clean. **Verified
+live in the browser**, desktop and mobile, zero console errors, across
+`/products/[id]`, `/suppliers/discovery`, `/suppliers/connectors`,
+`/settings`, and `/marketplaces` — all render exactly as before this
+milestone, since none of its UI surfaces were touched (the change is
+entirely in the connector layer). Secret scan: clean, confirmed against
+the four names the brief specifically asks to check
+(`CJ_API_KEY`/`SHOPIFY_CLIENT_SECRET`/`SHOPIFY_STOREFRONT_ACCESS_TOKEN`/
+`SUPABASE_SERVICE_ROLE_KEY`), plus the real store domain and client ID
+values themselves, none of which appear anywhere in the tracked diff.
+
+**LIVE VERIFIED this milestone:** Shopify authentication, store
+identity read, product read, and OAuth scope (all against the real
+account holder's real store). **NOT LIVE-VERIFIED:** everything
+requiring Supabase or CJ — the entire discovery → import → media →
+shipping → intelligence → eligibility → draft chain, CJ authentication
+and every CJ read operation, Shopify write capability (structurally
+untestable and correctly never attempted — the live-verified scope
+confirms it would fail even if attempted). **CODE VERIFIED (not
+live):** the same chain, proven by `tsc`, 1686 passing unit/mocked
+tests, and direct code inspection — genuinely ready, pending only the
+credentials this environment does not have.
+
+## 64. Next step
+
+**Recommended Phase 11, following directly from §63:** two genuine
+blockers, both outside this codebase, stand between where things are
+now and a real first product. (1) A live Supabase project —
+`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` (and
+`SUPABASE_SERVICE_ROLE_KEY` for server-side writes) plus
+`COMMERCE_OS_MODE=live` — without this, no session in this codebase can
+ever be anything but demo, regardless of every other credential. (2) A
+`CJ_API_KEY`. Once both exist, §63's own "what is genuinely ready"
+paragraph is the exact, already-built chain to run — no new engineering
+should be needed to attempt the brief's own §39 acceptance test for the
+first time. A third, smaller, real gap worth closing at the same time:
+Shopify's own granted scope (now live-verified as read-only) has no
+`write_products` — a Shopify draft cannot actually be created until the
+Partner Dashboard app configuration is changed to request that scope
+and the merchant re-consents; this is a Shopify App configuration
+action, not a code change, and cannot be done from within this
+repository.
 
 **Recommended Phase 10, following directly from §62:** a real
 `CJ_API_KEY` would let the shipping-aware pipeline built in §62 be
