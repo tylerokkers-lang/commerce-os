@@ -161,6 +161,33 @@ exactly as previously verified by schema inspection — genuinely live
 RLS enforcement under a real, authenticated multi-org session is still
 unproven, since no live Supabase project exists to prove it against.
 
+**Real Supabase provisioning & live database verification (Phase 12)**
+closed that gap. A real Supabase project ("Commerce OS", ref
+`utdwyyoytbsmsdssimxf`, region `eu-west-2`) now exists; all 44
+migrations were applied to it via `supabase db push --linked` (the
+Supabase CLI, authenticated with a personal `SUPABASE_ACCESS_TOKEN`,
+distinct from the service-role key), with zero errors. Queried directly
+against the live database (via the Supabase Management API, not
+PGlite): **81 tables** in the `public` schema — an exact match to the
+PGlite baseline above — with **row-level security enabled on all 81**
+(`rowsecurity = true`, 0 exceptions) and **217 RLS policies** in force.
+
+RLS was then live-verified with real, disposable fixtures (a test
+organisation, a test auth user, a membership linking them, and a second,
+unrelated organisation the test user was never added to — all created
+via the service-role key and fully deleted immediately after):
+anonymous reads of `organisations` returned empty; the authenticated
+test user's read returned **only** their own organisation, never the
+unrelated second one; the service role saw both (RLS bypass, as
+designed). On the write path, an anonymous insert into `config_values`
+was rejected by Postgres itself (`42501`, "new row violates row-level
+security policy"); the same insert as the authenticated `admin`-role
+test user succeeded and was read back correctly. This is the first
+genuine, real-Postgres confirmation of RLS enforcement this project has
+had — `db:verify`'s PGlite check proves the policies compile and apply
+cleanly; it does not and cannot exercise `auth.uid()`-based scoping
+under a real authenticated session the way this did.
+
 ## Conventions
 
 **Money.** `BIGINT`, minor units, column name ends in `_minor`. There is a

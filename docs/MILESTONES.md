@@ -2486,6 +2486,82 @@ product and everything downstream) — neither exists in this
 environment, and provisioning them is outside what this session can do.
 Nothing was fabricated to simulate them.
 
+## Milestone — Real Supabase provisioning & live database verification ✅ complete (Phase 12 of the customer-facing store)
+
+The blocking prerequisite named at the end of Phase 11 — a real Supabase
+project — now exists ("Commerce OS", ref `utdwyyoytbsmsdssimxf`, region
+`eu-west-2`) and every claim Phase 11 could only make against a
+deliberately-broken test endpoint has now been re-proven against it for
+real, live in the browser and via direct database queries.
+
+**Migrations applied for the first time to a real Postgres instance,**
+not PGlite: all 44 migrations, via `supabase db push --linked` (CLI
+authenticated with a personal `SUPABASE_ACCESS_TOKEN`, a distinct
+credential from the service-role key), zero errors. Queried directly:
+81 tables — an exact match to the PGlite baseline — RLS enabled on all
+81 with zero exceptions, 217 policies in force.
+
+**RLS enforcement genuinely tested under a real, authenticated,
+multi-org session for the first time** — the one thing `db:verify`'s
+PGlite check has never been able to prove, since it checks that policies
+compile and apply, not that `auth.uid()`-based scoping actually holds at
+runtime. Using disposable fixtures (a test organisation, a test auth
+user, a membership, and a second unrelated organisation), confirmed:
+anonymous reads blocked; the authenticated test user's reads scoped to
+exactly their own organisation and never the unrelated second one; the
+service role bypassing RLS as designed; an anonymous write rejected by
+Postgres itself (`42501`); the same write succeeding for the
+authenticated `admin`-role user. All fixtures were created and fully
+deleted via the service-role key within this same session — the real
+database was confirmed empty both before and after.
+
+**The real Commerce OS login flow verified end to end in the browser**
+against live mode and the real project: wrong password → the existing
+generic "not recognised" message; correct password → a real session,
+real dashboard, real org name and role sourced from the live
+`memberships` table, recognised across multiple protected routes;
+clearing session cookies correctly forced re-authentication at the
+proxy layer, not just client-side. No logout route exists anywhere in
+this codebase (confirmed by search, not assumed) — a genuine, stated gap
+rather than an untested feature. Phase 11's connectivity-failure
+handling was independently re-verified against this real project (a
+temporary, unreachable URL override, deleted after use, with otherwise
+valid credentials): the honest "infrastructure problem, not an incorrect
+password" message appeared exactly as Phase 11 built it to.
+
+**One real, recurring configuration bug found and fixed** (twice — it
+reappeared when a later credential was added to the same file, most
+likely from re-pasting a template): `NEXT_PUBLIC_SUPABASE_URL` in
+`.env.local` carried a stray `your_` prefix that would have made every
+connection attempt fail with an invalid-URL error, indistinguishable at
+a glance from "no real project." Not a code bug — a local environment
+value — but worth recording since it would otherwise have silently
+undermined every verification step below it.
+
+**Client-bundle secret scan repeated against real key values, not
+placeholders:** the real service-role key and the real
+`SUPABASE_ACCESS_TOKEN` — zero matches in `.next/static`. A
+methodology sanity-check (searching for the anon/publishable key, which
+*is* meant to be embeddable) also returned zero matches, revealing that
+the one browser Supabase client in this codebase
+(`src/lib/supabase/client.ts`) currently has no importers anywhere —
+every real Supabase call in the running app goes through a server-only
+path today. Not a vulnerability; a previously-unstated fact.
+
+**Tested:** full existing suite re-run, unchanged pass count (137 files,
+1693 tests). `tsc`/`lint`/`build`/`db:verify` (81 tables, zero new
+migrations) all clean. `.env.local` confirmed still gitignored
+throughout; the only tracked change this milestone is one `.gitignore`
+line excluding the Supabase CLI's local link-state cache
+(`supabase/.temp/`), which is not a secret but was never meant to be
+committed.
+
+**Explicitly out of scope, not attempted:** CJdropshipping configuration,
+any Shopify publish action, and enabling purchasing — all deliberately
+untouched per this milestone's own brief. A real `CJ_API_KEY` remains
+the one remaining prerequisite named at the end of Phase 11 that this
+milestone does not address.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

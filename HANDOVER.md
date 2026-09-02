@@ -5,9 +5,17 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 25 August 2026 (Milestone 15, Live Advertising Connector &
-Controlled Automation — see §31 first, including its numbering note
-before assuming this is the same "Milestone 15" `docs/MILESTONES.md`'s
+Last updated: 2 September 2026 (Phase 12, Real Supabase Provisioning &
+Live Database Verification — see §65 first: a real Supabase project now
+exists, all 44 migrations are applied to it, and RLS/login/live-mode
+behaviour are genuinely live-verified against it for the first time,
+closing the single prerequisite §64 named as blocking everything
+downstream; §66 for what remains — a real `CJ_API_KEY` and a genuine gap,
+no logout mechanism exists yet. §64 covers Phase 11 itself (the
+demo/live mode bug) and §31 covers the unrelated, separately-numbered
+Milestone 15, Live Advertising Connector & Controlled Automation — see §31
+first, including its numbering
+note before assuming this is the same "Milestone 15" `docs/MILESTONES.md`'s
 roadmap uses for international expansion; no real OAuth/API credentials
 exist for any of the four ad platforms in this environment, and no
 campaign action can execute outside a direct test call, by design; §30
@@ -15,13 +23,12 @@ for Milestone 14, Advertising Intelligence & Optimisation, before trusting
 any claim about campaign classifications or advertising priorities/health;
 §29 for Milestone 13, Commerce Intelligence — Analyse, Recommend &
 Propose, and note neither it nor Milestone 12's live-model path has been
-verified against a real `ANTHROPIC_API_KEY` or a real Supabase project;
-§28 for Milestone 12's chat grounding/security model, §27 for Milestone
-11's audit & hardening pass, §26 for the rest of Milestone 11, §22 before
-trusting any claim about monitor subject discovery, real sales data, or
-supplier operational facts; §21 for the rest of Milestone 8, §19 for
-Milestone 7's execution work, and §18 for Milestone 6's engine-level
-verification).
+verified against a real `ANTHROPIC_API_KEY`; §28 for Milestone 12's chat
+grounding/security model, §27 for Milestone 11's audit & hardening pass,
+§26 for the rest of Milestone 11, §22 before trusting any claim about
+monitor subject discovery, real sales data, or supplier operational
+facts; §21 for the rest of Milestone 8, §19 for Milestone 7's execution
+work, and §18 for Milestone 6's engine-level verification).
 
 ## 1. What this is
 
@@ -5760,25 +5767,152 @@ tested, and would not have hidden a real infrastructure failure behind
 a misleading login/authentication message the day real credentials
 exist.
 
-## 65. Next step
+## 65. Milestone: Real Supabase provisioning & live database verification (Phase 12)
 
-**Recommended Phase 12, following directly from §64:** with the
-demo→live switch itself now verified correct, the single blocking
-prerequisite for everything downstream is a real Supabase project —
-`NEXT_PUBLIC_SUPABASE_URL`/`_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` plus
-`COMMERCE_OS_MODE=live`. The moment that exists, §63's own "what is
-genuinely ready" chain (repeated here since it remains exactly as
-accurate: discovery → import → media → shipping → intelligence →
-eligibility → draft) should need no new engineering to attempt for the
-first time — this milestone's fixes mean that attempt will now either
-genuinely work or fail with an honest, specific message, never a
-misleading "wrong password" or a silent demo fallback. A real
-`CJ_API_KEY` remains the second prerequisite, independent of the first.
-Once a live Supabase project exists, the RLS policies (§9 of every
-migration this project has written) should get their first genuine live
-test — `db:verify`'s PGlite check proves the schema, not a real
-Postgres instance's actual policy enforcement under concurrent,
-multi-org access.
+**The prerequisite §64/§66 named as blocking everything downstream is
+now real.** A Supabase project ("Commerce OS", ref
+`utdwyyoytbsmsdssimxf`, region `eu-west-2`, created 2026-09-02) was
+provisioned by the account holder outside this session (this session
+cannot create or authenticate Supabase accounts, per its own standing
+rules); credentials were added to the gitignored `.env.local` by the
+user across two turns — first the project URL/anon key/service-role
+key, then a `SUPABASE_ACCESS_TOKEN` (a personal access token, a
+different credential from the service-role key, required for the CLI to
+authenticate at all). This session read all of them from the local
+environment only; none was ever pasted into chat, printed, or placed in
+any file this project tracks.
+
+**Linked and migrated for the first time against a real Postgres
+instance.** `npx supabase link --project-ref utdwyyoytbsmsdssimxf`
+(authenticated via `SUPABASE_ACCESS_TOKEN` in the environment, never
+printed) succeeded; `npx supabase projects list` confirmed the linked
+project's real identity (name, region, status `ACTIVE_HEALTHY`,
+Postgres 17.6.1) without exposing any credential. `supabase db push
+--linked` then applied all 44 migrations in order, zero errors — the
+first time any migration in this repository's history has run against
+real Postgres rather than PGlite. Queried directly via the Supabase
+Management API (authenticated the same way): **81 tables** in `public`
+— an exact match to the PGlite baseline `db:verify` has reported since
+Phase 8 — **RLS enabled on all 81** (`rowsecurity = true`, 0 exceptions,
+confirmed by querying `pg_tables` directly) and **217 policies** in
+force (`pg_policies`).
+
+**RLS enforcement live-verified under a real, authenticated, multi-org
+session — the one thing PGlite structurally cannot prove.** Using the
+service-role key, created three disposable fixtures: a test
+organisation, a test auth user (via the Auth Admin API,
+`phase12-verify@commerce-os.internal.test`, a clearly-scoped throwaway
+address), and a membership linking them with role `admin`; separately,
+a second organisation the test user was never added to, to test
+negative scoping specifically (not just "authenticated vs anonymous").
+Results, all against the real REST/Auth API:
+- Anonymous read of `organisations` → empty (RLS blocked, not merely
+  "no data" — the service-role read of the same row succeeded).
+- The authenticated test user's read of `organisations` → **exactly
+  one row, their own** — never the second, unrelated organisation,
+  proving the `auth_org_ids()` membership-scoped policy genuinely holds
+  under a real session, not just that "some" filtering occurs.
+- Anonymous insert into `config_values` → HTTP 401, Postgres error
+  `42501` ("new row violates row-level security policy") — a real
+  database-level rejection, not an application-level guess.
+- The same insert as the authenticated `admin`-role test user → HTTP
+  201, succeeded, read back correctly.
+- Every fixture (both organisations, the membership, the auth user, the
+  `config_values` row) was deleted via the service-role key within this
+  same session; `organisations`/`memberships` were confirmed empty
+  again immediately after.
+
+**The real Commerce OS login flow verified end to end in the browser**,
+against `COMMERCE_OS_MODE=live` and the real project — not the
+deliberately-unreachable endpoint §64 used:
+- Visiting `/` redirected to `/login` (itself only possible with
+  `isDemoMode()` genuinely `false` — demo mode never requires
+  authentication).
+- The wrong password produced the existing generic "Those details were
+  not recognised" message.
+- The correct password authenticated successfully; the resulting
+  dashboard rendered the real test organisation's name and — in the
+  page footer — "Signed in as phase12-verify@commerce-os.internal.test
+  · Role: admin," sourced live from the real `memberships` row, not a
+  fixture in the UI.
+- The session was recognised on a second protected route (`/orders`)
+  without re-authenticating.
+- Clearing the browser's session cookies and reloading a protected
+  route correctly forced re-authentication — confirming enforcement
+  happens server-side (`proxy.ts`/`layout.tsx`), not only in client
+  routing.
+- **No logout route or Server Action exists anywhere in this codebase**
+  (`grep`'d for `signOut`/`/logout`/`/sign-out` across `src/`: zero
+  matches). This is recorded as a genuine, honest gap — not tested,
+  because there is nothing built to test — rather than silently
+  skipped.
+- §64's connectivity-failure handling was independently re-proven
+  against this real project: a temporary, gitignored
+  `.env.development.local` (deleted immediately after) pointed
+  `NEXT_PUBLIC_SUPABASE_URL` at an unreachable host while the real anon
+  key and the real, correct test password stayed in place. Submitting
+  the login form produced exactly "Could not reach the database. Live
+  mode is enabled but the Supabase connection is currently unavailable
+  — this is an infrastructure problem, not an incorrect password" —
+  proof the classification depends on the connection failing, not on
+  the credentials.
+
+**One real, recurring configuration bug, found and fixed twice.**
+`NEXT_PUBLIC_SUPABASE_URL` in `.env.local` carried a stray `your_`
+prefix (a template paste artifact) that would have made every
+connection attempt fail with an invalid-URL error — easily
+mistaken for "no real project" rather than a formatting mistake. Fixed
+early in this phase; it reappeared verbatim after the user added
+`SUPABASE_ACCESS_TOKEN` to the same file in a later turn (most likely
+from re-pasting an old template alongside the new value) and was fixed
+again. Flagged here explicitly since it is exactly the kind of
+local-environment bug that silently invalidates every result below it
+if missed.
+
+**Client-bundle secret scan repeated against real key values, not
+placeholders.** `grep`'d the real service-role key and the real
+`SUPABASE_ACCESS_TOKEN` (plus their generic `sb_secret_`/`sbp_`
+prefixes) against the actual `.next/static` production build output:
+zero matches. A methodology sanity check — searching for the
+anon/publishable key, which *is* meant to reach the browser — also
+returned zero matches, which led to a genuine finding rather than a
+scan failure: `src/lib/supabase/client.ts`, the only browser Supabase
+client in this codebase, has no importers anywhere in `src/`. It is
+dead code. Every real Supabase call in the running application today
+goes through the server-only client or the service-role client, so no
+Supabase key of any kind — secret or otherwise — currently reaches the
+browser bundle. Not a vulnerability; a previously-unstated fact worth
+recording.
+
+**Tested:** the full existing suite re-run unchanged (137 files, 1693
+tests — no new tests added this phase, since the work was live
+verification against real infrastructure rather than new application
+code). `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run
+db:verify` (81 tables, zero new migrations) all clean. `.env.local`
+confirmed gitignored throughout (`git check-ignore -v`); the only
+tracked change this phase is one `.gitignore` line excluding
+`supabase/.temp/` (the Supabase CLI's local link-state cache — contains
+no secrets, confirmed by inspection, but was never meant to be
+committed and wasn't previously ignored). `informax-site`'s `HEAD`
+confirmed unchanged before and after
+(`2bf3d8a29b48631cf71fbb403f7f861907f902f7`).
+
+**Explicitly out of scope this phase, per its own brief, and genuinely
+not touched:** CJdropshipping configuration, any Shopify publish action,
+enabling purchasing. A real `CJ_API_KEY` remains the one prerequisite
+named at the end of §64 that this phase does not address.
+
+## 66. Next step
+
+**Recommended Phase 13, following directly from §65:** with a real,
+migrated, RLS-proven Supabase project now in place, the single
+remaining blocking prerequisite for §63's "discovery → import → media →
+shipping → intelligence → eligibility → draft" chain is a real
+`CJ_API_KEY` — nothing else in that chain requires new engineering, per
+§64 and §65 both. A second, smaller, genuine gap surfaced this phase and
+is worth closing independently of CJ: there is no logout mechanism
+anywhere in this application (§65) — a real deployment with real users
+needs one before going live in earnest, not just a working sign-in.
 
 **Recommended Phase 11, following directly from §63:** two genuine
 blockers, both outside this codebase, stand between where things are

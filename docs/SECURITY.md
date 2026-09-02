@@ -440,6 +440,75 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What real Supabase provisioning & live database verification changed here (Phase 12 of the customer-facing store)
+
+**A real Supabase project now exists and every credential-handling claim
+in §Phase 11 above was re-verified against it, live, rather than against
+a deliberately-broken test endpoint.** Four distinct credentials are now
+in play, and each was used only for its own scope: `NEXT_PUBLIC_SUPABASE_URL`
+/ `NEXT_PUBLIC_SUPABASE_ANON_KEY` (client + server, RLS-scoped),
+`SUPABASE_SERVICE_ROLE_KEY` (server only, bypasses RLS — used exclusively
+for this milestone's own fixture setup/teardown, never for anything a
+real request path would do), and `SUPABASE_ACCESS_TOKEN` (a personal
+access token, distinct from all of the above, used only by the Supabase
+CLI to link the repository and push migrations — it has no role in the
+running application and is not read by any application code). None of
+the four values was ever printed, logged, committed, or placed in this
+document — every command that touched one read it directly from the
+gitignored `.env.local` into a shell variable and passed it only to
+`curl`/the Supabase CLI.
+
+**Client-bundle scan repeated against this milestone's own production
+build, against the real key values (not placeholders) this time:**
+`grep`'d the real `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_ACCESS_TOKEN`
+values, plus the generic `sb_secret_`/`sbp_` prefixes, against the full
+`.next/static` output — zero matches. A sanity check confirmed the scan
+methodology itself works by searching for the anon/publishable key
+(which *is* meant to be embeddable) the same way — that also returned
+zero matches, because `src/lib/supabase/client.ts`, the one browser
+Supabase client in this codebase, currently has no importers anywhere
+in `src/`. It is dead code: every real Supabase read/write in the
+running application goes through the server-only client
+(`src/lib/supabase/server.ts`) or the service-role client, so the
+browser bundle carries no Supabase key of any kind today, not even the
+non-secret one. This is not a vulnerability — the anon key is safe to
+expose by Supabase's own design, protected by RLS rather than secrecy —
+but it is a genuine, previously-unstated fact worth recording rather
+than assuming client.ts is in active use.
+
+**RLS enforcement live-verified under a real, authenticated multi-org
+session for the first time** (see `docs/DATABASE.md`'s Phase 12 section
+for the full read/write test detail): anonymous access blocked, an
+authenticated user scoped to exactly their own organisation and no
+other, and the service role bypassing RLS as designed — using disposable
+test fixtures (a test organisation, a test auth user, a membership row)
+created and fully deleted via the service-role key within this same
+session, confirmed empty afterward.
+
+**Live login flow re-verified against the real project, correct and
+incorrect credentials both tested**: a wrong password produced the
+existing generic "Those details were not recognised" message (never
+revealing whether the account exists); the correct password
+authenticated successfully, the resulting session was recognised across
+multiple protected routes, and — with browser cookies cleared to
+simulate session termination — the proxy layer correctly re-required
+authentication rather than trusting client-side state. No logout route
+or Server Action exists anywhere in this codebase (confirmed by
+`grep`ping for `signOut`/`/logout` across `src/` and finding nothing) —
+stated here as a genuine, honest gap, not tested because there is
+nothing to test.
+
+**The live-mode connectivity-failure path (built in Phase 11) was
+re-proven against this milestone's real project**, not just the
+original deliberately-broken test endpoint: a temporary
+`.env.development.local` (gitignored, deleted immediately after)
+pointed `NEXT_PUBLIC_SUPABASE_URL` at an unreachable host while leaving
+the real anon key and a real, correct test password in place; submitting
+the login form produced the exact "Could not reach the database... this
+is an infrastructure problem, not an incorrect password" message —
+proof the classification genuinely depends on the *connection* failing,
+not on the credentials being wrong.
+
 ## What the production connection & controlled live activation milestone changed here (Phase 11 of the customer-facing store)
 
 **The single most important security-relevant finding across this
