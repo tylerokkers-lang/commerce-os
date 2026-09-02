@@ -1,17 +1,6 @@
-import { randomUUID } from 'node:crypto'
 import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
 import { secretsMatch, extractBearerToken } from '@/lib/core/schedulerAuth'
-import { runWorkerBatch } from '@/lib/automation/worker'
-import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
-import { getSupabaseFactsLoader } from '@/lib/automation/facts'
-import { getMarketplaceConnector } from '@/lib/marketplaces/connectors/registry'
-import { getSupabaseFxStore } from '@/lib/fx/fxStore'
-import { getSupabaseSupplierMarketFactsLoader } from '@/lib/markets/supplierMarketFactsStore'
-import { getSupabaseMarketRepository } from '@/lib/markets/supabaseMarketRepository'
-import { runAdvertisingSync } from '@/lib/advertising/sync'
-import { advertisingConnectorByKey } from '@/lib/advertising/connectors/registry'
-import { runCampaignReview } from '@/lib/advertising/monitor'
-import type { AdvertisingHandlerDeps } from '@/lib/automation/handlers/advertisingHandlers'
+import { runScheduledJobBatch } from '@/lib/automation/scheduledJobBatch'
 
 /**
  * The scheduled-automation entry point (brief §5, §30).
@@ -28,6 +17,13 @@ import type { AdvertisingHandlerDeps } from '@/lib/automation/handlers/advertisi
  * configured the secret is required — an unconfigured or missing secret
  * refuses every request rather than running unauthenticated against a real
  * database.
+ *
+ * Phase 15: `/api/automation/maintenance` now also runs this same batch
+ * (via `runScheduledJobBatch`, the one shared implementation) as part of
+ * its own scheduled cycle, so the job queue is processed even if nothing
+ * calls this route directly. This route remains independently callable —
+ * for a finer-grained external scheduler, or a manual/on-demand trigger —
+ * and is not a second, competing implementation of the same work.
  */
 export async function POST(request: Request) {
   if (isSupabaseConfigured()) {
@@ -46,30 +42,7 @@ export async function POST(request: Request) {
     })
   }
 
-  const marketDeps = { supplierMarketFacts: getSupabaseSupplierMarketFactsLoader(), fxStore: getSupabaseFxStore(), marketRepository: getSupabaseMarketRepository() }
-  // This route only ever reaches here once `isSupabaseConfigured()` is true
-  // (demo mode returns 'skipped' above), so every sync it runs is genuinely live.
-  const advertisingDeps: AdvertisingHandlerDeps = {
-    async runSync(orgId, connectorKey, limit) {
-      const connector = advertisingConnectorByKey(connectorKey)
-      if (!connector) return { succeeded: false, error: `No advertising connector registered for key "${connectorKey}".` }
-      const result = await runAdvertisingSync(orgId, false, connector, limit ?? 500)
-      return { succeeded: !result.blocked && !result.fetchError, error: result.blocked ?? result.fetchError }
-    },
-    async runCampaignReview(orgId) {
-      const result = await runCampaignReview(orgId)
-      return {
-        succeeded: result.errors.length === 0,
-        error: result.errors.length > 0 ? result.errors.join(' ') : null,
-        campaignsEvaluated: result.campaignsEvaluated,
-        recommendationsCreated: result.recommendationsCreated,
-        duplicatesAvoided: result.duplicatesAvoided,
-        blocked: result.blocked,
-        blockedByFreshness: result.blockedByFreshness,
-      }
-    },
-  }
-  const result = await runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), 10, marketDeps, advertisingDeps)
+  const result = await runScheduledJobBatch(10)
   return Response.json({ status: 'ok', checkedAt: new Date().toISOString(), ...result })
 }
 

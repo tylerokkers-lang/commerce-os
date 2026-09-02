@@ -440,6 +440,59 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What production scheduler & automation operations changed here (Phase 15 of the customer-facing store)
+
+**No new attack surface, no weakened authentication.** The job queue and
+monitoring runner now also execute inside `runMaintenance`
+(`/api/automation/maintenance`, already scheduler-authenticated via
+`AUTOMATION_CRON_SECRET`, unchanged this phase) rather than requiring
+their own separate cron entries. `/api/automation/run` and
+`/api/monitoring/run` keep their exact existing, independent
+`AUTOMATION_CRON_SECRET` checks — verified live again this phase (no
+header → `401`; wrong secret → `401`; correct secret → `200`) — nothing
+about this phase makes any route callable without the secret it already
+required.
+
+**Duplicate/overlapping scheduler invocation — a genuine concurrency
+property, proven live under a real HTTP race for the first time.** Two
+truly concurrent `POST /api/automation/maintenance` requests against the
+real Supabase project produced exactly one real run and one correctly
+rejected `409 already_running` — the existing single-run lock
+(`acquireMaintenanceRun`) holding under genuine network-level
+concurrency, not only the in-process concurrency `maintenance-locking.test.ts`
+already covered. This is the property that keeps a duplicated or
+overlapping scheduler tick from ever causing two workers to legitimately
+process the same maintenance cycle at once.
+
+**A genuine reporting-truthfulness bug fixed:** `worker.ts`'s
+`deadLettered` count previously included jobs whose real database status
+was `'failed'` (non-retryable, not yet exhausted — a status
+`completeJob` treats as distinct from `dead_letter`), overstating how
+final a job's failure actually was to anyone reading the batch summary —
+now directly operator-visible via `runMaintenance`'s own result. Fixed
+to mirror `completeJob`'s own exhaustion check exactly; proven live
+against the real project (an intentionally unregistered, harmless probe
+job type correctly landed as `failed`, not `dead_letter`).
+
+**Two genuine operator-trust gaps closed, both real live queries, never
+fabricated:** `/api/health` previously only reported credential
+*presence* (`integrationStatus()`, an env-var check), never whether
+Supabase was actually reachable — now performs one real, cheap,
+count-only query and reports `supabase.reachable` truthfully (`null` in
+demo mode, never a guessed boolean). `/automation`'s new "Stale running
+jobs" tile reads directly from `automation_jobs.locked_at` against the
+exact threshold `claimNextJob` itself uses to recover an abandoned
+claim, browser-verified with a real, deliberately stale-locked test row
+scoped to a disposable organisation.
+
+**Test-data discipline, same as every prior live-verification session:**
+all fixtures disposable, service-role-created, and fully deleted after
+use except the one organisation Phase 14 already established is
+permanently undeletable (`audit_logs`' append-only trigger blocking even
+a cascaded delete) — no new such organisation was created this phase;
+the existing one's `automation_jobs` rows (not append-only) were cleaned
+up.
+
 ## What automation job-queue reliability changed here (Phase 14 of the customer-facing store)
 
 **A genuine authorization/reachability bug, found live: every

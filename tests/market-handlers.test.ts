@@ -37,7 +37,13 @@ describe('market_recheck handler', () => {
     await store.enqueueJob({ orgId: ORG_A, jobType: 'market_recheck', payload: { productId: 'prod-1' } }) // Missing everything else.
     const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1', 1, makeDeps())
     expect(batch.succeeded).toBe(0)
-    expect(batch.deadLettered).toBe(1) // Non-retryable malformed payloads dead-letter immediately, never silently vanish.
+    // Non-retryable on its first attempt (well under maxAttempts) lands as
+    // `failed`, not `dead_letter` — `dead_letter` specifically means
+    // attempts are exhausted (`completeJob`'s own distinction; production
+    // scheduler & automation operations milestone corrected this batch
+    // summary to match it). Never silently vanishes either way.
+    expect(batch.failed).toBe(1)
+    expect(batch.deadLettered).toBe(0)
   })
 
   it('without marketDeps, the job fails explicitly rather than crashing the worker', async () => {
@@ -50,7 +56,8 @@ describe('market_recheck handler', () => {
     await store.enqueueJob({ orgId: ORG_A, jobType: 'market_recheck', payload: payload as unknown as Record<string, unknown> })
     const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1', 1) // No marketDeps passed.
     expect(batch.succeeded).toBe(0)
-    expect(batch.deadLettered).toBe(1)
+    expect(batch.failed).toBe(1) // Non-retryable, first attempt: `failed`, not exhausted `dead_letter`.
+    expect(batch.deadLettered).toBe(0)
   })
 
   it('an unknown market key fails explicitly, never silently assessing against the wrong market', async () => {
@@ -96,7 +103,8 @@ describe('fx_recheck handler', () => {
     const facts = createInMemoryFactsLoader()
     await store.enqueueJob({ orgId: ORG_A, jobType: 'fx_recheck', payload: { base: 'USD' } }) // Missing quote/newRate.
     const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1', 1, makeDeps())
-    expect(batch.deadLettered).toBe(1)
+    expect(batch.failed).toBe(1) // Non-retryable, first attempt: `failed`, not exhausted `dead_letter`.
+    expect(batch.deadLettered).toBe(0)
   })
 
   it('finds no affected assessments and simply succeeds when nothing has ever been assessed in this currency', async () => {

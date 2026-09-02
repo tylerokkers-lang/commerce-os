@@ -10,6 +10,7 @@ import type { MarketplaceConnectorSummary } from '@/lib/marketplaces/connectors/
 import type { Tables } from '@/lib/supabase/database.types'
 import { getRecentMaintenanceRuns } from './maintenanceRuns'
 import { classifyMaintenanceHealth, MAINTENANCE_JOB_KEY, type MaintenanceHealth } from './maintenanceHealth'
+import { LOCK_TIMEOUT_SECONDS } from './jobs'
 
 export type AutomationAction = Tables<'automation_actions'>
 export type AutomationJob = Tables<'automation_jobs'>
@@ -62,6 +63,16 @@ export interface AutomationStatus {
 export interface ProductionReadiness {
   schedulerConfigured: boolean
   jobsByStatus: Record<string, number>
+  /**
+   * Production scheduler & automation operations milestone — jobs whose
+   * `status` is still `running` but whose `locked_at` is already past
+   * `LOCK_TIMEOUT_SECONDS` (`jobs.ts`'s own claim-recovery threshold, the
+   * single source of truth reused here, not a second guess at what "stale"
+   * means). Such a job self-heals on the next successful claim — this
+   * count exists purely so an operator can see it happening rather than
+   * discover it only after the fact.
+   */
+  staleRunningJobs: number
   externalActionsByVerification: Record<string, number>
   connectors: readonly MarketplaceConnectorSummary[]
 }
@@ -95,7 +106,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
       recentActions: [],
       pendingJobs: [],
       demoScenarios: demoAutomationScenarios(),
-      productionReadiness: { schedulerConfigured: false, jobsByStatus: {}, externalActionsByVerification: {}, connectors: connectorSummaries },
+      productionReadiness: { schedulerConfigured: false, jobsByStatus: {}, staleRunningJobs: 0, externalActionsByVerification: {}, connectors: connectorSummaries },
       recoveryRequired: [],
       maintenanceHealth: classifyMaintenanceHealth([], new Date().toISOString()),
     }
@@ -105,12 +116,19 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
   const startOfDay = new Date()
   startOfDay.setUTCHours(0, 0, 0, 0)
 
-  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }, { data: recoveryRequired }, maintenanceRuns] = await Promise.all([
+  const staleRunningCutoff = new Date(Date.now() - LOCK_TIMEOUT_SECONDS * 1000).toISOString()
+
+  const [{ data: todaysActions }, { data: recentActions }, { data: pendingJobs }, { count: deadLetterCount }, { data: allJobs }, { count: staleRunningCount }, { data: recoveryRequired }, maintenanceRuns] = await Promise.all([
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).gte('created_at', startOfDay.toISOString()),
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).order('created_at', { ascending: false }).limit(25),
     supabase.from('automation_jobs').select('*').eq('org_id', session.orgId).in('status', ['pending', 'running']).order('run_at', { ascending: true }).limit(25),
     supabase.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('org_id', session.orgId).eq('status', 'dead_letter'),
     supabase.from('automation_jobs').select('status').eq('org_id', session.orgId),
+    // Same threshold `claimNextJob` (`jobs.ts`) itself uses to recover an
+    // abandoned claim — a running job past this point self-heals on the
+    // next successful claim; this count exists so an operator can see that
+    // happening rather than only infer it after the fact.
+    supabase.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('org_id', session.orgId).eq('status', 'running').lt('locked_at', staleRunningCutoff),
     supabase.from('automation_actions').select('*').eq('org_id', session.orgId).in('status', ['retry_pending', 'executing']).order('created_at', { ascending: false }).limit(25),
     // Service-role read: maintenance runs are `org_id is null` (Milestone
     // 18, migration 0029) and so are never visible through the
@@ -155,7 +173,7 @@ export async function getAutomationStatus(): Promise<AutomationStatus> {
     recentActions: recentActions ?? [],
     pendingJobs: pendingJobs ?? [],
     demoScenarios: [],
-    productionReadiness: { schedulerConfigured, jobsByStatus, externalActionsByVerification, connectors: connectorSummaries },
+    productionReadiness: { schedulerConfigured, jobsByStatus, staleRunningJobs: staleRunningCount ?? 0, externalActionsByVerification, connectors: connectorSummaries },
     recoveryRequired: recoveryRequired ?? [],
     maintenanceHealth,
   }

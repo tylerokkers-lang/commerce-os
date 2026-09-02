@@ -33,7 +33,11 @@ import type { EnqueueJobInput, JobOutcome, JobRecord } from './store'
  * `inMemoryStore.ts`, the test double used to verify the engine end-to-end.
  */
 
-const LOCK_TIMEOUT_SECONDS = 300 // A claim older than this is treated as an abandoned worker, not a live one.
+// Exported (production scheduler & automation operations milestone) so
+// `automation/repository.ts`'s operator-facing "stale jobs" count uses the
+// exact same threshold `claimNextJob` itself does, rather than a second,
+// possibly-diverging guess at what "stale" means.
+export const LOCK_TIMEOUT_SECONDS = 300 // A claim older than this is treated as an abandoned worker, not a live one.
 
 export { computeBackoffSeconds } from './backoff'
 

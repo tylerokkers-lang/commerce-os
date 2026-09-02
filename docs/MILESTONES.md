@@ -2676,6 +2676,73 @@ purchasing, financial automation. No job handler was exercised — every
 live test used an intentionally unregistered job type so no real
 marketplace/financial logic was ever reached.
 
+## Milestone — Production scheduler & automation operations ✅ complete (Phase 15 of the customer-facing store)
+
+Closes the gap the previous milestone's own "next step" named: the job
+queue and monitors were race-safe and reachable, but nothing scheduled
+either. `vercel.json`'s one existing Vercel Cron entry
+(`/api/automation/maintenance`, every 15 minutes) never drove the job
+queue or the monitoring runner — `runMaintenance` orchestrated five
+unrelated subsystems, and since monitors are what enqueue most of
+`automation_jobs`' own work, the queue had no real producer or consumer
+on any schedule.
+
+**Fix: fold both into the one already-scheduled cycle**, rather than add
+`vercel.json` cron entries this environment cannot verify would actually
+deploy (no access to the connected Vercel project's dashboard or plan
+tier). Two new self-contained functions —
+`runMonitoringForAllOrgs`/`runScheduledJobBatch` — extract the exact
+dependency wiring `/api/monitoring/run`/`/api/automation/run` already
+had into one shared implementation each route and `runMaintenance` now
+call, never duplicated. Monitoring runs immediately before the job
+batch so whatever it enqueues is claimable the same cycle.
+
+**A genuine reporting bug fixed:** the job-worker's `deadLettered` count
+included jobs whose real status was `'failed'` (non-retryable, not yet
+exhausted, a distinct status from `dead_letter`), overstating dead-letter
+counts to anyone reading the batch summary — now directly
+operator-visible in the maintenance result. Fixed to match the database's
+own exhaustion check exactly; verified meaningful by reverting and
+confirming 3 tests fail.
+
+**Two genuine operator-trust gaps closed:** `/api/health` previously
+only reported credential presence, never real connectivity — now runs
+one cheap live query and reports `supabase.reachable` truthfully.
+`/automation` had no way to see "are jobs becoming stale" — added a
+count of jobs stuck `running` past the exact threshold the claim-recovery
+logic itself uses, as a new stat tile.
+
+**Live-verified against the real Supabase project**, including — for
+the first time — a genuine concurrent HTTP race: two truly simultaneous
+`POST /api/automation/maintenance` requests produced exactly one real
+run and one correctly rejected `409 already_running`, proving the
+existing single-run lock holds under real network-level concurrency,
+not only the in-process concurrency already covered by the existing
+locking test suite. Both of the previous milestone's claim races
+(pending-job double-claim, abandoned-job stale-lock recovery) were
+re-run live and confirmed still intact. The full authentication
+lifecycle (login, invalid credentials, logout, post-logout protection,
+re-login) was re-confirmed live in the same session.
+
+**Tested:** 3 regression tests updated for the corrected dead-letter
+distinction. 1701 total, unchanged in count — the new scheduling
+functions are thin, self-contained wiring proven by live verification
+rather than new mocked surface, consistent with this codebase's existing
+practice for `server-only` modules whose value is in genuine live
+behaviour. `tsc`/`lint`/`build`/`db:verify` (81 tables, zero migrations)
+all clean.
+
+**No database migration** — every change is application orchestration,
+a reporting calculation, or a health-check query against existing tables.
+
+**Genuinely not attempted:** an actual external scheduler was not
+configured or verified from this session — no access to the connected
+Vercel project's deployment configuration. Whether `vercel.json`'s cron
+entry is actually firing in production is unverified from here.
+CJdropshipping, Shopify publishing, purchasing and financial automation
+remain untouched; no job handler beyond an intentionally unregistered
+probe type was ever exercised.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

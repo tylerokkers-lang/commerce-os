@@ -750,6 +750,23 @@ race a single shared `.in('status', [...])` filter previously allowed.
 `AUTOMATION_CRON_SECRET`, never a user session (`src/proxy.ts`'s
 `PUBLIC_PATHS`), by design — a scheduler is not a logged-in owner.
 
+**The maintenance orchestrator (`automation/maintenance.ts`) is the one
+scheduled entry point (Phase 15, `HANDOVER.md` §69).** `vercel.json`'s
+one Vercel Cron entry calls `/api/automation/maintenance` every 15
+minutes; `runMaintenance` now also runs the job-queue batch
+(`runScheduledJobBatch`) and every organisation's due monitors
+(`runMonitoringForAllOrgs`) as two more of its seven independently
+try/caught subsystem steps, monitoring immediately before the job batch
+so whatever a monitor enqueues this cycle is claimable in the same run.
+`/api/automation/run` and `/api/monitoring/run` call these same two
+shared functions directly and remain independently callable — for
+manual triggering or a finer-grained external scheduler — but are not a
+second implementation, and are not required for the baseline loop.
+Overlapping/duplicate scheduler invocations are serialized by the
+existing single-run lock (`acquireMaintenanceRun`), proven live against
+a genuine concurrent HTTP race this phase: one request succeeds, the
+other receives `409 already_running`.
+
 **Server Actions guard themselves.** They are reachable by direct POST, not only
 through the UI, so each one calls `requireWriteAccess()` rather than trusting
 that a page rendered.

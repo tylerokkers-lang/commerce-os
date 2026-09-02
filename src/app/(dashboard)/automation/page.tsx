@@ -259,6 +259,12 @@ export default async function AutomationPage() {
               <p className="mt-1 text-sm font-medium">{status.productionReadiness.jobsByStatus[s] ?? 0}</p>
             </div>
           ))}
+          <div className="bg-surface px-4 py-3">
+            <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">Stale running jobs</p>
+            <p className={`mt-1 text-sm font-medium ${status.productionReadiness.staleRunningJobs > 0 ? 'text-negative' : ''}`}>
+              {status.productionReadiness.staleRunningJobs}
+            </p>
+          </div>
           {status.productionReadiness.connectors.map((c) => (
             <div key={c.key} className="bg-surface px-4 py-3">
               <p className="text-xs font-medium tracking-wide text-ink-subtle uppercase">{c.label}</p>
@@ -270,9 +276,19 @@ export default async function AutomationPage() {
         </div>
         {!status.productionReadiness.schedulerConfigured ? (
           <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
-            No external scheduler is calling <code>POST /api/automation/run</code> yet — jobs will queue but nothing will claim them until one does. See HANDOVER.md for what to point at that route.
+            <code>AUTOMATION_CRON_SECRET</code> is not configured — every scheduler-authenticated route (job queue,
+            monitoring, maintenance) refuses to run against a live database until it is. See HANDOVER.md for what to
+            set.
           </p>
-        ) : null}
+        ) : (
+          <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
+            The job queue and due monitors now run as part of the maintenance cycle below
+            (<code>POST /api/automation/maintenance</code>, wired to Vercel Cron in <code>vercel.json</code>) — no
+            separate scheduler entry is required for either. <code>POST /api/automation/run</code> and{' '}
+            <code>POST /api/monitoring/run</code> remain independently callable for manual or finer-grained
+            triggering.
+          </p>
+        )}
       </Card>
 
       <Card>
@@ -313,7 +329,10 @@ export default async function AutomationPage() {
         </div>
         {monitoring.systemHealth.monitorsNeverRun.length > 0 ? (
           <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
-            Never run yet: {monitoring.systemHealth.monitorsNeverRun.join(', ')}. Nothing calls <code>POST /api/monitoring/run</code> for these until an external scheduler is configured — see HANDOVER.md.
+            Never run yet: {monitoring.systemHealth.monitorsNeverRun.join(', ')}. These run automatically as part of
+            the maintenance cycle (<code>POST /api/automation/maintenance</code>) once{' '}
+            <code>AUTOMATION_CRON_SECRET</code> is configured and something is actually calling that route on a
+            schedule — see the production readiness card above and HANDOVER.md for what to verify.
           </p>
         ) : null}
         <div className="grid grid-cols-2 gap-px border-t border-border bg-border sm:grid-cols-5">

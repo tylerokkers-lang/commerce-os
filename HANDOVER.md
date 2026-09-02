@@ -5,19 +5,22 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 2 September 2026 (Phase 14, Automation Job-Queue
-Reliability — see §68 first: live verification against the real
-Supabase project found and fixed two genuine, previously undiscovered
-production-blocking bugs — a real double-claim race in `claimNextJob`,
-and every scheduler-authenticated route being completely unreachable in
-live mode because `proxy.ts`'s session gate ran before each route's own
-secret check. Both fixed, both re-verified live, both regression-tested;
-Phase 13's login/logout lifecycle re-confirmed unaffected. §66 for what
-remains — pointing a real external scheduler at the now-genuinely-
-reachable routes, and a real `CJ_API_KEY` for the storefront chain. §67
-covers Phase 13 (logout/session hardening), §65 covers Phase 12 (real
-Supabase provisioning and live database verification), §64 covers Phase
-11 (the demo/live mode bug), and §31 covers the unrelated, separately-numbered
+Last updated: 2 September 2026 (Phase 15, Production Scheduler &
+Automation Operations — see §69 first: the job queue and product/
+supplier/compliance/FX/market monitors are now folded into the one
+already-scheduled maintenance cycle (`vercel.json`'s existing Vercel
+Cron entry), closing the gap where neither had any real producer or
+consumer running on a timer; a genuine dead-letter-reporting bug and two
+genuine operator-trust gaps (`/api/health` connectivity, "are jobs
+stale?") were also found and fixed. Duplicate/overlapping scheduler
+invocations proven live to serialize correctly under a real HTTP race
+for the first time. §66 for what remains — this session cannot verify
+the connected Vercel project actually deploys the cron entry, and a real
+`CJ_API_KEY` for the storefront chain. §68 covers Phase 14 (the
+job-claim race and unreachable-scheduler-routes bugs), §67 covers Phase
+13 (logout/session hardening), §65 covers Phase 12 (real Supabase
+provisioning and live database verification), §64 covers Phase 11 (the
+demo/live mode bug), and §31 covers the unrelated, separately-numbered
 Milestone 15, Live Advertising Connector & Controlled Automation — see §31
 first, including its numbering
 note before assuming this is the same "Milestone 15" `docs/MILESTONES.md`'s
@@ -6146,7 +6149,150 @@ status — some correctly reach `failed` instead) is a minor, pre-existing
 reporting imprecision noticed in passing; not a correctness bug, not
 fixed this phase to keep scope tight.
 
+## 69. Milestone: Production scheduler & automation operations (Phase 15)
+
+**Closes the gap §68's own "Next step" named: the job queue and monitors
+were race-safe and reachable, but nothing was actually calling either on
+a timer.** `vercel.json` has, since before this phase, one Vercel Cron
+entry — `POST /api/automation/maintenance` every 15 minutes — but
+`runMaintenance` (`maintenance.ts`) never called the job-queue worker or
+the monitoring runner, and neither `/api/automation/run` nor
+`/api/monitoring/run` had a cron entry of its own. Since monitors are
+what enqueue most of `automation_jobs`' own work in the first place
+(`monitors/*.ts` call `enqueueJob` directly), this meant the queue §68
+proved race-safe against real Postgres had, in production, no real
+producer or consumer running on any schedule at all.
+
+**Fix: fold both into the one already-scheduled cycle, rather than add
+cron entries this environment cannot verify would deploy.** This
+session has no access to the connected Vercel project's dashboard, plan
+tier, or actual cron-job limit — adding new `vercel.json` entries and
+calling that "configured" would have been exactly the kind of
+unverifiable claim this codebase's own discipline forbids. Instead,
+`runMaintenance` gained two new subsystem steps, using the exact same
+per-subsystem try/catch/`classifyMaintenanceOutcome` pattern its five
+existing steps already establish (one subsystem failing never fails the
+whole run):
+- `runMonitoringForAllOrgs` (new, `monitoring/scheduledRun.ts`) — the
+  same organisation-loop/dependency-wiring `/api/monitoring/run` always
+  had, extracted into one shared implementation both call, rather than
+  two independently-maintained copies.
+- `runScheduledJobBatch` (new, `automation/scheduledJobBatch.ts`) — the
+  same dependency wiring `/api/automation/run` always had, extracted the
+  same way. Runs immediately after monitoring, deliberately, so whatever
+  a monitor just enqueued this cycle is claimable in this same cycle,
+  not only the next one.
+
+`/api/automation/run` and `/api/monitoring/run` still exist, unchanged
+in their own authentication and behaviour, now calling these same
+shared functions rather than duplicating them — independently callable
+for manual triggering or a finer-grained external scheduler later, but
+no longer required for the baseline loop to run at all.
+
+**A genuine, secondary truthfulness bug found while wiring this up and
+fixed:** `worker.ts`'s `WorkerBatchResult.deadLettered` counted *any*
+non-retryable outcome, even when the job's real database status was
+`'failed'` (non-retryable but not yet exhausted — a distinct status from
+`'dead_letter'`, per `completeJob`'s own logic). This understated how
+many attempts a job actually has left and overstated dead-letter counts
+— directly relevant now that this summary is surfaced in `runMaintenance`'s
+own operator-facing result. Fixed to mirror `completeJob`'s exhaustion
+check exactly (`attempts >= maxAttempts`). Verified meaningful: reverted
+the fix, confirmed the 3 affected assertions in
+`tests/market-handlers.test.ts` fail, restored it.
+
+**A genuine, second operational-trust gap closed: `/api/health` only
+ever reported credential *presence*, never connectivity.** Added a real,
+single, cheap live query (`organisations` count-only) so
+`supabase.reachable` answers "is Supabase unavailable right now?" — one
+of the operational questions this phase's own brief named explicitly —
+truthfully, `null` in demo mode (no real project to check) rather than
+a fabricated boolean.
+
+**A genuine, third gap: "are jobs becoming stale?" had no answer.** A
+running job past `claimNextJob`'s own `LOCK_TIMEOUT_SECONDS` (now
+exported as the single source of truth, not a second guess) self-heals
+on the next successful claim, but there was no operator-facing count of
+it happening. Added `ProductionReadiness.staleRunningJobs`, a targeted
+count query using that exact threshold, surfaced as a new stat tile on
+`/automation`. Two pieces of now-outdated UI copy claiming "nothing
+calls" the job/monitoring routes were corrected to describe the actual,
+current wiring.
+
+**Live-verified end to end against the real Supabase project**, using
+the same permanent verification organisation §68 established (a real
+Vercel Cron cannot be simulated locally, so this drove the real HTTP
+route directly, exactly as a scheduler would):
+- Auth gate: no header → `401`; wrong secret → `401`; correct secret →
+  `200`, a genuine run touching every subsystem including the two new
+  ones — the FX monitor genuinely detected a real (unavailable-data)
+  condition and created two real domain events; `jobQueue` correctly
+  reported `claimed: 0` with nothing pending.
+- **Duplicate/overlapping scheduler invocation, proven live for the
+  first time against a real HTTP race** (previously only tested via the
+  in-memory store): two genuinely concurrent `POST /api/automation/maintenance`
+  requests produced exactly one real run (`200`) and one correctly
+  rejected concurrent attempt (`409`, `already_running`) — the
+  single-run lock holding under a true network-level race, not just an
+  in-process one.
+- Job-queue processing within the maintenance cycle: a safe,
+  intentionally unregistered probe job type was enqueued, claimed by the
+  next real maintenance run, and correctly landed as `failed` (not
+  `dead_letter`) — the exact corrected counting behaviour, proven live,
+  not only in the mocked regression test.
+- Re-verified live, unaffected by this phase's changes: both of §68's
+  claim races (pending-job double-claim, abandoned-job stale-lock
+  recovery) — a fresh, direct re-run of the same two-worker race against
+  real Postgres, both still producing exactly one winner.
+- `/api/health`'s new `supabase.reachable` genuinely returned `true`
+  against the real project.
+- `/automation`'s new "Stale running jobs" tile and both corrected
+  messages, browser-verified against a disposable test organisation
+  seeded with one pending, one running, one dead-lettered, and one
+  deliberately stale-locked job — all four counts rendered correctly and
+  scoped to that org alone (RLS boundary re-confirmed, not merely
+  assumed).
+- Phase 13's full lifecycle re-confirmed live in the same session: login,
+  invalid-credential rejection, logout, post-logout redirect, re-login.
+
+**Tested:** 3 new regression tests (`tests/market-handlers.test.ts`,
+updated) for the `deadLettered`/`failed` distinction, verified meaningful
+by revert-and-restore. 1701 total, unchanged in count from §68 (this
+phase's new server-only wiring functions are thin pass-throughs proven
+by live verification above, not new mocked unit surface — the
+established, deliberate choice this codebase has made each time a
+module is `'server-only'` and its value is in genuine live behaviour
+rather than internal branching logic; see §68's own reasoning for why
+`claimNextJob` specifically got mocked tests and these did not).
+`npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run db:verify`
+(81 tables, zero migrations — this phase changed application wiring and
+one reporting calculation, never the schema) all clean.
+
+**No database migration.** Every change is application-level
+orchestration, reporting, or a health-check query against existing
+tables.
+
+**Genuinely not attempted, stated plainly:** an actual external
+scheduler (Vercel Cron or otherwise) was not configured or verified
+from within this session — this environment has no access to the
+connected Vercel project's dashboard or deployment credentials.
+`vercel.json`'s existing cron entry is unchanged; whether it is actually
+deployed and firing is unverified from here. CJdropshipping, Shopify
+publishing, purchasing and financial automation were untouched — no
+job handler beyond the intentionally-unregistered probe type was ever
+exercised.
+
 ## 66. Next step
+
+**Recommended Phase 16, following directly from §69:** the application-side
+scheduler foundation is now genuinely reliable and live-verified — the
+one remaining step is external, not architectural: confirming the
+connected Vercel project actually deploys `vercel.json`'s cron entry
+(or configuring an alternative external scheduler) and that
+`AUTOMATION_CRON_SECRET`/Vercel's own `CRON_SECRET` are set to match in
+that real environment, outside what this session can access. A real
+`CJ_API_KEY` remains the separate, independent prerequisite for §63's
+storefront chain.
 
 **Recommended Phase 15, following directly from §68:** with the job
 queue now genuinely race-safe and the scheduler routes genuinely

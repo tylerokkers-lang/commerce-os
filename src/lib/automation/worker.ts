@@ -129,8 +129,16 @@ export async function runWorkerBatch(
 
     await store.completeJob(job, outcome)
 
+    // Mirrors `completeJob`'s own exhaustion check exactly (production
+    // scheduler & automation operations milestone) — the previous version
+    // counted any non-retryable outcome as `deadLettered`, even when the
+    // job's real database status was `'failed'` (non-retryable, but not
+    // yet exhausted), understating how many attempts a job actually has
+    // left and overstating dead-letter counts to anyone reading this
+    // batch summary (now surfaced in `runMaintenance`'s own operator-
+    // facing result).
     if (outcome.succeeded) result.succeeded++
-    else if (job.attempts >= job.maxAttempts || outcome.retryable === false) result.deadLettered++
+    else if (job.attempts >= job.maxAttempts) result.deadLettered++
     else result.failed++
   }
 
