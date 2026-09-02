@@ -6255,18 +6255,32 @@ route directly, exactly as a scheduler would):
 - Phase 13's full lifecycle re-confirmed live in the same session: login,
   invalid-credential rejection, logout, post-logout redirect, re-login.
 
-**Tested:** 3 new regression tests (`tests/market-handlers.test.ts`,
-updated) for the `deadLettered`/`failed` distinction, verified meaningful
-by revert-and-restore. 1701 total, unchanged in count from §68 (this
-phase's new server-only wiring functions are thin pass-throughs proven
-by live verification above, not new mocked unit surface — the
-established, deliberate choice this codebase has made each time a
-module is `'server-only'` and its value is in genuine live behaviour
-rather than internal branching logic; see §68's own reasoning for why
-`claimNextJob` specifically got mocked tests and these did not).
-`npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run db:verify`
-(81 tables, zero migrations — this phase changed application wiring and
-one reporting calculation, never the schema) all clean.
+**Tested:** 3 regression tests (`tests/market-handlers.test.ts`, updated)
+for the `deadLettered`/`failed` distinction, verified meaningful by
+revert-and-restore. A follow-up pass added 8 more
+(`tests/maintenance-scheduling.test.ts`, new) directly exercising
+`runMaintenance`'s own orchestration of the two new subsystems — by
+mocking all seven subsystem functions it imports by name and driving
+the real (unmocked) in-memory `AutomationStore`, the same technique
+`tests/maintenance-locking.test.ts` already established for the lock
+itself: monitoring genuinely runs before the job batch (verified
+meaningful — swapping the order in the source and confirming this test
+fails, then restoring it); one subsystem throwing never prevents another
+from still running; a job-queue batch with failures is truthfully
+classified as partial success, never silent success; every subsystem
+throwing at once is a genuine failure, never success; a concurrent
+`runMaintenance` call while one is in flight is correctly rejected as
+`already_running`; and the completed-run summary's `itemsProcessed`/
+`itemsFailed` genuinely include the job-queue counts. 1709 total (was
+1701). A second live-verification pass re-confirmed, against the real
+project, unchanged: both scheduler-route auth gates (all three routes),
+`/api/health`'s real `supabase.reachable`, both of §68's claim races,
+and the maintenance-level overlap race (`409 already_running`) — plus
+Phase 13's full login/invalid-credentials/logout/post-logout/re-login
+cycle, live in the browser. `npx tsc --noEmit`, `npm run lint`,
+`npm run build`, `npm run db:verify` (81 tables, zero migrations — this
+phase changed application wiring and one reporting calculation, never
+the schema) all clean.
 
 **No database migration.** Every change is application-level
 orchestration, reporting, or a health-check query against existing

@@ -2725,12 +2725,15 @@ lifecycle (login, invalid credentials, logout, post-logout protection,
 re-login) was re-confirmed live in the same session.
 
 **Tested:** 3 regression tests updated for the corrected dead-letter
-distinction. 1701 total, unchanged in count — the new scheduling
-functions are thin, self-contained wiring proven by live verification
-rather than new mocked surface, consistent with this codebase's existing
-practice for `server-only` modules whose value is in genuine live
-behaviour. `tsc`/`lint`/`build`/`db:verify` (81 tables, zero migrations)
-all clean.
+distinction, plus 8 new tests directly exercising `runMaintenance`'s
+orchestration of the two new subsystems (ordering, per-subsystem
+isolation, truthful classification, and the overlapping-run rejection),
+mocking all seven subsystem functions and driving the real in-memory
+store. 1709 total (was 1701). A follow-up live-verification pass
+re-confirmed both scheduler-route auth gates, real Supabase
+connectivity, both Phase 14 claim races, the maintenance overlap race,
+and the full Phase 13 auth lifecycle, all unchanged.
+`tsc`/`lint`/`build`/`db:verify` (81 tables, zero migrations) all clean.
 
 **No database migration** — every change is application orchestration,
 a reporting calculation, or a health-check query against existing tables.
