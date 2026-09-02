@@ -128,17 +128,42 @@ export async function claimNextJob(workerId: string): Promise<JobRecord | null> 
       .limit(10)
   ).data
 
-  for (const candidate of [...(candidates ?? []), ...(abandoned ?? [])]) {
+  // Two separate, narrowly-scoped update attempts rather than one loop with
+  // `.in('status', ['pending', 'running'])` (a real bug this project's own
+  // Phase 14 live-verification against real Postgres caught — the in-memory
+  // test double can't reproduce it, since it doesn't model true concurrent
+  // commits): `.in()` alone re-matches a row the instant *any* other worker
+  // has already claimed it as 'running', not only a genuinely stale one,
+  // because it never re-checks `locked_at` at update time. A pending job
+  // must only ever move pending -> running; an abandoned job must only be
+  // re-claimed if it is *still* stale at the moment of the update, not just
+  // at the moment of the earlier `select` above (a second worker's `select`
+  // can race ahead of a first worker's already-committed re-claim).
+  for (const candidate of candidates ?? []) {
     const { data: claimed, error } = await supabase
       .from('automation_jobs')
       .update({ status: 'running', locked_at: nowIso, locked_by: workerId, attempts: candidate.attempts + 1 })
       .eq('id', candidate.id)
-      .in('status', ['pending', 'running'])
+      .eq('status', 'pending')
       .select('*')
       .maybeSingle()
 
     if (!error && claimed) return toJobRecord(claimed)
     // 0 rows updated means another worker won the race for this row; try the next candidate.
+  }
+
+  for (const candidate of abandoned ?? []) {
+    const { data: claimed, error } = await supabase
+      .from('automation_jobs')
+      .update({ status: 'running', locked_at: nowIso, locked_by: workerId, attempts: candidate.attempts + 1 })
+      .eq('id', candidate.id)
+      .eq('status', 'running')
+      .lt('locked_at', lockCutoff)
+      .select('*')
+      .maybeSingle()
+
+    if (!error && claimed) return toJobRecord(claimed)
+    // 0 rows updated means another worker already recovered this abandoned job.
   }
 
   return null

@@ -5,16 +5,19 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 2 September 2026 (Phase 13, Authentication & Session
-Hardening — see §67 first: a real logout mechanism now exists, using the
-same Supabase server client as the rest of the app, live-verified
-end-to-end — login, session persistence, logout, post-logout route
-protection, re-login — against the real project §65 provisioned,
-closing the one genuine gap §65 identified; §66 for what remains, a real
-`CJ_API_KEY`, the last blocking prerequisite for the storefront chain.
-§65 covers Phase 12 itself (real Supabase provisioning and live database
-verification), §64 covers Phase 11 (the demo/live mode bug), and §31
-covers the unrelated, separately-numbered
+Last updated: 2 September 2026 (Phase 14, Automation Job-Queue
+Reliability — see §68 first: live verification against the real
+Supabase project found and fixed two genuine, previously undiscovered
+production-blocking bugs — a real double-claim race in `claimNextJob`,
+and every scheduler-authenticated route being completely unreachable in
+live mode because `proxy.ts`'s session gate ran before each route's own
+secret check. Both fixed, both re-verified live, both regression-tested;
+Phase 13's login/logout lifecycle re-confirmed unaffected. §66 for what
+remains — pointing a real external scheduler at the now-genuinely-
+reachable routes, and a real `CJ_API_KEY` for the storefront chain. §67
+covers Phase 13 (logout/session hardening), §65 covers Phase 12 (real
+Supabase provisioning and live database verification), §64 covers Phase
+11 (the demo/live mode bug), and §31 covers the unrelated, separately-numbered
 Milestone 15, Live Advertising Connector & Controlled Automation — see §31
 first, including its numbering
 note before assuming this is the same "Milestone 15" `docs/MILESTONES.md`'s
@@ -5998,7 +6001,162 @@ member) was not built — nothing in §65's gap report or this phase's
 brief asked for it, and it would be a genuinely new capability, not
 session hardening.
 
+## 68. Milestone: Automation job-queue reliability — two genuine production-blocking bugs found and fixed by live verification (Phase 14)
+
+**Audit finding, not a feature request:** with a real Supabase project
+(§65) and a complete auth lifecycle (§67) both in place, the next
+genuine gap — evidenced by CLAUDE.md's own description of the scheduled-
+automation architecture, HANDOVER's repeated "a live-Supabase-backed
+test harness does not exist anywhere in this codebase" note, and direct
+inspection of `src/lib/automation/jobs.ts`/`worker.ts`/`src/proxy.ts` —
+was that the job queue every future real marketplace write will
+eventually route through (Milestone 6's `automation_jobs`, claimed and
+executed by `/api/automation/run`) had **never once been exercised
+against real Postgres**, and neither had any scheduler-authenticated
+route ever been called by anything resembling a real external scheduler.
+Live verification (not code inspection) found two genuine, previously
+undiscovered bugs — both exactly the kind of "reasoning is correct on
+paper, never proven against reality" gap this project's own methodology
+exists to catch (§64's core lesson, extended: *a concurrency guarantee
+that has never been raced, and a route that has never genuinely been
+called, are both unverified, not proven*).
+
+**Bug 1 — a real double-claim race in `claimNextJob`.** The code's own
+comment described a strict `UPDATE ... WHERE status = 'pending'`
+compare-and-swap, but the actual implementation used
+`.in('status', ['pending', 'running'])` for every candidate — pending
+*and* already-claimed-and-running ones alike, in one shared loop. That
+loose filter let a second worker re-claim a job the instant *any* other
+worker had already claimed it, not only a genuinely abandoned one,
+because it never re-checked `locked_at` staleness at the moment the
+update actually ran. **Proven live, not assumed:** two concurrent
+`claimNextJob` calls for the same freshly-enqueued job both returned
+success — the second worker's update silently overwrote the first's
+claim (same job id, same `attempts`, only `locked_by` differing) — a
+genuine double-processing hazard for whatever real-world action a job
+eventually represents. Fixed by splitting into two independently strict
+update attempts: a pending candidate matches only `status = 'pending'`;
+an abandoned candidate matches only `status = 'running' AND locked_at <
+cutoff`, re-verified atomically at update time, not just at the earlier
+`select`. Re-run live after the fix: the same race now correctly
+produces exactly one winner, for both the fresh-claim case and a
+separately-tested abandoned-job recovery race (staleness manufactured
+via a service-role backdate of `locked_at`, since nothing else can make
+300 real seconds pass inside a verification script).
+
+**Bug 2 — every scheduler-authenticated route was completely
+unreachable in live mode.** `/api/automation/run`, `/api/automation/maintenance`
+and `/api/monitoring/run` each authenticate independently via a shared
+`AUTOMATION_CRON_SECRET` bearer token — by design, since "a scheduler is
+not a logged-in owner" (each route's own module comment, pre-dating this
+phase). But `src/proxy.ts`'s session gate ran *before* any of them, and
+none was in its `PUBLIC_PATHS` allow-list — so a real external
+scheduler's request, which by definition never carries a Supabase
+session cookie, was redirected to `/login` on every single call,
+regardless of whether its bearer token was valid, before the route's own
+auth check ever ran. **Proven live, not assumed:** `curl -X POST
+http://localhost:3000/api/automation/run` in genuine live mode returned
+`307 → /login?next=%2Fapi%2Fautomation%2Frun`, not the route's own `401`
+— confirmed by contrast against `/api/health` (correctly in
+`PUBLIC_PATHS`), which returned `200` with no session at all. This means
+the entire scheduled-automation subsystem (Milestones 6, 8 and 18) has
+never actually been callable in live mode since it was built — the
+architecture CLAUDE.md describes ("an external scheduler... calls it on
+a timer") could not have worked. Fixed by adding all three routes to
+`PUBLIC_PATHS`; each still independently requires a valid
+`AUTOMATION_CRON_SECRET` (verified live: no header → `401`; wrong secret
+→ `401`; correct secret → `200` with a real claim/dispatch/completion
+result), so this is not a new attack surface, only the removal of a
+redundant, incorrect gate that was blocking the route's own intended
+authentication from ever running.
+
+**Live-verified end to end against the real Supabase project**, using a
+single, disposable test organisation (a second, unrelated org used
+during setup only, deleted immediately): idempotent enqueue (a repeated
+`idempotencyKey` returns the same job, never a duplicate); the pending-
+claim race (fixed, confirmed exactly one winner); the abandoned-job
+recovery race (fixed, confirmed exactly one winner); retryable failure
+→ pending with a future `run_at` (backoff); non-retryable-but-not-
+exhausted failure → `failed`, not `dead_letter`; exhausted retries →
+genuine `dead_letter`; success → `succeeded`; cancelling a pending job
+→ succeeds; attempting to cancel an already-running job → correctly
+fails (a worker's claim cannot be cancelled out from under it); every
+expected `AUTOMATION_JOB_ENQUEUED`/`AUTOMATION_JOB_DEAD_LETTERED`/
+`AUTOMATION_ACTION_FAILED`/`AUTOMATION_JOB_CANCELLED` audit entry
+genuinely written. The real HTTP route was verified separately: an
+unregistered job type (`phase14_http_route_probe`), safe by
+construction since `runWorkerBatch`'s own handler registry fails
+immediately and non-retryably for anything unregistered, was claimed,
+dispatched, and correctly failed via the real, unmodified worker loop
+end to end.
+
+**One genuine, previously-unverified schema fact, found while cleaning
+up test fixtures, worth recording:** `audit_logs`' append-only triggers
+(`§72`, `forbid_mutation()`) block a `DELETE` unconditionally — including
+one arriving via `ON DELETE CASCADE` from a parent `organisations` row,
+confirmed directly (`Table audit_logs is append-only; DELETE is not
+permitted`, even from the service role). **Any organisation that ever
+accumulates a single audit entry can never be removed via the API
+again, by any role.** This is consistent with, and arguably required by,
+the append-only design's own intent — but it was not previously stated
+explicitly, and it means test/demo organisations that exercise any
+audited code path are permanent, unlike the RLS-only fixtures Phase 12/
+13 used. One such organisation (`Phase 14 cascade-delete probe
+(temporary)` — the name is now inaccurate; it cannot be deleted) remains
+in the real project with 32 audit log rows attached, all clearly
+attributable to this phase's own verification. `automation_jobs` itself
+has no such trigger and was fully cleaned up.
+
+**Tested:** 3 new Vitest tests (`tests/automation-jobs.test.ts`) —
+the first Vitest coverage any server-only, Supabase-touching module in
+this codebase has ever had, made possible by mocking the `server-only`
+package itself (confirmed necessary: without it, every such test fails
+with `Cannot find package 'server-only'`, not a logic failure) alongside
+a hand-rolled recording query-builder mock. These assert the *query
+shape* `claimNextJob` issues — real Postgres concurrency itself cannot
+be reproduced by a mock, which is exactly why the live verification
+above exists — and were verified meaningful by the same method §64
+established: reverting the fix to the original `.in(status, [...])`
+pattern and confirming all 3 correctly fail, before restoring it. 1701
+total (was 1698). `npx tsc --noEmit`, `npm run lint`, `npm run build`,
+`npm run db:verify` (81 tables, zero migrations — this phase found and
+fixed application-logic bugs, not schema ones) all clean.
+
+**Phase 13 regression-checked live, not assumed unaffected:** a fresh
+disposable test fixture confirmed login, invalid-credential rejection,
+session persistence across navigation, logout, post-logout redirect to
+`/login` on a direct protected-route request, re-login, and correct
+org/role identity in the dashboard footer — all unchanged. `proxy.ts`'s
+own session gate for every *user-facing* route is untouched; only the
+three scheduler-only routes were exempted.
+
+**No database migration** — both fixes are application-logic
+corrections to code that already had the right table/column shape;
+`db:verify` remains 81 tables, unchanged.
+
+**Genuinely not attempted, stated plainly:** CJdropshipping,
+Shopify publishing, purchasing and financial automation were untouched.
+No job *handler* (`supplier_price_change`, `order_processing`, etc.) was
+exercised — every live test in this phase used an intentionally
+unregistered job type specifically so no real handler, and therefore no
+marketplace/financial logic, was ever reached. `worker.ts`'s own batch-
+summary naming (`deadLettered` incrementing for *any* non-retryable-or-
+exhausted outcome, not only ones that reach the DB's `dead_letter`
+status — some correctly reach `failed` instead) is a minor, pre-existing
+reporting imprecision noticed in passing; not a correctness bug, not
+fixed this phase to keep scope tight.
+
 ## 66. Next step
+
+**Recommended Phase 15, following directly from §68:** with the job
+queue now genuinely race-safe and the scheduler routes genuinely
+reachable, the scheduled-automation subsystem (Milestones 6, 8, 18) is,
+for the first time, actually deployable — the one remaining step is
+pointing a real external scheduler (a hosted cron trigger, a serverless
+scheduled function) at `/api/automation/run`/`/api/automation/maintenance`/
+`/api/monitoring/run` with the real `AUTOMATION_CRON_SECRET`, outside
+this codebase. A real `CJ_API_KEY` remains the separate, independent
+prerequisite for §63's storefront chain, per §66's own prior note below.
 
 **Recommended Phase 14, following directly from §67:** with a real,
 migrated, RLS-proven Supabase project (§65) and a complete, live-verified

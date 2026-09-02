@@ -19,7 +19,19 @@ import { isDemoMode } from '@/lib/core/env'
  * was deprecated and renamed in Next.js 16.
  */
 
-const PUBLIC_PATHS = ['/login', '/auth', '/api/health']
+// Milestone: Phase 14 authentication & session hardening. Found live, not by
+// inspection: every scheduler-authenticated route (`/api/automation/run`,
+// `/api/automation/maintenance`, `/api/monitoring/run` — each secured
+// independently by `AUTOMATION_CRON_SECRET`, never a user session, per each
+// route's own module comment) was unreachable in live mode. This proxy's
+// session gate ran *before* any of them, so an external scheduler's request
+// — which never carries a Supabase session cookie by design — was
+// redirected to `/login` on every call, regardless of whether its bearer
+// token was valid. The scheduled-automation subsystem (Milestones 6, 8, 18)
+// has never actually been reachable in live mode until this fix. These
+// three are exempted from the session gate for exactly the same reason
+// `/api/health` already was: they authenticate themselves.
+const PUBLIC_PATHS = ['/login', '/auth', '/api/health', '/api/automation/run', '/api/automation/maintenance', '/api/monitoring/run']
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))

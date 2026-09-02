@@ -2610,6 +2610,72 @@ purchasing, financial automation. Cross-device/admin-initiated logout
 (`scope: 'others'`) was not built — not asked for, and a new capability
 rather than hardening.
 
+## Milestone — Automation job-queue reliability ✅ complete (Phase 14 of the customer-facing store)
+
+An audit, not a feature request: with a real Supabase project (Phase 12)
+and a complete auth lifecycle (Phase 13) both in place, the next
+genuine gap was that the job queue every future real marketplace write
+will eventually route through had never been exercised against real
+Postgres, and no scheduler-authenticated route had ever genuinely been
+called. Live verification against the real project found and fixed two
+previously undiscovered, production-blocking bugs.
+
+**Bug 1:** `claimNextJob` used a single loose
+`.in('status', ['pending', 'running'])` filter for both pending and
+abandoned-job candidates, instead of the strict, independently-scoped
+compare-and-swap its own code comment described. This let a second
+worker re-claim a job the instant *any* worker had claimed it, not only
+a genuinely stale one — proven live with two concurrent claims both
+succeeding for the same job before the fix. Fixed by splitting into two
+separately-verified atomic update attempts; both the pending-job race
+and a separately manufactured abandoned-job race now correctly produce
+exactly one winner, confirmed live.
+
+**Bug 2:** `/api/automation/run`, `/api/automation/maintenance` and
+`/api/monitoring/run` — each independently authenticated by
+`AUTOMATION_CRON_SECRET`, never a user session, by design — were all
+completely unreachable in live mode, because `src/proxy.ts`'s session
+gate ran before any of them and none was in its public-path allow-list.
+A real external scheduler's request never carries a session cookie, so
+every call was redirected to `/login` regardless of whether its bearer
+token was correct. Confirmed live with `curl` against a running live-mode
+server. This means the entire scheduled-automation subsystem
+(Milestones 6, 8, 18) had never actually been callable in live mode
+since it was built. Fixed by adding the three routes to the proxy's
+public-path list; each still independently requires the correct secret,
+verified live in all three states (no header, wrong secret, correct
+secret).
+
+**Why the existing test suite couldn't have caught either bug:** the
+in-memory test double is single-threaded and cannot reproduce true
+concurrent Postgres transactions; PGlite's `db:verify` proves schema and
+policy compilation, never runtime query behaviour. Both bugs required a
+real database to surface.
+
+**Tested:** 3 new Vitest tests — the first Vitest coverage of any
+server-only, Supabase-touching module in this codebase, made possible by
+mocking the `server-only` package itself. These guard the query *shape*
+(the part a mock can verify); the concurrency guarantee itself was
+proven live. Verified meaningful by reverting the fix and confirming all
+3 fail, then restoring it. 1701 total (was 1698).
+`tsc`/`lint`/`build`/`db:verify` (81 tables, zero migrations) all clean.
+Phase 13's full login/logout/session lifecycle was re-confirmed live,
+unaffected.
+
+**No database migration** — both fixes are application-logic
+corrections; the schema was already correct.
+
+**One genuine schema fact recorded in passing:** `audit_logs`' append-
+only triggers block even a cascaded `DELETE` from a parent organisation,
+for every role — an organisation that ever accumulates one audit entry
+can never be removed via the API again. One such organisation from this
+phase's own verification remains in the real project, clearly labelled.
+
+**Out of scope, untouched:** CJdropshipping, Shopify publishing,
+purchasing, financial automation. No job handler was exercised — every
+live test used an intentionally unregistered job type so no real
+marketplace/financial logic was ever reached.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

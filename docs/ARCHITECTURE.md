@@ -727,7 +727,28 @@ reach a protected route.
 **Every consequential action is audited.** `audit_logs` is append-only at the
 database level; UPDATE and DELETE raise an exception. `recordAudit` never
 throws, so a logging failure cannot roll back a business action that succeeded,
-but it does report to stderr.
+but it does report to stderr. **This block is unconditional, confirmed
+directly (Phase 14): it also blocks a `DELETE` arriving via
+`ON DELETE CASCADE` from a parent `organisations` row, for every role
+including the service role.** An organisation that has ever accumulated
+a single audit entry can never be removed via the API again — a real,
+load-bearing consequence of the append-only design, not previously
+stated explicitly.
+
+**The automation job queue (`src/lib/automation/jobs.ts`) is the one
+piece of infrastructure every future real marketplace write will
+eventually route through**, and (Phase 14, `HANDOVER.md` §68) is now the
+first server-only, Supabase-touching module in this codebase to be both
+live-verified against real Postgres and covered by a Vitest regression
+test. Claiming is two independently-scoped atomic updates — a pending
+job matches only `status = 'pending'`; an abandoned (stale-locked) job
+matches only `status = 'running' AND locked_at < cutoff`, re-checked at
+update time, not just at the earlier read — closing a real double-claim
+race a single shared `.in('status', [...])` filter previously allowed.
+`/api/automation/run`, `/api/automation/maintenance` and
+`/api/monitoring/run` authenticate independently via
+`AUTOMATION_CRON_SECRET`, never a user session (`src/proxy.ts`'s
+`PUBLIC_PATHS`), by design — a scheduler is not a logged-in owner.
 
 **Server Actions guard themselves.** They are reachable by direct POST, not only
 through the UI, so each one calls `requireWriteAccess()` rather than trusting

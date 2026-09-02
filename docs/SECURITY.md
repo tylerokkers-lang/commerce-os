@@ -440,6 +440,70 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What automation job-queue reliability changed here (Phase 14 of the customer-facing store)
+
+**A genuine authorization/reachability bug, found live: every
+scheduler-authenticated route was blocked before its own auth check
+could run.** `/api/automation/run`, `/api/automation/maintenance` and
+`/api/monitoring/run` each independently verify a shared
+`AUTOMATION_CRON_SECRET` bearer token and deliberately carry no user
+session — a scheduler cannot log in. But `src/proxy.ts`'s session gate
+ran first, and none of the three was in its `PUBLIC_PATHS` allow-list,
+so every request without a Supabase session cookie — which by
+definition includes every real external scheduler's request — was
+redirected to `/login` regardless of whether the bearer token was
+correct. Confirmed directly with `curl` against a real running live-mode
+server: `307 → /login?...` for all three, versus a genuine `200` for
+`/api/health` (already correctly public). **This is not a case of a
+route being too open — it was the opposite: a route meant to be reached
+without a session could not be reached by anything, including its own
+correct credential.** Fixed by adding all three to `PUBLIC_PATHS`. This
+does not weaken authentication for any user-facing route — every other
+path (`/`, `/orders`, `/settings`, etc.) is untouched, still requires a
+real session, and was re-confirmed live (see below). The three exempted
+routes remain independently gated by `AUTOMATION_CRON_SECRET`, verified
+live in all three states: no header → `401`; wrong secret → `401`;
+correct secret → `200` with a genuine claim/dispatch/completion result
+against the real database.
+
+**A genuine data-integrity bug in the job-claiming logic, found the same
+way.** `claimNextJob`'s own code comment described a strict
+compare-and-swap (`UPDATE ... WHERE status = 'pending'`), but the actual
+query used `.in('status', ['pending', 'running'])` — which let a second
+worker re-claim a job the instant *any* worker had already claimed it,
+not only a genuinely abandoned one, since it never re-checked
+`locked_at` staleness at update time. Two concurrent claims for the same
+job, run for real against the live Supabase project, both returned
+success before the fix — a genuine double-processing hazard: whatever a
+job eventually does for real (a supplier order, a marketplace price
+update, a customer notification) could have executed twice. Fixed by
+splitting the single loose loop into two independently strict update
+attempts, each re-verified live: the pending-job race and a separately
+manufactured abandoned-job race both now correctly produce exactly one
+winner.
+
+**Why this could not have been caught by the existing test suite,
+stated plainly:** `inMemoryStore.ts` (used by `tests/automation-engine-e2e.test.ts`)
+is a single-threaded in-memory JS object — it cannot reproduce two
+genuinely concurrent Postgres transactions racing for the same row, and
+PGlite's `db:verify` only proves migrations apply and policies compile,
+never runtime query behaviour. Both bugs are exactly the class this
+project's own methodology warns about: correct-looking code, plausible
+comments, never actually exercised against reality. New Vitest coverage
+(`tests/automation-jobs.test.ts`) now guards the *query shape* going
+forward — the one part a mock genuinely can verify — but the concurrency
+guarantee itself remains something only a real database can prove, and
+was proven live this phase.
+
+**Test data discipline:** all verification used disposable
+service-role-created fixtures. `automation_jobs` rows were fully deleted
+after use. One organisation could not be deleted — `audit_logs`' own
+append-only triggers block even a cascaded delete from a parent
+`organisations` row, for every role, confirmed directly. It remains in
+the real project, clearly labelled, with only test-generated audit rows
+attached; see `docs/ARCHITECTURE.md` for the general fact and
+`HANDOVER.md` §68 for the specific record.
+
 ## What authentication & session hardening changed here (Phase 13 of the customer-facing store)
 
 **The one gap Phase 12 identified — no logout mechanism existed anywhere
