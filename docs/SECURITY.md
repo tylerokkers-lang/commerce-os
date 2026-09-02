@@ -440,6 +440,56 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What production deployment & scheduler activation changed here (Phase 16 of the customer-facing store)
+
+**Real production credentials now exist outside this repository, on
+Vercel — handled the same way every real credential has been handled
+throughout this project's history: read from the local, gitignored
+`.env.local`, never echoed, never written to a command argument, piped
+directly into `vercel env add` via stdin.** Confirmed no leakage by
+inspection, not assumption: every "Config"-type (non-secret) variable
+was pulled back and structurally checked (prefix/length only, never full
+value) to confirm it matched what was set, and every "Secret"-type
+variable (`SUPABASE_SERVICE_ROLE_KEY`, `AUTOMATION_CRON_SECRET`,
+`CRON_SECRET`, the Shopify/eBay credentials) is genuinely write-only on
+Vercel's side — confirmed directly: `vercel env pull` returns
+`[SENSITIVE]` placeholders for all 11 of them, not the real values.
+`SUPABASE_ACCESS_TOKEN` was deliberately excluded from the production
+environment entirely, since no application code reads it.
+
+**Client-bundle scan repeated against the actual bytes Vercel serves,
+not only the local build.** Fetched the real production login page and
+every JS chunk it loads, then grepped those files directly for the real
+service-role key, access token, cron secret, and anon key values: zero
+matches for all four. The anon key's absence reproduces §65/§68's
+finding in the real deployment too — the one browser Supabase client in
+this codebase remains unused, so no Supabase key of any kind, secret or
+otherwise, reaches the production client bundle.
+
+**Scheduler authentication re-verified against the real production
+URL**, not only localhost: all three scheduler routes reject requests
+with no `Authorization` header or an incorrect one (`401`) and accept
+only the correct `AUTOMATION_CRON_SECRET` (`200`), from the actual
+deployed environment.
+
+**A genuine platform constraint discovered and handled without a
+workaround or a unilateral spending decision.** The connected Vercel
+account's Hobby plan rejects any cron schedule faster than daily — this
+surfaced as a real failed deployment, not something inferred in advance.
+The fix was a schedule correction (`vercel.json`, `0 3 * * *`), kept in
+sync with `maintenanceHealth.ts`'s staleness math; upgrading to Vercel's
+Pro plan (real recurring cost) was identified as the path to a shorter
+interval but was not actioned — that remains the account holder's own
+decision.
+
+**Production request logs inspected directly for secret exposure**:
+`vercel logs` for the live deployment shows only method/path/status —
+no request or response bodies, no headers, no credential values of any
+kind. Confirmed by source inspection too: no `console.*` call anywhere
+in the scheduler-authentication path (`schedulerAuth.ts`, `proxy.ts`,
+or any of the three scheduler routes) could log a secret even
+accidentally, since none of them log at all.
+
 ## What production scheduler & automation operations changed here (Phase 15 of the customer-facing store)
 
 **No new attack surface, no weakened authentication.** The job queue and

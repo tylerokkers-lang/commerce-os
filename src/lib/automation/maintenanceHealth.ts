@@ -24,16 +24,19 @@ export const MAINTENANCE_JOB_KEY = 'automation_maintenance'
 export const MAINTENANCE_LOCK_STALE_AFTER_MS = 15 * 60_000
 
 /**
- * The interval this milestone's own scheduler documentation/configuration
- * (`vercel.json`, `HANDOVER.md`) recommends triggering `/api/automation/maintenance`
- * at. Not an assumption about a pre-existing schedule — this repository had
- * no automation scheduler configured at all before this milestone (see
- * `HANDOVER.md`'s prior "no external scheduler is calling POST
- * /api/automation/run yet" note) — this constant *is* that recommendation,
- * and the staleness window below is derived from it, not picked
- * independently.
+ * The interval `vercel.json`'s actual cron entry fires
+ * `/api/automation/maintenance` at. Originally every 15 minutes, corrected
+ * to once daily (production deployment & scheduler activation milestone):
+ * the real, connected Vercel account is on the Hobby plan, which rejects
+ * any cron schedule firing more than once per day outright — confirmed
+ * directly by a real failed deployment
+ * ("Hobby accounts are limited to daily cron jobs"), not assumed. Moving to
+ * the Pro plan (a billing decision, not made here) would allow reverting to
+ * a shorter interval; until then, this constant must match `vercel.json`'s
+ * real schedule exactly, since the staleness window below is derived from
+ * it, not picked independently.
  */
-export const MAINTENANCE_EXPECTED_INTERVAL_MS = 15 * 60_000
+export const MAINTENANCE_EXPECTED_INTERVAL_MS = 24 * 60 * 60_000
 
 /**
  * Phase 10 — "no successful run within an acceptable window." Three times

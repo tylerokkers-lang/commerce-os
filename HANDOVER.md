@@ -5,18 +5,25 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 2 September 2026 (Phase 15, Production Scheduler &
-Automation Operations — see §69 first: the job queue and product/
-supplier/compliance/FX/market monitors are now folded into the one
-already-scheduled maintenance cycle (`vercel.json`'s existing Vercel
-Cron entry), closing the gap where neither had any real producer or
-consumer running on a timer; a genuine dead-letter-reporting bug and two
-genuine operator-trust gaps (`/api/health` connectivity, "are jobs
-stale?") were also found and fixed. Duplicate/overlapping scheduler
-invocations proven live to serialize correctly under a real HTTP race
-for the first time. §66 for what remains — this session cannot verify
-the connected Vercel project actually deploys the cron entry, and a real
-`CJ_API_KEY` for the storefront chain. §68 covers Phase 14 (the
+Last updated: 2 September 2026 (Phase 16, Production Deployment &
+Scheduler Activation — see §70 first: Commerce OS is now genuinely
+deployed to a real Vercel production project
+(`https://commerce-os-indol.vercel.app`, `informax/commerce-os`,
+git-connected to this repository), with every required environment
+variable configured and live-verified — real Supabase connectivity, the
+full Phase 13 auth lifecycle, worker execution, stale-lock recovery, and
+overlapping-cron-invocation protection all proven against the actual
+production deployment, not a dev server. A real, previously-unknown
+constraint was found and fixed: the connected account is on Vercel's
+Hobby plan, which rejects any cron faster than daily, so
+`vercel.json`'s schedule was corrected from every 15 minutes to once
+daily (`0 3 * * *`) and `maintenanceHealth.ts`'s staleness math updated
+to match — a Pro-plan upgrade (a billing decision, not made here) is
+the path back to a shorter interval. **Continuous/24-7 operation is
+still not verified** — the cron is configured and proven correct on
+demand, but has not yet had a real chance to fire on its own schedule;
+§66 covers this and what remains. §69 covers Phase 15 (folding the job
+queue and monitors into the maintenance cycle), §68 covers Phase 14 (the
 job-claim race and unreachable-scheduler-routes bugs), §67 covers Phase
 13 (logout/session hardening), §65 covers Phase 12 (real Supabase
 provisioning and live database verification), §64 covers Phase 11 (the
@@ -6296,7 +6303,124 @@ publishing, purchasing and financial automation were untouched — no
 job handler beyond the intentionally-unregistered probe type was ever
 exercised.
 
+## 70. Milestone: Production deployment & scheduler activation (Phase 16)
+
+**Commerce OS is now genuinely deployed to a real Vercel production
+environment for the first time.** A Vercel project (`informax/commerce-os`)
+did not previously exist — confirmed directly (`vercel project ls`
+listed only `your-executive-support`, `douglasjones-site`,
+`informax-site`, `informax-analytics`), not assumed. Created it, linked
+it to `github.com/tylerokkers-lang/commerce-os`, configured every
+required production environment variable (`NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+`COMMERCE_OS_MODE=live`, `AUTOMATION_CRON_SECRET`, `CRON_SECRET` — set to
+the same value, `SHOPIFY_*`, `EBAY_*`, `NEXT_PUBLIC_APP_URL`) by piping
+each value from the local, gitignored `.env.local` directly into
+`vercel env add` via stdin — no value ever appeared in a command
+argument, was echoed, or was written anywhere this session's own output
+could retain it. `SUPABASE_ACCESS_TOKEN` was deliberately **not** copied
+— confirmed by inspection that no application code reads it; it is a
+Supabase-CLI-only credential from §65's migration work, unrelated to the
+running application.
+
+**A real, previously-unknown deployment constraint discovered and fixed
+correctly, not worked around.** The first deploy attempt failed
+outright: `vercel.json`'s `*/15 * * * *` cron schedule (§69's design)
+is rejected entirely by Vercel's Hobby plan, which the connected account
+is on — confirmed directly from the real deployment error ("Hobby
+accounts are limited to daily cron jobs"), not assumed or guessed at in
+advance (§69 itself had flagged this exact uncertainty as unresolved).
+Upgrading to Pro would lift this; that is a billing decision this
+session did not make. Instead, corrected `vercel.json` to a
+Hobby-compliant daily schedule (`0 3 * * *`) and updated
+`maintenanceHealth.ts`'s `MAINTENANCE_EXPECTED_INTERVAL_MS` to match (24
+hours, was 15 minutes) so the `/automation` staleness indicator
+(`AUTOMATION_STALE` at 3× the expected interval) reflects the real
+schedule rather than falsely flagging a healthy daily-cadence system as
+stale after 45 minutes. `.env.example` updated to document the
+constraint and the Pro-upgrade path honestly.
+
+**Live-verified against the real production deployment**
+(`https://commerce-os-indol.vercel.app`), not merely configured:
+- `GET /api/health` → `mode: "live"`, `supabase.reachable: true` — genuine
+  live-mode operation and real Supabase connectivity, from the actual
+  deployed environment, not localhost.
+- All three scheduler routes independently reject no-auth/wrong-secret
+  requests (`401`) and accept the correct `AUTOMATION_CRON_SECRET`
+  (`200`) — auth architecture unchanged and correctly enforced in
+  production.
+- A real `POST /api/automation/maintenance` with the correct secret
+  produced a genuine `succeeded` run touching every subsystem, including
+  a real `subjectMonitoring` pass over the one real organisation in the
+  database.
+- **Overlapping cron invocation, proven live against the real production
+  deployment (not just locally or against a dev server) twice in a row:**
+  two genuinely concurrent `POST /api/automation/maintenance` requests
+  each time produced exactly one `200 succeeded` and one `409
+  already_running` — the single-run lock holding under real production
+  network concurrency.
+- Worker execution and the corrected dead-letter/failed distinction,
+  proven live in production with a safe, intentionally unregistered job
+  type (`phase16_production_probe`): claimed, correctly landed as
+  `failed` (first attempt, non-exhausted), never touched any real
+  handler.
+- Stale-lock recovery, proven live in production: a job manually
+  backdated to a 2020 `locked_at` (simulating a crashed worker) was
+  genuinely reclaimed by a real Vercel-generated worker id and correctly
+  processed.
+- The full Phase 13 auth lifecycle — login, invalid-credential rejection,
+  session persistence across a real route change, logout, post-logout
+  redirect on direct protected-route access, re-login returning to the
+  originally-requested route — all verified live in the browser against
+  the real production URL with a disposable test account, not a demo
+  session.
+- Client bundle scan repeated against the **actual bytes Vercel served**
+  (fetched the real production JS chunks and grepped them directly, not
+  only the local build output): zero matches for the service-role key,
+  the access token, the cron secret, or the anon key (still unbundled,
+  same finding as §65/§68 — the one browser Supabase client remains
+  unused).
+- Production request logs (`vercel logs`) inspected directly: standard
+  method/path/status entries only: no request bodies, headers, or
+  secret values present; no application code on any scheduler-facing
+  path calls `console.*` with anything that could leak one.
+
+**All test data created this phase was disposable and has been fully
+cleaned up** — a temporary organisation/user/membership for the
+production auth check, and every temporary `automation_jobs` row used to
+prove worker execution and stale-lock recovery. The one permanent §65
+fixture (`Phase 14 cascade-delete probe (temporary)`, undeletable per
+`audit_logs`' append-only cascade block) remains, unavoidably, exactly
+as before — no new such residue was created.
+
+**Genuinely not verified, stated plainly: continuous/24-7 operation.**
+The daily Vercel Cron entry is configured and the endpoint it targets is
+proven to work correctly when called — but this session deployed less
+than an hour before writing this entry, so no scheduled (as opposed to
+manually-triggered) cron execution has yet occurred or been observed. A
+configured cron schedule is not the same claim as a verified recurring
+execution history; that can only be confirmed by returning after the
+schedule has actually fired (`vercel logs`/`/automation`'s "last
+successful run" will show it once it has). No marketplace write,
+purchase, refund, or advertising spend of any kind was made possible,
+attempted, or enabled by this phase — every existing write-capability
+gate (`writeListings: true`-but-`not_supported` on Amazon, Shopify's
+`SHOPIFY_READ_ONLY`, eBay's stubbed writes, no `CJ_API_KEY` configured
+anywhere) is exactly as it was before this phase.
+
 ## 66. Next step
+
+**Recommended Phase 17, following directly from §70:** with Commerce OS
+genuinely deployed and its scheduler proven correct on demand, the one
+remaining step for true continuous operation is time itself — confirm,
+after the daily cron has had a real chance to fire on its own schedule,
+that `/automation`'s "last successful run" reflects a scheduler-triggered
+run rather than only the manually-triggered ones this phase produced. If
+15-minute (or shorter) cadence is genuinely wanted, upgrading the
+connected Vercel account to the Pro plan is the prerequisite — a billing
+decision for the account holder, not something to action automatically.
+A real `CJ_API_KEY` remains the separate, independent prerequisite for
+§63's storefront chain.
 
 **Recommended Phase 16, following directly from §69:** the application-side
 scheduler foundation is now genuinely reliable and live-verified — the

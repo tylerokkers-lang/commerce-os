@@ -752,9 +752,12 @@ race a single shared `.in('status', [...])` filter previously allowed.
 
 **The maintenance orchestrator (`automation/maintenance.ts`) is the one
 scheduled entry point (Phase 15, `HANDOVER.md` §69).** `vercel.json`'s
-one Vercel Cron entry calls `/api/automation/maintenance` every 15
-minutes; `runMaintenance` now also runs the job-queue batch
-(`runScheduledJobBatch`) and every organisation's due monitors
+one Vercel Cron entry calls `/api/automation/maintenance` **once
+daily** (`0 3 * * *` — corrected from an original design of every 15
+minutes, Phase 16 §70: the real, connected Vercel account is on the
+Hobby plan, which rejects any faster cron schedule outright, confirmed
+by a real failed deployment); `runMaintenance` also runs the job-queue
+batch (`runScheduledJobBatch`) and every organisation's due monitors
 (`runMonitoringForAllOrgs`) as two more of its seven independently
 try/caught subsystem steps, monitoring immediately before the job batch
 so whatever a monitor enqueues this cycle is claimable in the same run.
@@ -763,9 +766,23 @@ shared functions directly and remain independently callable — for
 manual triggering or a finer-grained external scheduler — but are not a
 second implementation, and are not required for the baseline loop.
 Overlapping/duplicate scheduler invocations are serialized by the
-existing single-run lock (`acquireMaintenanceRun`), proven live against
-a genuine concurrent HTTP race this phase: one request succeeds, the
-other receives `409 already_running`.
+existing single-run lock (`acquireMaintenanceRun`), proven live twice
+against a genuine concurrent HTTP race — once in Phase 15 against a
+local dev server, once in Phase 16 against the real production
+deployment: one request succeeds, the other receives `409
+already_running`. `automation/maintenanceHealth.ts`'s
+`MAINTENANCE_EXPECTED_INTERVAL_MS` must always match `vercel.json`'s
+real schedule — the `/automation` staleness indicator is derived from
+that constant, not from `vercel.json` itself, so the two can silently
+disagree if only one is changed.
+
+**Commerce OS is deployed to a real Vercel production project (Phase
+16, `HANDOVER.md` §70)**: `informax/commerce-os`, git-connected to
+`github.com/tylerokkers-lang/commerce-os`, serving
+`https://commerce-os-indol.vercel.app`. Every environment variable the
+running application actually reads is configured there;
+`SUPABASE_ACCESS_TOKEN` (a Supabase-CLI-only credential, §65) is
+deliberately not among them, since no application code reads it.
 
 **Server Actions guard themselves.** They are reachable by direct POST, not only
 through the UI, so each one calls `requireWriteAccess()` rather than trusting

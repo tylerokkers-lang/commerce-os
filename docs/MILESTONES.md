@@ -2746,6 +2746,65 @@ CJdropshipping, Shopify publishing, purchasing and financial automation
 remain untouched; no job handler beyond an intentionally unregistered
 probe type was ever exercised.
 
+## Milestone — Production deployment & scheduler activation ✅ complete (Phase 16 of the customer-facing store)
+
+Commerce OS is now genuinely deployed to a real Vercel production
+project for the first time: `informax/commerce-os`, git-connected to
+this repository, serving `https://commerce-os-indol.vercel.app`. No such
+project existed before this milestone — confirmed directly, not
+assumed. Every environment variable the running application actually
+reads was configured on Vercel by piping values from the local
+`.env.local` directly into `vercel env add`, never printed or written to
+a command argument; `SUPABASE_ACCESS_TOKEN` was deliberately excluded,
+since no application code reads it.
+
+**A real, previously-unknown platform constraint discovered and fixed
+correctly:** the first deployment attempt failed outright because the
+connected Vercel account is on the Hobby plan, which rejects any cron
+schedule faster than daily — `vercel.json`'s original every-15-minutes
+design (the previous milestone's own choice) is incompatible with it.
+Corrected to a daily schedule (`0 3 * * *`) and kept
+`maintenanceHealth.ts`'s staleness detection in sync with it. A Pro-plan
+upgrade would allow reverting to a shorter interval — a billing decision
+for the account holder, not made here.
+
+**Live-verified against the real production deployment**, not only
+configured: genuine Supabase connectivity and live mode
+(`/api/health`); all three scheduler routes' independent authentication;
+a full real maintenance run touching every subsystem; overlapping cron
+invocation correctly serialized under a real production network race
+(proven twice); worker execution and the corrected dead-letter/failed
+distinction, proven with a safe unregistered job type; stale-lock
+recovery, proven with a job whose lock was deliberately backdated; the
+complete Phase 13 authentication lifecycle (login, invalid credentials,
+session persistence, logout, post-logout protection, re-login), live in
+the browser against the production URL; a client-bundle scan against
+the actual bytes Vercel serves (zero secret matches); and production
+request logs inspected directly for leakage (none found).
+
+**Genuinely not verified: continuous/24-7 operation.** The daily cron is
+configured and the endpoint it targets is proven correct when called,
+but no scheduler-triggered (as opposed to manually-triggered) execution
+has yet been observed — this deployment is too recent for the daily
+schedule to have fired on its own. A configured cron is not evidence of
+a verified execution history.
+
+**No database migration.** No schema or RLS change of any kind.
+
+**Test-data discipline maintained:** a disposable organisation/user/
+membership for the production auth check, and every temporary
+`automation_jobs` row used to prove worker execution and stale-lock
+recovery, were all created and fully deleted. The one permanent fixture
+from the real-Supabase-provisioning milestone remains, unavoidably,
+unchanged.
+
+**Out of scope, untouched:** CJdropshipping, Shopify publishing,
+purchasing, financial automation, advertising spend. Every existing
+write-capability gate (Amazon's `not_supported` write methods, Shopify's
+read-only mode, eBay's stubbed writes, no `CJ_API_KEY` configured
+anywhere — locally or on Vercel) is exactly as it was before this
+milestone.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all
