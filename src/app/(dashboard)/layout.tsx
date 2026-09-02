@@ -4,6 +4,7 @@ import { Sidebar } from '@/components/dashboard/Sidebar'
 import { countUnread, getNotifications } from '@/lib/notifications/repository'
 import { getPendingApprovals } from '@/lib/automation/approvals'
 import { getSession, LiveConnectionError } from '@/lib/security/session'
+import { signOut } from '@/app/(auth)/logout/actions'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   // Handled here, server-side, rather than left to a client error
@@ -62,6 +63,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
               <span>Role: {session.role}</span>
               <span aria-hidden>·</span>
               <span>{unread} unread notification{unread === 1 ? '' : 's'}</span>
+              {!session.isDemo ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <form action={signOut}>
+                    <button type="submit" className="text-accent hover:underline">
+                      Sign out
+                    </button>
+                  </form>
+                </>
+              ) : null}
             </footer>
           </div>
         </main>

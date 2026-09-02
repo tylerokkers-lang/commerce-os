@@ -2562,6 +2562,54 @@ untouched per this milestone's own brief. A real `CJ_API_KEY` remains
 the one remaining prerequisite named at the end of Phase 11 that this
 milestone does not address.
 
+## Milestone — Authentication & session hardening ✅ complete (Phase 13 of the customer-facing store)
+
+Closes the one genuine application gap Phase 12 identified: Commerce OS
+had no logout mechanism. `(auth)/logout/actions.ts`'s new `signOut`
+Server Action uses the exact same Supabase server client every other
+auth code path already uses — no new library, no parallel session
+system — calling `supabase.auth.signOut({ scope: 'local' })` and
+redirecting to `/login`. A "Sign out" control was added to the existing
+dashboard footer identity line, visible only for a real session; no
+navigation redesign.
+
+**`local` scope, not the library default `global`, deliberately.** The
+default would end a member's session on every device they're signed
+into, not just the one clicking the button — wrong for a multi-member,
+multi-role application, and contrary to `@supabase/auth-js`'s own
+documented recommendation. Verified directly against the library's
+source (not assumed) that the local session/cookie clears before any
+server-side revoke error is returned, for every scope this app uses —
+so a Supabase connectivity failure during logout still leaves the
+browser genuinely signed out, and `proxy.ts`'s independent per-request
+session check means a stale cookie could never reach a protected route
+regardless.
+
+**Live-verified end to end against the real Phase 12 Supabase
+project**, with a disposable test fixture created and fully deleted
+within the session: login → session persists across a second protected
+route and a real page reload → Sign out → redirected to `/login`, and a
+direct attempt to reach `/orders` immediately after was server-side
+redirected to `/login?next=%2Forders` (confirmed via
+`window.location.href` and the network log, not a visual check alone)
+→ re-login succeeded and returned to the originally-requested route.
+Wrong-password rejection and the Phase 11 connectivity-failure message
+were both re-confirmed unchanged.
+
+**Tested:** 5 new tests, mocking only `next/navigation` and this
+repo's own Supabase/env modules — covering the demo-mode short-circuit,
+the `local`-scope choice (verified meaningful by reverting it and
+confirming 2 tests fail), and the fail-safe redirect on a Supabase
+error. 1698 total (was 1693). `tsc`/`lint`/`build`/`db:verify` (81
+tables, zero migrations) all clean.
+
+**No database migration** — logout needs no schema change.
+
+**Out of scope, untouched:** CJdropshipping, Shopify publishing,
+purchasing, financial automation. Cross-device/admin-initiated logout
+(`scope: 'others'`) was not built — not asked for, and a new capability
+rather than hardening.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

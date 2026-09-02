@@ -440,6 +440,60 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What authentication & session hardening changed here (Phase 13 of the customer-facing store)
+
+**The one gap Phase 12 identified — no logout mechanism existed anywhere
+in this codebase — is closed**, using the existing Supabase server
+client (`createServerSupabase()`) and nothing else: no new auth library,
+no parallel session store, no custom cookie. `(auth)/logout/actions.ts`'s
+`signOut` Server Action calls `supabase.auth.signOut({ scope: 'local' })`.
+
+**Scope choice, deliberate and stated:** the library's own default scope
+is `'global'`, which revokes the user's session on *every* device they
+are currently signed in on. `'local'` was chosen instead — Commerce OS
+is explicitly a multi-member application (`member_role`:
+owner/admin/analyst/viewer), and a member signing out on one device
+should not silently end a session on their other devices, or anyone
+else's. This matches `@supabase/auth-js`'s own documented recommendation
+("usually what apps want on a 'Sign out' button").
+
+**Fails safely, verified against the library's own source, not
+assumed:** `_signOut`'s implementation clears the local session (and,
+via this app's cookie adapter, the response's `Set-Cookie` headers)
+*before* returning any error from the server-side revoke call, for
+every scope this app uses. A genuine Supabase connectivity failure
+during logout therefore still results in a signed-out browser — the one
+exception (`scope: 'others'`) is not used here. No raw Supabase error is
+ever surfaced to the user or exposed anywhere; `signOut()`'s result is
+never inspected for its error detail, only used to decide "redirect to
+`/login`," which happens unconditionally.
+
+**Defense in depth confirmed, not merely assumed:** even in the
+theoretical case where the local cookie somehow failed to clear,
+`proxy.ts` independently re-validates every request's session against
+Supabase via `getUser()` — a stale or forged cookie cannot reach a
+protected route on its own. This was verified directly in the browser
+this phase (see `HANDOVER.md` §67): after clicking "Sign out," a direct
+navigation to a protected route (`/orders`) was server-side redirected
+to `/login?next=%2Forders`, confirmed via `window.location.href` and the
+network log, not merely by a visual check that the login screen
+appeared.
+
+**Cookie/token handling inspected, no change needed:** authentication
+still flows entirely through Supabase's own SSR cookie adapter
+(`@supabase/ssr`'s `createServerClient`, already established in
+`src/lib/supabase/server.ts` and `src/proxy.ts`) — no token or session
+value is placed in `localStorage`, no custom authentication cookie was
+introduced, and the one browser-side Supabase client in this codebase
+(`src/lib/supabase/client.ts`, noted in Phase 12 as unused) was not
+touched or wired up, since doing so was outside this phase's scope.
+
+**Client-bundle scan repeated after this change**, against the real
+service-role key and access token values: zero matches in `.next/static`
+— unchanged from Phase 12; this phase's change (a Server Action plus one
+button in an already-server-rendered footer) introduces no new
+client-side code path that could embed a credential.
+
 ## What real Supabase provisioning & live database verification changed here (Phase 12 of the customer-facing store)
 
 **A real Supabase project now exists and every credential-handling claim

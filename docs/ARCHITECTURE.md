@@ -709,6 +709,21 @@ network failure, it resolves cleanly either way.
 zeros, not demo figures. Aggregates that are not yet implemented return honest
 empties rather than plausible numbers.
 
+**Logout (Phase 13, `HANDOVER.md` §67) uses the same Supabase server
+client as everything else** — no separate auth library, no parallel
+session store. `(auth)/logout/actions.ts`'s `signOut` Server Action
+calls `supabase.auth.signOut({ scope: 'local' })` (deliberately *not*
+the library's default `'global'` scope, which would end every device a
+member is signed in on, not just the one clicking the button — wrong
+for a multi-member application) and redirects to `/login`. Verified
+directly against `@supabase/auth-js`'s own implementation: the local
+session/cookie is cleared regardless of whether the server-side token
+revocation succeeds, so a Supabase connectivity failure during logout
+still leaves the browser signed out — and `proxy.ts` re-validates the
+session on every request regardless, so a stale cookie in the one
+remaining edge case (the cookie write itself failing) still cannot
+reach a protected route.
+
 **Every consequential action is audited.** `audit_logs` is append-only at the
 database level; UPDATE and DELETE raise an exception. `recordAudit` never
 throws, so a logging failure cannot roll back a business action that succeeded,

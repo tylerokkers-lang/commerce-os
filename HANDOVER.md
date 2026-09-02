@@ -5,14 +5,16 @@ session with no memory of prior conversations can pick the project up safely.
 If something here conflicts with what you observe in the code, trust the code
 and update this file.
 
-Last updated: 2 September 2026 (Phase 12, Real Supabase Provisioning &
-Live Database Verification — see §65 first: a real Supabase project now
-exists, all 44 migrations are applied to it, and RLS/login/live-mode
-behaviour are genuinely live-verified against it for the first time,
-closing the single prerequisite §64 named as blocking everything
-downstream; §66 for what remains — a real `CJ_API_KEY` and a genuine gap,
-no logout mechanism exists yet. §64 covers Phase 11 itself (the
-demo/live mode bug) and §31 covers the unrelated, separately-numbered
+Last updated: 2 September 2026 (Phase 13, Authentication & Session
+Hardening — see §67 first: a real logout mechanism now exists, using the
+same Supabase server client as the rest of the app, live-verified
+end-to-end — login, session persistence, logout, post-logout route
+protection, re-login — against the real project §65 provisioned,
+closing the one genuine gap §65 identified; §66 for what remains, a real
+`CJ_API_KEY`, the last blocking prerequisite for the storefront chain.
+§65 covers Phase 12 itself (real Supabase provisioning and live database
+verification), §64 covers Phase 11 (the demo/live mode bug), and §31
+covers the unrelated, separately-numbered
 Milestone 15, Live Advertising Connector & Controlled Automation — see §31
 first, including its numbering
 note before assuming this is the same "Milestone 15" `docs/MILESTONES.md`'s
@@ -5902,17 +5904,109 @@ not touched:** CJdropshipping configuration, any Shopify publish action,
 enabling purchasing. A real `CJ_API_KEY` remains the one prerequisite
 named at the end of §64 that this phase does not address.
 
+## 67. Milestone: Authentication & session hardening (Phase 13)
+
+**Closes the one genuine gap §65 identified: Commerce OS had no logout
+mechanism.** `src/app/(auth)/logout/actions.ts` is a new `'use server'`
+action, `signOut`, using the exact same Supabase server client every
+other auth code in this repo already uses (`createServerSupabase()`) —
+no new authentication library, no parallel session mechanism, no custom
+cookie. It calls `supabase.auth.signOut({ scope: 'local' })` and
+redirects to `/login`. A "Sign out" control was added to the one place
+account identity is already shown — the dashboard footer's existing
+"Signed in as {email} · Role: {role}" line (`(dashboard)/layout.tsx`),
+visible only for a real (non-demo) session. No navigation redesign, no
+new UI component beyond a plain form/button matching the footer's
+existing text styling.
+
+**Scope choice, deliberate, not the library default.** `signOut()`'s
+default scope is `'global'` — it ends the user's session on *every*
+device they're signed in on, not just the current one. `'local'` was
+chosen instead: Commerce OS is a multi-member application
+(owner/admin/analyst/viewer roles per `member_role`), and a member
+clicking "Sign out" on one device signing every other member — or their
+own other devices — out too would be a surprising, unwanted side effect.
+This is also `@supabase/auth-js`'s own documented recommendation for
+"most apps."
+
+**Fails safely — verified against the library's actual source, not
+assumed**, matching this codebase's established discipline (§64) of
+checking Supabase's real behaviour rather than guessing it:
+`_signOut`'s implementation (`node_modules/@supabase/auth-js`) clears
+the local session — and, via this app's existing cookie adapter, the
+response's auth cookies — *before* it returns any error from the
+server-side token-revocation call, for every scope this app uses. A
+genuine connectivity failure calling Supabase's own logout endpoint
+therefore still leaves the browser signed out locally; `signOut()`'s
+result is never inspected for error detail (nothing to expose), and the
+redirect to `/login` happens unconditionally. `proxy.ts`'s existing,
+independent `getUser()` re-validation on every request means a stale
+cookie could not reach a protected route even in the one case that
+isn't true (the cookie write itself failing).
+
+**Live-verified in the browser against the real Supabase project**
+(Phase 12's, `utdwyyoytbsmsdssimxf`), using a fresh disposable test
+fixture (a test organisation, a test auth user, a membership — created
+and fully deleted via the service-role key within this same session,
+same discipline as §65):
+- Login → real dashboard, real org name and role in the footer.
+- Navigated to a second protected route (`/orders`) without
+  re-authenticating; reloaded the page — session survived, confirmed via
+  `window.location.href` and page content, not assumed from a lack of
+  redirect.
+- Clicked "Sign out" → redirected to `/login`, confirmed via
+  `window.location.href`, not just a visual check.
+- **Attempted direct navigation to `/orders` immediately after** —
+  server-side redirected to `/login?next=%2Forders`, confirmed via both
+  `window.location.href` and the network request log (not merely "the
+  login screen appeared," per this phase's own instruction to test the
+  sequence directly).
+- Re-logged in with the same credentials → landed back on `/orders`
+  (the originally-requested route, preserved through the whole
+  logout→re-login cycle) with a fresh, working session.
+- Re-confirmed, unchanged: wrong password → "Those details were not
+  recognised."; a temporarily unreachable Supabase URL (gitignored
+  `.env.development.local`, deleted immediately after, same technique as
+  §65) → the existing honest "Could not reach the database... this is
+  an infrastructure problem, not an incorrect password" message, not
+  masked or altered by this phase's changes.
+- All test fixtures deleted immediately after; `organisations` and
+  `memberships` confirmed empty again.
+
+**Tested:** 5 new tests (`tests/logout-action.test.ts`), mocking only
+Next.js's `redirect` and this repo's own `@/lib/supabase/server` /
+`@/lib/core/env` modules (never a new auth library or session system) —
+covering the demo-mode short-circuit, the `local`-scope choice as an
+explicit regression guard, and the "a Supabase error still redirects to
+`/login`, never exposed" fail-safe behaviour. Verified meaningful, not
+trivially green, by the same method §64 established: temporarily
+reverting the scope choice to `'global'` and confirming 2 of the 5 tests
+correctly fail, before restoring the fix. 1698 total (was 1693).
+`npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm run db:verify`
+(81 tables, zero migrations — a logout mechanism needs no schema change,
+and none was made) all clean.
+
+**No database migration.** Logout requires no new table, column, or
+policy — session state is Supabase's own auth cookie, already fully
+covered by the RLS/session architecture Phase 12 live-verified.
+
+**Genuinely not attempted, stated plainly:** CJdropshipping, Shopify
+publishing, purchasing and financial automation were untouched, exactly
+as this phase's own brief required. Session revocation across *other*
+devices (`scope: 'others'` or an admin-initiated force-logout of another
+member) was not built — nothing in §65's gap report or this phase's
+brief asked for it, and it would be a genuinely new capability, not
+session hardening.
+
 ## 66. Next step
 
-**Recommended Phase 13, following directly from §65:** with a real,
-migrated, RLS-proven Supabase project now in place, the single
-remaining blocking prerequisite for §63's "discovery → import → media →
-shipping → intelligence → eligibility → draft" chain is a real
-`CJ_API_KEY` — nothing else in that chain requires new engineering, per
-§64 and §65 both. A second, smaller, genuine gap surfaced this phase and
-is worth closing independently of CJ: there is no logout mechanism
-anywhere in this application (§65) — a real deployment with real users
-needs one before going live in earnest, not just a working sign-in.
+**Recommended Phase 14, following directly from §67:** with a real,
+migrated, RLS-proven Supabase project (§65) and a complete, live-verified
+login/logout/session lifecycle (§67) both in place, the single remaining
+blocking prerequisite for §63's "discovery → import → media → shipping →
+intelligence → eligibility → draft" chain is a real `CJ_API_KEY` —
+nothing else in that chain requires new engineering, per §64, §65 and
+§67 together.
 
 **Recommended Phase 11, following directly from §63:** two genuine
 blockers, both outside this codebase, stand between where things are
