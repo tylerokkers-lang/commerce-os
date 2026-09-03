@@ -1,6 +1,7 @@
 import { automationCronSecret, isSupabaseConfigured } from '@/lib/core/env'
 import { secretsMatch, extractBearerToken } from '@/lib/core/schedulerAuth'
 import { runMaintenance } from '@/lib/automation/maintenance'
+import { classifySchedulerProvenance } from '@/lib/automation/maintenanceHealth'
 import { getSupabaseAutomationStore } from '@/lib/automation/supabaseStore'
 
 /**
@@ -44,9 +45,13 @@ export async function POST(request: Request) {
 
   const url = new URL(request.url)
   const triggeredBy = url.searchParams.get('trigger') === 'manual' ? 'manual' : 'scheduler'
+  // Independent of `triggeredBy` above, which is only ever what the caller
+  // claims via the query string — see `classifySchedulerProvenance`'s own
+  // comment for why a second, header-derived signal exists at all.
+  const schedulerProvenance = classifySchedulerProvenance(request.headers.get('user-agent'), triggeredBy)
 
   const store = getSupabaseAutomationStore()
-  const result = await runMaintenance(store, triggeredBy)
+  const result = await runMaintenance(store, triggeredBy, schedulerProvenance)
 
   if (result.outcome === 'already_running') {
     return Response.json({ status: 'already_running', triggeredBy, activeRun: result.activeRun }, { status: 409 })

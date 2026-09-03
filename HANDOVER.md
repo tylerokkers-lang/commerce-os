@@ -6526,6 +6526,45 @@ this session should work without needing to be resent, since Supabase
 resolves the redirect target at click-time, not send-time — but this has
 not been, and cannot yet be, verified against the user's real inbox.
 
+## 72. Milestone: scheduler-provenance signal for `automation_runs` (Phase 16 follow-up, read-only cron verification)
+
+A read-only production check confirmed the 2026-09-03 daily maintenance
+cron genuinely executed (a single, isolated, correctly-authenticated
+`automation_runs` row at `03:56:24Z`, ~56 minutes after the configured
+`03:00 UTC` schedule point — the gap itself unexplained, not
+investigated further) but exposed a real evidence-quality gap: the
+stored `triggeredBy` label defaults to `'scheduler'` whenever a caller
+simply omits `?trigger=manual` ([route.ts](src/app/api/automation/maintenance/route.ts)'s
+own prior comment already admitted this), so it cannot distinguish a
+genuine Vercel Cron firing from an ordinary manual test call — exactly
+what every one of this project's own Phase 16 manual verification calls
+already looked like in the data. `vercel logs` cannot close this gap
+retroactively either: it is a live tail only, with no historical query
+and no log drain configured.
+
+**Fixed by adding one new, non-secret classification.**
+`maintenanceHealth.ts`'s `classifySchedulerProvenance(userAgent,
+explicitTrigger)` reads the request's own `User-Agent` header and checks
+it against `vercel-cron/1.0` — the exact string Vercel's Cron dispatcher
+sends, documented directly by Vercel, not guessed — returning
+`'vercel_cron' | 'manual' | 'unknown'`. Deliberately three-valued, never
+a boolean: a `User-Agent` is trivial to spoof, so anything that doesn't
+match reads as `'unknown'`, never a false `'manual'`. No raw header
+value is ever stored — only this closed enum, landing in
+`automation_runs.summary.schedulerProvenance` alongside the existing
+`triggeredBy` label (which is left unchanged, still driven by
+`?trigger=manual`). `Authorization`, cookies, and every other header
+remain untouched and unrecorded, exactly as before.
+
+**This is a forward-looking fix only.** It does not retroactively prove
+anything about the `03:56:24Z` run already verified, and — stated
+plainly, not overclaimed — **scheduler provenance has not yet actually
+been observed**: this code was verified locally and deployed, but no
+Vercel Cron execution has occurred since deployment to produce a real
+`schedulerProvenance: 'vercel_cron'` row. That requires returning after
+tomorrow's `03:00 UTC` schedule and reading the real result — a `NOT YET
+VERIFIED` claim, not a `VERIFIED` one, until that happens.
+
 ## 66. Next step
 
 **Recommended Phase 17, following directly from §70:** with Commerce OS

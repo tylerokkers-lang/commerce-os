@@ -7,7 +7,7 @@ import { runOrderIngestionForConnectedOrgs, type OrderIngestionRunResult } from 
 import { runPurchaseWorkflowForConnectedOrgs, type PurchaseWorkflowResult } from '@/lib/orders/purchaseWorkflow'
 import { runMonitoringForAllOrgs, type OrgMonitoringResult } from '@/lib/monitoring/scheduledRun'
 import { runScheduledJobBatch } from './scheduledJobBatch'
-import { classifyMaintenanceOutcome, MAINTENANCE_JOB_KEY, MAINTENANCE_LOCK_STALE_AFTER_MS } from './maintenanceHealth'
+import { classifyMaintenanceOutcome, MAINTENANCE_JOB_KEY, MAINTENANCE_LOCK_STALE_AFTER_MS, type SchedulerProvenance } from './maintenanceHealth'
 import type { AutomationStore, MaintenanceRunRecord } from './store'
 import type { WorkerBatchResult } from './worker'
 
@@ -141,7 +141,7 @@ export type MaintenanceOutcome =
       jobQueue: WorkerBatchResult
     }
 
-export async function runMaintenance(store: AutomationStore, triggeredBy: 'scheduler' | 'manual'): Promise<MaintenanceOutcome> {
+export async function runMaintenance(store: AutomationStore, triggeredBy: 'scheduler' | 'manual', schedulerProvenance: SchedulerProvenance = 'unknown'): Promise<MaintenanceOutcome> {
   const lock = await store.acquireMaintenanceRun(MAINTENANCE_JOB_KEY, MAINTENANCE_LOCK_STALE_AFTER_MS)
   if (!lock.acquired) {
     return { outcome: 'already_running', activeRun: lock.activeRun }
@@ -249,7 +249,7 @@ export async function runMaintenance(store: AutomationStore, triggeredBy: 'sched
     itemsFailed: recovery.failed + recovery.unknown + advertisingSync.reportsFailed + monitoring.totals.errors.length + orderIngestion.rejected + purchaseWorkflow.errors.length + jobQueue.failed + jobQueue.deadLettered,
     decisionsCreated: monitoring.totals.recommendationsCreated,
     error: allErrors.length > 0 ? allErrors.join('; ') : null,
-    summary: { triggeredBy, recovery, advertisingSync, monitoring, orderIngestion, purchaseWorkflow, subjectMonitoring, jobQueue },
+    summary: { triggeredBy, schedulerProvenance, recovery, advertisingSync, monitoring, orderIngestion, purchaseWorkflow, subjectMonitoring, jobQueue },
   })
 
   const finishedAt = new Date().toISOString()

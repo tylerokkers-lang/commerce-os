@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyMaintenanceHealth, classifyMaintenanceOutcome, MAINTENANCE_LOCK_STALE_AFTER_MS, MAINTENANCE_STALE_AFTER_MS } from '@/lib/automation/maintenanceHealth'
+import { classifyMaintenanceHealth, classifyMaintenanceOutcome, classifySchedulerProvenance, MAINTENANCE_LOCK_STALE_AFTER_MS, MAINTENANCE_STALE_AFTER_MS } from '@/lib/automation/maintenanceHealth'
 import type { MaintenanceRunRecord } from '@/lib/automation/store'
 
 /**
@@ -147,5 +147,27 @@ describe('classifyMaintenanceOutcome: partial failure never fails the whole run'
 
   it('an empty subsystem list -> success (vacuously nothing failed)', () => {
     expect(classifyMaintenanceOutcome([])).toBe('success')
+  })
+})
+
+describe('classifySchedulerProvenance: distinguishing a genuine Vercel Cron hit from a caller that merely omitted ?trigger=manual', () => {
+  it("Vercel's own documented Cron User-Agent -> vercel_cron, regardless of the trigger label", () => {
+    expect(classifySchedulerProvenance('vercel-cron/1.0', 'scheduler')).toBe('vercel_cron')
+    expect(classifySchedulerProvenance('vercel-cron/1.0', 'manual')).toBe('vercel_cron')
+  })
+
+  it('an explicit ?trigger=manual call without the Vercel User-Agent -> manual', () => {
+    expect(classifySchedulerProvenance(null, 'manual')).toBe('manual')
+    expect(classifySchedulerProvenance('curl/8.1.2', 'manual')).toBe('manual')
+  })
+
+  it('no Vercel User-Agent and no explicit manual label -> unknown, never silently assumed to be the scheduler', () => {
+    expect(classifySchedulerProvenance(null, 'scheduler')).toBe('unknown')
+    expect(classifySchedulerProvenance('curl/8.1.2', 'scheduler')).toBe('unknown')
+  })
+
+  it('a spoofed or merely similar User-Agent does not pass as vercel_cron', () => {
+    expect(classifySchedulerProvenance('vercel-cron/1.0 (fake)', 'scheduler')).toBe('unknown')
+    expect(classifySchedulerProvenance('Vercel-Cron/1.0', 'scheduler')).toBe('unknown')
   })
 })

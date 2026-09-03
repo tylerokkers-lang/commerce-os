@@ -146,3 +146,36 @@ export function classifyMaintenanceOutcome(subsystems: readonly MaintenanceSubsy
   if (subsystems.some((s) => s.errorCount > 0)) return 'partial_success'
   return 'success'
 }
+
+export type SchedulerProvenance = 'vercel_cron' | 'manual' | 'unknown'
+
+/**
+ * The exact string Vercel's own Cron dispatcher sends as `User-Agent` on
+ * every request it originates — documented directly by Vercel, not
+ * guessed. Distinct from `?trigger=manual`'s `triggeredBy` label
+ * (`route.ts`), which is only ever what the *caller* claims: omitting
+ * that query param has always defaulted to `'scheduler'`, so a plain,
+ * unlabelled manual `curl` was previously indistinguishable in
+ * `automation_runs` from a genuine scheduled firing — the exact gap this
+ * exists to close. `userAgent` is the one non-secret signal Vercel itself
+ * attaches that a caller cannot produce by simply omitting a parameter.
+ */
+const VERCEL_CRON_USER_AGENT = 'vercel-cron/1.0'
+
+/**
+ * Deliberately a three-way classification, never a boolean "was this
+ * Vercel" — a `User-Agent` header is trivial for any caller to spoof, so
+ * a non-matching value must read as "we don't know," not "definitely
+ * manual." `'manual'` is reserved for the one case with its own explicit,
+ * deliberate signal (`?trigger=manual`, set only by this codebase's own
+ * test/debug callers, never end users). This intentionally records no raw
+ * header value anywhere — only this closed three-value classification —
+ * so nothing that reaches `automation_runs.summary` (a table any org
+ * member can read, per `docs/SECURITY.md`) can leak whatever a client
+ * chose to send as its own header.
+ */
+export function classifySchedulerProvenance(userAgent: string | null, explicitTrigger: 'scheduler' | 'manual'): SchedulerProvenance {
+  if (userAgent === VERCEL_CRON_USER_AGENT) return 'vercel_cron'
+  if (explicitTrigger === 'manual') return 'manual'
+  return 'unknown'
+}
