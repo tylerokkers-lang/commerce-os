@@ -31,7 +31,14 @@ import { isDemoMode } from '@/lib/core/env'
 // has never actually been reachable in live mode until this fix. These
 // three are exempted from the session gate for exactly the same reason
 // `/api/health` already was: they authenticate themselves.
-const PUBLIC_PATHS = ['/login', '/auth', '/api/health', '/api/automation/run', '/api/automation/maintenance', '/api/monitoring/run']
+// `/reset-password` (production deployment & scheduler activation
+// follow-up): a Supabase invite/recovery email link's proof of identity
+// arrives in the URL fragment, which browsers never send to the server —
+// this proxy would see a plain, cookie-less request and redirect it to
+// `/login` before the client-side code that actually reads the fragment
+// ever got a chance to run. Public for the same reason `/login` is: it has
+// its own way of establishing who someone is.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/auth', '/api/health', '/api/automation/run', '/api/automation/maintenance', '/api/monitoring/run']
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))

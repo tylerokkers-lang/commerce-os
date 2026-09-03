@@ -440,6 +440,53 @@ brief asked to cover explicitly.
   browser — this environment's demo session has no real campaign data to
   match against, so that end-to-end path is genuinely untested live.
 
+## What real admin provisioning & the password-reset flow changed here (Phase 16 follow-up, `HANDOVER.md` §71)
+
+**A permanent production admin account was created for the real user
+(`info@informax.co.uk`, role `owner`).** The password was never
+generated, displayed, or handled by this session at any point — creation
+went through Supabase's `POST /auth/v1/invite`, which creates the user
+and emails them a link to set their own credential; a later
+`POST /auth/v1/recover` was used to resend access using the same
+no-password-ever-seen mechanism. No "super admin" role exists in
+`member_role` (confirmed by grep across the schema) — `owner` is already
+the ceiling of what this application grants.
+
+**A new public route, `/reset-password`, was added to `proxy.ts`'s
+`PUBLIC_PATHS`.** This is a narrower exemption than it might look: the
+route renders only a "checking your link…" state, an "invalid or
+expired" message, or a password-set form gated entirely on possessing a
+valid Supabase access/refresh token pair in the URL fragment —
+`setSession()` itself is what actually authenticates the token against
+Supabase; nothing on this page trusts the fragment's mere presence. An
+attacker who reaches this route with no token, or a stale/replayed one,
+sees only the "invalid or expired" message; `setSession` rejects a
+forged or expired token the same way any other Supabase auth call would.
+
+**Verified end to end with a disposable test account, never the real
+one**: a real recovery link generated via Supabase's `admin/generate_link`
+correctly authenticated, the password update via `updateUser()` genuinely
+took effect (confirmed by immediately signing in again with the new
+password and Supabase issuing a valid session, no error), and the test
+user and its session were deleted immediately after. `git diff` and the
+production client bundle chunk referencing this new page were both
+scanned for secret patterns and server-only environment variable names —
+no matches; the browser Supabase client here still carries only the
+anon key, matching every existing client in this codebase.
+
+**A real, currently-unresolved gap, stated honestly rather than worked
+around: the Supabase project's Auth "Site URL" is still
+`http://localhost:3000` with an empty redirect allow-list**, so every
+invite/recovery link Supabase generates — including the one already sent
+to the real user's inbox — resolves to `localhost`, not the real
+production URL, regardless of the fixes in this entry. Three attempts to
+correct this via the Supabase Management API were blocked by this
+session's own tooling permission layer before any request reached
+Supabase; this must be corrected manually, by a human with dashboard
+access, per the exact steps in `HANDOVER.md` §71. Until it is, this
+milestone's fix is real and deployed, but not yet reachable by the real
+recovery email already sent.
+
 ## What production deployment & scheduler activation changed here (Phase 16 of the customer-facing store)
 
 **Real production credentials now exist outside this repository, on

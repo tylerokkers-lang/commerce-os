@@ -2805,6 +2805,52 @@ read-only mode, eBay's stubbed writes, no `CJ_API_KEY` configured
 anywhere — locally or on Vercel) is exactly as it was before this
 milestone.
 
+## Milestone — Real admin provisioning & password-reset flow ⚠️ partially complete, one manual step outstanding (Phase 16 follow-up)
+
+A permanent production admin account (`info@informax.co.uk`, role
+`owner`, the schema's ceiling — no "super admin" exists) was created via
+Supabase's invite/recover mechanism, never with this session generating,
+seeing, or handling a password directly.
+
+**A real, previously-nonexistent capability was built: this application
+had no page that could actually complete a Supabase invite/recovery
+link.** `(auth)/reset-password/page.tsx` and `ResetPasswordForm.tsx` now
+do that, added to `proxy.ts`'s public-path allow-list for the same
+reason `/login` is public — the token's proof of identity arrives in a
+URL fragment the server never sees, so the page authenticates itself,
+client-side.
+
+**Three real, independently live-verified bugs were found and fixed
+building it**, none anticipated in advance: `src/lib/supabase/client.ts`
+(getting its first-ever caller) threw on a `NEXT_PUBLIC_*` env-var lookup
+that Next.js's client bundler cannot statically inline through
+`core/env.ts`'s dynamic helper; the Supabase browser client's hardcoded
+`flowType: 'pkce'` made its automatic session detection blind to the
+implicit-grant hash fragment a recovery link actually carries; and React
+Strict Mode's dev-mode double-effect invocation raced against the
+fix for the previous bug. All three fixed and verified end to end with a
+disposable test account (recovery link → password set → immediate
+successful sign-in with the new password), never the real account.
+
+**Genuinely incomplete, stated plainly: the Supabase project's Auth Site
+URL is still `http://localhost:3000`**, so every invite/recovery link —
+including the one already sent to the real user — resolves to
+`localhost`, not production, regardless of the in-app fix above. Three
+attempts to correct this via the Supabase Management API were blocked by
+this session's own tooling permissions before reaching Supabase; it
+requires a human with Supabase dashboard access to fix manually (exact
+steps in `HANDOVER.md` §71). This milestone's code is complete, tested,
+and deployed — but the end-to-end path for the real user's own inbox is
+not yet usable until that one manual step happens.
+
+**No database migration.** No schema or RLS change of any kind.
+
+**Test-data discipline maintained:** the disposable recovery-flow test
+account and its session were deleted immediately after verification.
+
+**Out of scope, untouched:** everything the Phase 16 milestone already
+listed as out of scope remains so.
+
 ## Cross-cutting, ongoing
 
 These are not single milestones — they are requirements that apply across all

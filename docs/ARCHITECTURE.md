@@ -724,6 +724,28 @@ session on every request regardless, so a stale cookie in the one
 remaining edge case (the cookie write itself failing) still cannot
 reach a protected route.
 
+**Password reset (`HANDOVER.md` §71) is the one page whose identity proof
+never reaches the server.** A Supabase invite/recovery link's tokens
+arrive as an implicit-grant URL *fragment*
+(`#access_token=...&refresh_token=...`), which browsers never send in an
+HTTP request — so `(auth)/reset-password/page.tsx` has to be public in
+`proxy.ts`'s `PUBLIC_PATHS` (same reasoning as `/login`: it authenticates
+itself, just client-side instead of server-side) and the actual session
+exchange happens entirely in `ResetPasswordForm.tsx`, a Client Component
+that hand-parses the hash and calls `setSession()` directly — `@supabase/ssr`'s
+`createBrowserClient` hardcodes `flowType: 'pkce'`, so its automatic
+`detectSessionInUrl` handling only recognises a PKCE `?code=` query
+parameter and is blind to this fragment shape, confirmed by reading the
+installed package's own source rather than assumed. This was also
+`src/lib/supabase/client.ts`'s first-ever caller, which surfaced a
+Next.js constraint worth stating generally: `NEXT_PUBLIC_*` inlining into
+the client bundle requires a **static literal** `process.env.NEXT_PUBLIC_X`
+at the call site — `core/env.ts`'s dynamic `process.env[key]` helper
+cannot be inlined and silently resolves to `undefined` in the browser, so
+any future browser-side Supabase (or other `NEXT_PUBLIC_*`) client must
+read the literal, the way `proxy.ts` and `client.ts` both now do, not
+through that helper.
+
 **Every consequential action is audited.** `audit_logs` is append-only at the
 database level; UPDATE and DELETE raise an exception. `recordAudit` never
 throws, so a logging failure cannot roll back a business action that succeeded,
