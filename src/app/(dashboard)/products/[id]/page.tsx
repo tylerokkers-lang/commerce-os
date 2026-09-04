@@ -13,6 +13,7 @@ import { DecisionControl } from '../DecisionControl'
 import { ChannelDecisionControl } from '../ChannelDecisionControl'
 import { ProductIntelligencePanel } from '../ProductIntelligencePanel'
 import { SupplierOffersPanel } from '../SupplierOffersPanel'
+import { SupplierVerificationPanel } from '../SupplierVerificationPanel'
 import { ShopifyPublicationPanel } from '../ShopifyPublicationPanel'
 import { MediaPanel } from '../MediaPanel'
 import { ShippingPanel } from '../ShippingPanel'
@@ -60,6 +61,15 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               A discovery-to-trading pipeline position — distinct from the Commerce-OS decision below.
             </p>
           </div>
+          {product.supplierTitle && product.supplierTitle !== product.title ? (
+            <div className="sm:col-span-2">
+              <p className="text-sm text-ink-subtle">Supplier product name (source)</p>
+              <p className="text-sm text-ink-muted">{product.supplierTitle}</p>
+              <p className="mt-1 text-xs text-ink-subtle">
+                The name above is Commerce-OS&apos;s own clean, generated name — this is the supplier&apos;s original, untouched listing title, kept for audit and traceability. See &quot;Supplier offers&quot; below to view the exact supplier page.
+              </p>
+            </div>
+          ) : null}
         </div>
       </Card>
 
@@ -70,6 +80,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       {!session.isDemo && supplierOffers.length > 0 ? (
         <Card>
           <SupplierOffersPanel offers={supplierOffers} />
+        </Card>
+      ) : null}
+
+      {!session.isDemo && supplierOffers.length > 0 ? (
+        <Card>
+          <SupplierVerificationPanel product={product} offers={supplierOffers} />
         </Card>
       ) : null}
 

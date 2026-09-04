@@ -84,6 +84,57 @@ export interface AutomationSettings {
    * rather than a second, duplicate threshold being invented.
    */
   maxDeliveryDays: number
+  /**
+   * Milestone: business-settings configuration layer. Whether a real
+   * `business_settings` row exists for this organisation — `false` only
+   * when this object is `DEMO_AUTOMATION_SETTINGS` itself (no row found,
+   * or a demo session). Every numeric field above still carries a real
+   * number in that case (so profitability/pricing/quality/risk/opportunity
+   * can still compute something informative to show), but callers making a
+   * genuine business decision (recommendation/eligibility) must treat
+   * those numbers as unconfirmed placeholders, never a real business
+   * decision, while this is `false`.
+   */
+  businessSettingsConfigured: boolean
+  /** Existing since 0001 (`business_settings.vat_registered`), never read outside invoicing until now. */
+  vatRegistered: boolean
+  /**
+   * The rate to apply for profitability/pricing estimation (0045) —
+   * distinct from `vatRegistered`: a business can be registered with no
+   * rate configured yet (nothing here guesses the UK standard rate or any
+   * other). `null` means genuinely not configured; callers must not
+   * silently substitute 0 and present the result as a confirmed VAT
+   * treatment when `vatRegistered` is true.
+   */
+  vatRatePct: number | null
+  /**
+   * Milestone: economic-model cost completeness (0047). The dropshipping
+   * norm is that the supplier packages the item directly, so this is the
+   * one optional field of the four added this milestone — `null` never
+   * blocks `resolveBusinessConfiguration`'s `configured` verdict, but is
+   * still never silently read as £0 in a calculation; the profitability
+   * breakdown always distinguishes "not configured" from a confirmed
+   * zero (see `profitability/index.ts`'s breakdown lines).
+   */
+  packagingCostMinor: number | null
+  /** Expected fraction of orders returned. Required for a fully "configured" business profile — a real, material assumption Product Intelligence cannot honestly omit. */
+  returnRatePct: number | null
+  /** Portion of a returned unit's cost that is unrecoverable, 0-100. */
+  returnLossPct: number | null
+  /** Expected refunds as a percentage of revenue, beyond returns. */
+  refundRatePct: number | null
+  /** Expected fraction of orders resulting in a card chargeback. */
+  chargebackRatePct: number | null
+  /** The card network/processor's fixed dispute fee per chargeback event. */
+  chargebackFeeMinor: number | null
+  /**
+   * A conservative, operator-chosen import duty assumption (percentage of
+   * landed supplier cost) — deliberately not a real customs calculator
+   * (no HS-code/origin/destination modelling exists or is claimed here).
+   * `0` is a legitimate, explicit choice ("duty does not apply to this
+   * business"); `null` means the business has not yet decided.
+   */
+  importDutyPct: number | null
 }
 
 /**
@@ -128,6 +179,21 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   maxImageFileSizeBytes: 5242880,
   allowedImageFormats: ['jpeg', 'png', 'webp'],
   maxDeliveryDays: 7,
+  // This is the tell: every field above is a placeholder, not a business
+  // decision, until a real business_settings row exists. See settings.ts —
+  // this constant is only ever returned when no row was found (or a demo
+  // session), and callers making a genuine recommendation/eligibility
+  // decision must check this before trusting the numbers above.
+  businessSettingsConfigured: false,
+  vatRegistered: false,
+  vatRatePct: null,
+  packagingCostMinor: null,
+  returnRatePct: null,
+  returnLossPct: null,
+  refundRatePct: null,
+  chargebackRatePct: null,
+  chargebackFeeMinor: null,
+  importDutyPct: null,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */
@@ -135,4 +201,80 @@ export function isCategoryPaused(settings: AutomationSettings, category: Automat
   if (settings.automationPaused) return true
   if (category === null) return false
   return settings.automationPausedCategories.includes(category)
+}
+
+export interface BusinessConfigurationStatus {
+  /**
+   * `true` only when a real `business_settings` row exists for this org
+   * AND every field genuinely *required* for a trustworthy recommendation
+   * has a real value — VAT rate (if registered), return/refund rate,
+   * return loss, chargeback rate/fee, and import duty. Packaging is
+   * deliberately excluded from this check (see `packagingConfigured`
+   * below) — the dropshipping norm is the supplier packages the item
+   * directly, so its absence alone must not permanently block
+   * "configured." Everything downstream that would otherwise call a
+   * product a "candidate"/"strong candidate" must check `configured`
+   * first.
+   */
+  configured: boolean
+  /** Human-readable reasons `configured` is `false` — empty when it's `true`. Surfaced in the UI/recommendation reason so an operator is told exactly what is still missing, never just "no." */
+  missingRequired: readonly string[]
+  /**
+   * Real numbers for the calculation engines to run against regardless —
+   * 0 for "not registered"/"not applicable" (a confirmed fact once
+   * `configured` is true) or for "not yet known" (a placeholder, never
+   * presented as final). Callers must use `configured` (or, for
+   * packaging, `packagingConfigured`) to decide whether a figure is a
+   * business decision or a provisional placeholder — never infer that
+   * from the number itself.
+   */
+  effectiveVatRatePct: number
+  effectivePackagingCostMinor: number
+  effectiveReturnRatePct: number
+  effectiveReturnLossPct: number
+  effectiveRefundRatePct: number
+  effectiveChargebackRatePct: number
+  effectiveChargebackFeeMinor: number
+  effectiveImportDutyPct: number
+  /** `true` only when the operator has explicitly set a packaging cost (including an explicit £0) — distinct from `configured`, since packaging alone never blocks it. */
+  packagingConfigured: boolean
+}
+
+/**
+ * Milestone: business-settings configuration layer, extended for economic-
+ * model cost completeness (0047). The one place that decides whether
+ * `settings` represents a real, operator-saved business decision or a
+ * placeholder — used by `assemble.ts` (every cost rate for the
+ * profitability/pricing calls, and the top-level gate for
+ * `recommendProduct`) so the two can never independently drift.
+ */
+export function resolveBusinessConfiguration(settings: AutomationSettings): BusinessConfigurationStatus {
+  const packagingConfigured = settings.packagingCostMinor !== null
+
+  const missingRequired: string[] = []
+  if (!settings.businessSettingsConfigured) {
+    missingRequired.push('No business settings have been saved for this organisation yet.')
+  } else {
+    if (settings.vatRegistered && settings.vatRatePct === null) missingRequired.push('VAT rate (the business is registered but no rate is set).')
+    if (settings.returnRatePct === null) missingRequired.push('Expected return rate.')
+    if (settings.returnLossPct === null) missingRequired.push('Return loss percentage (how much of a returned unit\'s cost is unrecoverable).')
+    if (settings.refundRatePct === null) missingRequired.push('Expected refund rate.')
+    if (settings.chargebackRatePct === null) missingRequired.push('Expected chargeback rate.')
+    if (settings.chargebackFeeMinor === null) missingRequired.push('Chargeback fixed fee.')
+    if (settings.importDutyPct === null) missingRequired.push('Import duty / customs assumption.')
+  }
+
+  return {
+    configured: missingRequired.length === 0,
+    missingRequired,
+    effectiveVatRatePct: settings.vatRegistered && settings.vatRatePct !== null ? settings.vatRatePct : 0,
+    effectivePackagingCostMinor: settings.packagingCostMinor ?? 0,
+    effectiveReturnRatePct: settings.returnRatePct ?? 0,
+    effectiveReturnLossPct: settings.returnLossPct ?? 0,
+    effectiveRefundRatePct: settings.refundRatePct ?? 0,
+    effectiveChargebackRatePct: settings.chargebackRatePct ?? 0,
+    effectiveChargebackFeeMinor: settings.chargebackFeeMinor ?? 0,
+    effectiveImportDutyPct: settings.importDutyPct ?? 0,
+    packagingConfigured,
+  }
 }

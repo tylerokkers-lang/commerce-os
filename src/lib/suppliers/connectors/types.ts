@@ -113,6 +113,17 @@ export interface ConnectorCapabilities {
    * the full vocabulary this milestone's brief asks for, honestly unmet.
    */
   readOrders: boolean
+  /**
+   * Milestone: supplier product verification link. Whether this connector
+   * can derive a real, supplier-hosted link for a human to manually
+   * verify a product against — `getProductSourceLink` below. `true` for
+   * CJdropshipping (a genuine, live-verified official search route);
+   * `false` for the manual connector (nothing to derive — a human already
+   * types the URL directly into the candidate form, handled separately by
+   * `source_url`/`source_url_type` being set at capture time, never via
+   * this method).
+   */
+  resolvesProductSourceLink: boolean
 }
 
 export interface ConnectorDescriptor {
@@ -151,6 +162,8 @@ export interface SupplierProductStatus {
   warehouseCountry?: string
   stockQty?: number
   inStock: boolean
+  /** Optional — not every connector's discovery-browse response carries category data at this level (some only return it on a richer per-product detail read). */
+  category?: string
   /** When stock was actually checked — the freshness of the figure above. */
   stockCheckedAt: string
 
@@ -209,6 +222,18 @@ export interface SupplierVariantDetail {
   /** `'unknown'` when the supplier's response did not include a stock figure for this variant — never assumed in-stock or zero. */
   inStock: boolean | 'unknown'
   imageUrls: readonly string[]
+  /**
+   * Physical specifications for this variant, when the connector's detail
+   * read reports them — `null` when genuinely not provided, never a guess
+   * (no inferring from a title/description, no invented figure). Grams and
+   * millimetres, matching `products.weight_grams`/`length_mm`/`width_mm`/
+   * `height_mm`'s own canonical units so a caller can copy these straight
+   * across with no conversion.
+   */
+  weightGrams: number | null
+  lengthMm: number | null
+  widthMm: number | null
+  heightMm: number | null
 }
 
 export interface SupplierShippingQuote {
@@ -241,6 +266,15 @@ export interface SupplierProductDetail {
   description: string | null
   category: string | null
   brand: string | null
+  /**
+   * The supplier's own public product-page URL, when the connector's
+   * detail read genuinely reports one — `null` when it does not,
+   * NEVER constructed from a guessed URL pattern. CJdropshipping's real
+   * `/product/query` and `/product/listV2` responses (live-verified) and
+   * its own published field documentation both confirm neither endpoint
+   * returns one, and no documented construction pattern exists — this is
+   * always `null` for CJ today, honestly.
+   */
   productUrl: string | null
   primaryImageUrl: string | null
   additionalImageUrls: readonly string[]
@@ -250,6 +284,27 @@ export interface SupplierProductDetail {
   fetchedAt: string
   /** Free-form connector payload, retained for traceability — same convention as `SupplierProductStatus.raw`. */
   raw: Record<string, unknown>
+}
+
+/**
+ * Milestone: supplier product verification link. A link a human can click
+ * to manually verify a product against the supplier's own website —
+ * genuinely two different claims, never conflated:
+ *
+ *   'product' — this URL is presented as the exact product page. Only
+ *     ever set from a real, supplier-provided or human-provided URL
+ *     (`SupplierProductDetail.productUrl`, or an operator pasting one into
+ *     the manual capture form) — never constructed from a guessed
+ *     pattern, however plausible-looking.
+ *   'search' — this URL is the supplier's own official search route,
+ *     pre-filled with the stored product reference/SKU. Commerce OS
+ *     cannot guarantee the resulting page is the exact product — the
+ *     operator must confirm that themselves. Never presented as if it
+ *     were 'product'.
+ */
+export interface ProductSourceLink {
+  type: 'product' | 'search'
+  url: string
 }
 
 export interface SupplierConnector {
@@ -282,6 +337,21 @@ export interface SupplierConnector {
    * guess about.
    */
   readProductDetail(productRef: string, options?: ReadProductDetailOptions): Promise<Result<SupplierProductDetail, string>>
+
+  /**
+   * Milestone: supplier product verification link. Derives a real,
+   * supplier-hosted link for manual verification — gated by
+   * `descriptor.capabilities.resolvesProductSourceLink` exactly like every
+   * other capability-gated method here. Never makes a network call to
+   * "verify" the link itself (this codebase does not fetch supplier
+   * websites — only their documented APIs — and must not attempt to
+   * defeat a supplier's own anti-automation measures); `type: 'product'`
+   * is only ever returned when the connector already has a real,
+   * supplier-provided URL on hand (e.g. from `readProductDetail`), never
+   * a constructed guess. Returns `err` when the connector has no safe,
+   * official route to offer at all.
+   */
+  getProductSourceLink(input: { productRef: string; supplierSku: string | null }): Promise<Result<ProductSourceLink, string>>
 }
 
 /** Runtime health, combining the descriptor with what has actually happened. */

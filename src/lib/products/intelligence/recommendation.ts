@@ -21,9 +21,28 @@
 
 import type { ComplianceRiskInput } from './riskScore'
 
-export type ProductRecommendation = 'strong_candidate' | 'candidate' | 'review_required' | 'low_priority' | 'do_not_sell'
+export type ProductRecommendation = 'strong_candidate' | 'candidate' | 'review_required' | 'low_priority' | 'do_not_sell' | 'unconfigured'
 
 export interface RecommendationInputs {
+  /**
+   * Milestone: business-settings configuration layer. `false` whenever the
+   * margin/quality/opportunity/risk/VAT thresholds behind this
+   * recommendation are `DEMO_AUTOMATION_SETTINGS` placeholders rather than
+   * a real, operator-saved `business_settings` row (or the specific VAT
+   * rate a VAT-registered business needs but hasn't set yet) — checked
+   * first, before any of the checks below, so a placeholder threshold can
+   * never produce a confident CANDIDATE/STRONG_CANDIDATE verdict.
+   */
+  businessSettingsConfigured: boolean
+  /**
+   * Milestone: economic-model cost completeness (0047). Human-readable
+   * reasons `businessSettingsConfigured` is `false` — from
+   * `resolveBusinessConfiguration().missingRequired` — folded into the
+   * reason string so an operator is told exactly what is still missing,
+   * never just "unconfigured." Empty when `businessSettingsConfigured` is
+   * `true`.
+   */
+  missingRequiredSettings: readonly string[]
   profitabilityGatePasses: boolean
   profitabilityFailureReason: string | null
   supplierAssigned: boolean
@@ -51,6 +70,7 @@ const LABELS: Record<ProductRecommendation, string> = {
   review_required: 'Review required',
   low_priority: 'Low priority',
   do_not_sell: 'Do not sell',
+  unconfigured: 'Unconfigured',
 }
 
 export const RECOMMENDATION_LABELS = LABELS
@@ -58,6 +78,14 @@ export const RECOMMENDATION_LABELS = LABELS
 const LOW_CAPITAL_EFFICIENCY_THRESHOLD = 30
 
 export function recommendProduct(inputs: RecommendationInputs): RecommendationResult {
+  if (!inputs.businessSettingsConfigured) {
+    const missing = inputs.missingRequiredSettings.length > 0 ? ` Specifically missing: ${inputs.missingRequiredSettings.join(' ')}` : ''
+    return {
+      recommendation: 'unconfigured',
+      reason: `The margin, quality, opportunity and risk thresholds behind this figure are placeholder defaults, not a real business decision, until every required business setting is saved.${missing} Configure business settings before treating this as a real recommendation.`,
+    }
+  }
+
   if (!inputs.profitabilityGatePasses) {
     return {
       recommendation: 'do_not_sell',

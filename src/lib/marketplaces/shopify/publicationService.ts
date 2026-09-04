@@ -13,6 +13,7 @@ import type { ShippingSuitabilityStatus } from '@/lib/suppliers/shippingPolicy'
 import { getMarketplaceConnector } from '../connectors/registry'
 import type { CreateListingImage, CreateListingVariant, MarketplaceConnector } from '../connectors/types'
 import { planListingTransition, type ListingState } from '../listingLifecycle'
+import { decideChannelFulfilmentAction } from '../publicationGate'
 import { assessShopifyEligibility, type ShopifyEligibilityResult } from './eligibility'
 import { buildShopifyProductPayload } from './payloadBuilder'
 import { checkPriceOverride, type PriceOverrideResult } from './priceOverride'
@@ -136,6 +137,48 @@ async function writeChannelProductRow(
     .single()
   if (error || !data) return err(error?.message ?? 'Could not create the channel listing record.')
   return ok(data)
+}
+
+/**
+ * Records the real, already-known fulfilment supplier for a product on
+ * the Shopify channel — the fix for a genuine circular dependency found
+ * live testing the CJdropshipping pipeline: `getChannelReadiness` and
+ * `computeProductIntelligence` (`products/intelligence/assemble.ts`) both
+ * read a product's fulfilment supplier *only* from
+ * `channel_products.fulfilment_supplier_id` — but the only place that
+ * field was ever written was `createDraft`, below, which itself refuses
+ * to run unless the profitability gate already passes, which itself
+ * requires that same field. A freshly-imported product could therefore
+ * never be assessed, and could never reach a state where `createDraft`
+ * would succeed, regardless of Shopify write access.
+ *
+ * The correct fix is not to weaken the gate or to have intelligence
+ * assume a supplier — it is to establish the channel/fulfilment-supplier
+ * relationship at the one point it is genuinely, unambiguously already
+ * known: right after a supplier-sourced candidate is imported
+ * (`suppliers/discovery/ingestion.ts`'s `importCandidate`, the caller),
+ * when exactly one real `supplier_products` offer has just been created
+ * for it. This never invents a supplier: it only ever records the
+ * `supplierId` its caller already knows to be real, using the exact same
+ * insert-or-update path (`loadChannelProductRow`/`writeChannelProductRow`)
+ * every other `channel_products` write in this file already uses — no
+ * second implementation of that logic.
+ *
+ * Deliberately conservative in two ways: a no-op, never an error, when
+ * no Shopify channel is configured for the org yet (nothing to
+ * establish); and never overwrites a channel listing that already
+ * records a fulfilment supplier (an operator's own prior choice, e.g.
+ * from switching suppliers, is never silently replaced).
+ */
+export async function establishChannelFulfilmentSupplier(orgId: string, productId: string, supplierId: string): Promise<Result<{ recorded: boolean }, string>> {
+  const { channelId, listing } = await loadChannelProductRow(orgId, productId)
+  const action = decideChannelFulfilmentAction({ channelId, existingFulfilmentSupplierId: listing?.fulfilment_supplier_id ?? null })
+  if (action !== 'write') return ok({ recorded: false })
+
+  // `action === 'write'` only when decideChannelFulfilmentAction has already confirmed channelId is non-null.
+  const result = await writeChannelProductRow(orgId, channelId as string, productId, listing?.id ?? null, { fulfilment_supplier_id: supplierId })
+  if (!result.ok) return result
+  return ok({ recorded: true })
 }
 
 export async function assembleShopifyPublicationPreview(orgId: string, productId: string): Promise<Result<ShopifyPublicationPreview, string>> {

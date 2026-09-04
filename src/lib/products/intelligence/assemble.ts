@@ -6,10 +6,13 @@ import { calculateProfitability, assessProfitabilityGate } from '@/lib/profitabi
 import { buildChannelProfiles } from '@/lib/profitability/channels'
 import { getChannelReadiness } from '@/lib/marketplaces/channelReadiness'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
+import { resolveBusinessConfiguration } from '@/lib/automation/settingsTypes'
 import { scoreSupplier, type SupplierSignals } from '@/lib/suppliers/scoring'
 import { scoreOpportunity, type ScoringSignals } from '@/lib/products/scoring'
 import { getProductById as getStorefrontProductById } from '@/lib/shopify/storefront'
-import { money } from '@/lib/core/money'
+import { money, type CurrencyCode } from '@/lib/core/money'
+import { getSupabaseFxStore } from '@/lib/fx/fxStore'
+import { deriveChannelCurrencyLandedCost } from './currency'
 import { normalizeProduct, type StorefrontFacts, type SupplierOfferFacts } from './enrichment'
 import { scoreProductQuality, type QualitySignals } from './qualityScore'
 import { scoreProductRisk, type ComplianceRiskInput } from './riskScore'
@@ -131,6 +134,7 @@ export async function computeProductIntelligence(
     ? {
         unitCostMinor: supplierOffer.unit_cost_minor,
         shippingCostMinor: supplierOffer.shipping_cost_minor,
+        currency: supplierOffer.currency as CurrencyCode,
         leadTimeDays: supplierOffer.lead_time_days,
         stockQty: supplierOffer.stock_qty,
         inStock: supplierOffer.in_stock,
@@ -141,44 +145,191 @@ export async function computeProductIntelligence(
 
   const settings = await getAutomationSettingsForOrg(orgId)
 
+  // --- Business-settings configuration status ---
+  //
+  // Milestone: business-settings configuration layer. `settings` above is
+  // `DEMO_AUTOMATION_SETTINGS` (real numbers, but placeholders — never a
+  // business decision) whenever no `business_settings` row exists for
+  // this org yet. VAT is a second, independent way this can be
+  // incomplete even once a row exists: `vat_registered = true` with no
+  // `vat_rate_pct` configured is a genuinely unresolved business fact
+  // (the architecture has no way to guess a rate), never silently treated
+  // as 0%. Both facts feed the same gate — `recommendProduct` refuses to
+  // call anything a candidate on either kind of placeholder. Extracted to
+  // `settingsTypes.ts`'s `resolveBusinessConfiguration` (pure, no
+  // `server-only`) so this exact rule has its own direct unit tests.
+  const businessConfiguration = resolveBusinessConfiguration(settings)
+  const { configured: businessSettingsConfigured, effectiveVatRatePct } = businessConfiguration
+
+  // --- Currency: convert supplier economics into the channel currency before anything downstream touches them ---
+  //
+  // Found live testing the real CJdropshipping pipeline: CJ quotes in
+  // USD, this channel's currency defaults to GBP — every economic figure
+  // below previously used the raw USD minor units as if they were
+  // already GBP, a silent conflation never caught because every Money
+  // value in this function carried the same (wrong) label. Reuses the
+  // existing FX architecture (`lib/fx`, Milestone 9) exactly as built —
+  // no new conversion mechanism, no invented rate. `deriveChannelCurrencyLandedCost`
+  // (`./currency.ts`) is the pure decision; only the actual rate lookup
+  // happens here.
+  const channelCurrency = currency as CurrencyCode
+  const latestFxRate =
+    supplierOfferFacts && supplierOfferFacts.currency !== channelCurrency
+      ? await getSupabaseFxStore().getLatestRate(orgId, supplierOfferFacts.currency, channelCurrency)
+      : null
+  const landedCost = supplierOfferFacts
+    ? deriveChannelCurrencyLandedCost(supplierOfferFacts, channelCurrency, latestFxRate, 'productEvaluation', new Date())
+    : null
+
   // --- Compliance (reused wholesale from the already-built channel readiness assembler) ---
   const readiness = await getChannelReadiness(orgId, productId, 'shopify', product.stage, product.decision)
   const complianceVerdict: ComplianceRiskInput | null = readiness.compliance?.verdict ?? null
 
+  // --- Shopify's own fee/fulfilment profile ---
+  //
+  // Computed once and reused by both the pricing search below and the
+  // profitability calculation further down, so the two can never drift
+  // apart by reading two different snapshots. None of Shopify's own
+  // channelFeePct/channelFeeFixed/paymentFeePct/paymentFeeFixed/fulfilment
+  // actually depend on `sellingPrice` (see `channels.ts` — only Amazon's
+  // referral-fee shortfall does), so the price passed in here is never
+  // more than a required-but-inert argument for this channel.
+  const shopifyProfile = buildChannelProfiles({ category: product.category, sellingPrice: money(landedCost?.unitCostMinor ?? 0, channelCurrency) }).find((p) => p.channel === 'shopify')
+
+  // --- Shared cost assumptions (Milestone: economic-model cost completeness) ---
+  //
+  // Built once from the org's real, raw settings — never the "effective"
+  // 0-defaulted view `businessConfiguration` also exposes — and reused
+  // verbatim by both the pricing search below and the profitability
+  // calculation further down, exactly the same invariant `shopifyProfile`
+  // above already guarantees for channel fees: the two can never diverge
+  // on what a given product actually costs to package, return, refund,
+  // charge back, or bring through customs. `undefined` (not 0) is passed
+  // through whenever the org hasn't configured a figure, so
+  // `calculateProfitability`'s own breakdown can honestly say "not
+  // configured" rather than a confirmed zero — never silently coerced
+  // here.
+  const sharedCostAssumptions = {
+    packaging: settings.packagingCostMinor !== null ? money(settings.packagingCostMinor, channelCurrency) : undefined,
+    importDutyPct: settings.importDutyPct ?? undefined,
+    returnRatePct: settings.returnRatePct ?? undefined,
+    returnLossPct: settings.returnLossPct ?? undefined,
+    refundRatePct: settings.refundRatePct ?? undefined,
+    chargebackRatePct: settings.chargebackRatePct ?? undefined,
+    chargebackFeeFixed: settings.chargebackFeeMinor !== null ? money(settings.chargebackFeeMinor, channelCurrency) : undefined,
+  }
+
+  // --- Pricing (moved ahead of profitability — see below for why) ---
+  //
+  // Found live testing the real CJdropshipping pipeline: this used to sit
+  // *after* profitability and was gated on `profitability` already being
+  // non-null, even though `recommendPricing` itself needs nothing but
+  // `supplierOfferFacts` and this org's configured margin targets — it
+  // runs its own internal `calculateProfitability` search, it never reads
+  // an outer one. That gate meant a freshly-imported product could never
+  // be priced until a channel price already existed, which nothing could
+  // ever set for a brand-new product — the exact circular dependency this
+  // fixes. Gated on `supplierOfferFacts` alone now, matching what the
+  // function genuinely requires.
+  //
+  // Also found live: this previously omitted `channelFeeFixed`/
+  // `paymentFeeFixed` (present in the profitability call below) and ran
+  // with an implicit zero advertising assumption, while profitability
+  // correctly applied the org's real `advertisingAllowancePct` — so a
+  // price search that reported "hits the 35% target" was then run through
+  // profitability and revealed to net ~19.5%, because the two calls used
+  // different costs for the same product. `recommendPricing` now takes
+  // the same `advertisingAllowancePct` and recomputes ad spend fresh at
+  // every candidate price it tests, so the two calculations can no longer
+  // disagree about what a given price actually nets.
+  const pricing =
+    landedCost?.available && shopifyProfile
+      ? recommendPricing(
+          {
+            productCost: money(landedCost.unitCostMinor!, channelCurrency),
+            supplierShipping: money(landedCost.shippingCostMinor!, channelCurrency),
+            fulfilment: shopifyProfile.fulfilment,
+            channelFeePct: shopifyProfile.channelFeePct,
+            channelFeeFixed: shopifyProfile.channelFeeFixed,
+            paymentFeePct: shopifyProfile.paymentFeePct,
+            paymentFeeFixed: shopifyProfile.paymentFeeFixed,
+            vatRatePct: effectiveVatRatePct,
+            ...sharedCostAssumptions,
+          },
+          channelCurrency,
+          landedCost.unitCostMinor!,
+          settings.minNetMarginPct,
+          settings.targetNetMarginPct,
+          settings.advertisingAllowancePct,
+        )
+      : {
+          minimumViablePriceMinor: null,
+          minimumViableUnreachable: true,
+          recommendedPriceMinor: null,
+          recommendedUnreachable: true,
+          currency: channelCurrency,
+          basis: !supplierOfferFacts
+            ? 'Supplier cost is not on file, so no price can be recommended.'
+            : (landedCost?.detail ?? 'Supplier economics could not be converted into the channel currency.'),
+        }
+
   // --- Profitability (the real, existing engine — never re-derived) ---
+  //
+  // `effectivePriceMinor`: the operator's own selected channel price when
+  // one is on file — always the source of truth once it exists, never
+  // overridden — otherwise the pricing engine's own recommended price
+  // above, itself deterministically derived from real cost/shipping and
+  // this org's configured margin targets, never a guess and never
+  // written back to `channel_products.price_minor` (that column stays
+  // exactly what the operator actually selected, or null). This is what
+  // lets profitability — and everything below that depends on it —
+  // actually run for a product nobody has priced yet.
+  const effectivePriceMinor = priceMinor ?? pricing.recommendedPriceMinor
+
   let profitability: ReturnType<typeof calculateProfitability> | null = null
   let profitabilityGatePasses = false
-  let profitabilityFailureReason: string | null = 'Not assessed — no listing price and/or no supplier cost is on file for this channel yet.'
+  let profitabilityFailureReason: string | null = !supplierOfferFacts
+    ? 'Not assessed — no supplier cost is on file for this channel yet.'
+    : !landedCost?.available
+      ? (landedCost?.detail ?? 'Supplier economics could not be converted into the channel currency.')
+      : pricing.recommendedUnreachable
+        ? pricing.basis
+        : 'Not assessed.'
 
-  if (priceMinor !== null && supplierOfferFacts) {
-    const sellingPrice = money(priceMinor, currency as never)
-    const adSpendPerUnit = money(Math.round((priceMinor * settings.advertisingAllowancePct) / 100), currency as never)
-    const profile = buildChannelProfiles({ category: product.category, sellingPrice, shopifyAdSpendPerUnit: adSpendPerUnit }).find((p) => p.channel === 'shopify')
-    if (profile) {
-      profitability = calculateProfitability({
-        sellingPrice,
-        productCost: money(supplierOfferFacts.unitCostMinor, currency as never),
-        supplierShipping: money(supplierOfferFacts.shippingCostMinor, currency as never),
-        fulfilment: profile.fulfilment,
-        channelFeePct: profile.channelFeePct,
-        channelFeeFixed: profile.channelFeeFixed,
-        paymentFeePct: profile.paymentFeePct,
-        paymentFeeFixed: profile.paymentFeeFixed,
-        adSpendPerUnit: profile.adSpendPerUnit,
-        vatRatePct: 0,
-      })
-      const gate = assessProfitabilityGate(profitability, { minGrossMarginPct: settings.minGrossMarginPct, minNetMarginPct: settings.minNetMarginPct })
-      profitabilityGatePasses = gate.passes
-      profitabilityFailureReason = gate.passes ? null : gate.failures.join(' ')
-    }
+  if (effectivePriceMinor !== null && landedCost?.available && shopifyProfile) {
+    const sellingPrice = money(effectivePriceMinor, channelCurrency)
+    // Same formula the pricing search above now applies at every candidate
+    // price — evaluated here just once, at the actual effective price.
+    const adSpendPerUnit = money(Math.round((effectivePriceMinor * settings.advertisingAllowancePct) / 100), channelCurrency)
+    profitability = calculateProfitability({
+      sellingPrice,
+      productCost: money(landedCost.unitCostMinor!, channelCurrency),
+      supplierShipping: money(landedCost.shippingCostMinor!, channelCurrency),
+      fulfilment: shopifyProfile.fulfilment,
+      channelFeePct: shopifyProfile.channelFeePct,
+      channelFeeFixed: shopifyProfile.channelFeeFixed,
+      paymentFeePct: shopifyProfile.paymentFeePct,
+      paymentFeeFixed: shopifyProfile.paymentFeeFixed,
+      adSpendPerUnit,
+      vatRatePct: effectiveVatRatePct,
+      ...sharedCostAssumptions,
+    })
+    const gate = assessProfitabilityGate(profitability, { minGrossMarginPct: settings.minGrossMarginPct, minNetMarginPct: settings.minNetMarginPct })
+    profitabilityGatePasses = gate.passes
+    profitabilityFailureReason = gate.passes ? null : gate.failures.join(' ')
   }
 
   // --- Supplier reliability ---
   let supplierScoreResult: ReturnType<typeof scoreSupplier> | null = null
   if (supplierRow && supplierOfferFacts) {
     const signals: SupplierSignals = {
-      unitCost: money(supplierOfferFacts.unitCostMinor, currency as never),
-      shippingCost: money(supplierOfferFacts.shippingCostMinor, currency as never),
+      // Deliberately the supplier's own currency here, not the channel's:
+      // this only ever compares this offer against other offers for the
+      // same product (all in the same supplier currency in practice), so
+      // no conversion is needed — only a correct label, never the
+      // channel-currency mislabelling this file used to apply uniformly.
+      unitCost: money(supplierOfferFacts.unitCostMinor, supplierOfferFacts.currency),
+      shippingCost: money(supplierOfferFacts.shippingCostMinor, supplierOfferFacts.currency),
       deliveryDaysMax: supplierOfferFacts.leadTimeDays ?? undefined,
       handlesReturns: supplierRow.handles_returns,
       providesTracking: supplierRow.provides_tracking,
@@ -212,9 +363,14 @@ export async function computeProductIntelligence(
   const quality = scoreProductQuality(qualitySignals)
 
   // --- Capital exposure ratio, for the risk score ---
+  //
+  // `availableOperatingCapitalMinor` (Settings) is denominated in the
+  // org's own channel currency — comparing it against the supplier's raw,
+  // unconverted cost would repeat the exact currency conflation this
+  // milestone fixes, so this uses the channel-currency landed cost.
   const capitalExposureRatio =
-    settings.availableOperatingCapitalMinor && settings.availableOperatingCapitalMinor > 0 && supplierOfferFacts
-      ? supplierOfferFacts.unitCostMinor / settings.availableOperatingCapitalMinor
+    settings.availableOperatingCapitalMinor && settings.availableOperatingCapitalMinor > 0 && landedCost?.available
+      ? landedCost.unitCostMinor! / settings.availableOperatingCapitalMinor
       : undefined
 
   // --- Risk ---
@@ -238,39 +394,22 @@ export async function computeProductIntelligence(
 
   // --- Opportunity (the real, existing 19-component engine) ---
   const opportunitySignals: ScoringSignals = {
-    sellingPrice: profitability ? money(priceMinor ?? 0, currency as never) : money(0, currency as never),
-    supplierCost: money(supplierOfferFacts?.unitCostMinor ?? 0, currency as never),
-    landedCost: money((supplierOfferFacts?.unitCostMinor ?? 0) + (supplierOfferFacts?.shippingCostMinor ?? 0), currency as never),
+    sellingPrice: profitability ? money(effectivePriceMinor ?? 0, channelCurrency) : money(0, channelCurrency),
+    supplierCost: money(landedCost?.unitCostMinor ?? 0, channelCurrency),
+    landedCost: money((landedCost?.unitCostMinor ?? 0) + (landedCost?.shippingCostMinor ?? 0), channelCurrency),
     contributionMarginPct: profitability?.contributionMarginPct ?? null,
     deliveryDaysMax: supplierOfferFacts?.leadTimeDays ?? undefined,
-    shippingCostShare: priceMinor && supplierOfferFacts && priceMinor > 0 ? supplierOfferFacts.shippingCostMinor / priceMinor : undefined,
+    shippingCostShare: effectivePriceMinor && landedCost?.available && effectivePriceMinor > 0 ? landedCost.shippingCostMinor! / effectivePriceMinor : undefined,
     ipRisk: readiness.compliance?.ip.level,
     supplierReliability: supplierScoreResult?.total,
     sources: { contributionMarginPct: 'derived' as never },
   }
   const opportunity = scoreOpportunity(opportunitySignals, { exceptional: 90, strong: 80, test: settings.minOpportunityScore, watch: Math.max(0, settings.minOpportunityScore - 10) })
 
-  // --- Pricing ---
-  const pricing =
-    supplierOfferFacts && profitability
-      ? recommendPricing(
-          {
-            productCost: money(supplierOfferFacts.unitCostMinor, currency as never),
-            supplierShipping: money(supplierOfferFacts.shippingCostMinor, currency as never),
-            fulfilment: buildChannelProfiles({ category: product.category, sellingPrice: money(priceMinor ?? supplierOfferFacts.unitCostMinor * 3, currency as never) }).find((p) => p.channel === 'shopify')?.fulfilment,
-            channelFeePct: buildChannelProfiles({ category: product.category, sellingPrice: money(priceMinor ?? supplierOfferFacts.unitCostMinor * 3, currency as never) }).find((p) => p.channel === 'shopify')?.channelFeePct,
-            paymentFeePct: buildChannelProfiles({ category: product.category, sellingPrice: money(priceMinor ?? supplierOfferFacts.unitCostMinor * 3, currency as never) }).find((p) => p.channel === 'shopify')?.paymentFeePct,
-            vatRatePct: 0,
-          },
-          currency as never,
-          supplierOfferFacts.unitCostMinor,
-          settings.minNetMarginPct,
-          settings.targetNetMarginPct,
-        )
-      : { minimumViablePriceMinor: null, minimumViableUnreachable: true, recommendedPriceMinor: null, recommendedUnreachable: true, currency: currency as never, basis: 'Supplier cost is not on file, so no price can be recommended.' }
-
   // --- Recommendation ---
   const { recommendation, reason: recommendationReason } = recommendProduct({
+    businessSettingsConfigured,
+    missingRequiredSettings: businessConfiguration.missingRequired,
     profitabilityGatePasses,
     profitabilityFailureReason,
     supplierAssigned: supplierId !== null,
@@ -359,7 +498,22 @@ export async function computeProductIntelligence(
     actorType: actor.type,
     actorUserId: actor.userId,
     actorLabel: actor.label,
-    newValue: { recommendation, qualityScore: quality.total, opportunityScore: opportunity.total, riskScore: risk.total, capitalRequirementMinor: capital.capitalRequirementMinor },
+    newValue: {
+      recommendation,
+      qualityScore: quality.total,
+      opportunityScore: opportunity.total,
+      riskScore: risk.total,
+      capitalRequirementMinor: capital.capitalRequirementMinor,
+      // Safe, non-secret provenance for whatever currency conversion was
+      // (or wasn't) applied — never a raw rate-provider credential, just
+      // the pair/rate/source already stored in `exchange_rates`.
+      currencyConversion:
+        !supplierOfferFacts || supplierOfferFacts.currency === channelCurrency
+          ? null
+          : landedCost?.rateUsed
+            ? { pair: `${supplierOfferFacts.currency}->${channelCurrency}`, rate: landedCost.rateUsed.rate, source: landedCost.rateUsed.source, observedAt: landedCost.rateUsed.observedAt }
+            : { pair: `${supplierOfferFacts.currency}->${channelCurrency}`, status: 'unavailable' },
+    },
     reason: `${trigger}: ${recommendationReason}`,
   })
 

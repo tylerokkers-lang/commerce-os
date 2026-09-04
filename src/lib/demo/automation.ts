@@ -57,6 +57,22 @@ const RUNNING_SETTINGS: AutomationSettings = {
   maxImageFileSizeBytes: 5242880,
   allowedImageFormats: ['jpeg', 'png', 'webp'],
   maxDeliveryDays: 7,
+  // This demo scenario's whole premise is a business that has already
+  // configured its settings and is running autonomously — genuinely
+  // "configured" for this fixture's own narrative, not a real org.
+  businessSettingsConfigured: true,
+  vatRegistered: true,
+  vatRatePct: 20,
+  // Same "this demo scenario's premise is a fully configured business"
+  // reasoning as above — real numbers for this fixture's own narrative,
+  // never a real org's data.
+  packagingCostMinor: 35,
+  returnRatePct: 4,
+  returnLossPct: 65,
+  refundRatePct: 1,
+  chargebackRatePct: 0.3,
+  chargebackFeeMinor: 1500,
+  importDutyPct: 0,
 }
 
 const PAUSED_SETTINGS: AutomationSettings = { ...RUNNING_SETTINGS, automationPaused: true, automationPausedReason: 'Owner paused automation while reviewing Q3 numbers' }

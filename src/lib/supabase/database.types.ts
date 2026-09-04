@@ -894,6 +894,14 @@ export interface Database {
           min_image_height_px: number
           max_image_file_size_bytes: number
           allowed_image_formats: string[]
+          vat_rate_pct: number | null
+          packaging_cost_minor: number | null
+          return_rate_pct: number | null
+          return_loss_pct: number | null
+          refund_rate_pct: number | null
+          chargeback_rate_pct: number | null
+          chargeback_fee_minor: number | null
+          import_duty_pct: number | null
         }
         Insert: {
           org_id: string
@@ -962,6 +970,14 @@ export interface Database {
           min_image_height_px?: number
           max_image_file_size_bytes?: number
           allowed_image_formats?: string[]
+          vat_rate_pct?: number | null
+          packaging_cost_minor?: number | null
+          return_rate_pct?: number | null
+          return_loss_pct?: number | null
+          refund_rate_pct?: number | null
+          chargeback_rate_pct?: number | null
+          chargeback_fee_minor?: number | null
+          import_duty_pct?: number | null
         }
         Update: {
           org_id?: string
@@ -1030,6 +1046,14 @@ export interface Database {
           min_image_height_px?: number
           max_image_file_size_bytes?: number
           allowed_image_formats?: string[]
+          vat_rate_pct?: number | null
+          packaging_cost_minor?: number | null
+          return_rate_pct?: number | null
+          return_loss_pct?: number | null
+          refund_rate_pct?: number | null
+          chargeback_rate_pct?: number | null
+          chargeback_fee_minor?: number | null
+          import_duty_pct?: number | null
         }
         Relationships: [
           {
@@ -4802,6 +4826,7 @@ export interface Database {
           decision: Database['public']['Enums']['product_decision']
           decision_reason: string | null
           decision_changed_at: string
+          supplier_title: string | null
         }
         Insert: {
           id?: string
@@ -4823,6 +4848,7 @@ export interface Database {
           decision?: Database['public']['Enums']['product_decision']
           decision_reason?: string | null
           decision_changed_at?: string
+          supplier_title?: string | null
         }
         Update: {
           id?: string
@@ -4844,6 +4870,7 @@ export interface Database {
           decision?: Database['public']['Enums']['product_decision']
           decision_reason?: string | null
           decision_changed_at?: string
+          supplier_title?: string | null
         }
         Relationships: [
           {
@@ -5787,6 +5814,10 @@ export interface Database {
           cancellation_rate_pct: number | null
           fulfilment_success_rate_pct: number | null
           last_connector_run_id: string | null
+          source_url: string | null
+          connector_key: string | null
+          connector_product_ref: string | null
+          source_url_type: string | null
         }
         Insert: {
           id?: string
@@ -5813,6 +5844,10 @@ export interface Database {
           cancellation_rate_pct?: number | null
           fulfilment_success_rate_pct?: number | null
           last_connector_run_id?: string | null
+          source_url?: string | null
+          connector_key?: string | null
+          connector_product_ref?: string | null
+          source_url_type?: string | null
         }
         Update: {
           id?: string
@@ -5839,6 +5874,10 @@ export interface Database {
           cancellation_rate_pct?: number | null
           fulfilment_success_rate_pct?: number | null
           last_connector_run_id?: string | null
+          source_url?: string | null
+          connector_key?: string | null
+          connector_product_ref?: string | null
+          source_url_type?: string | null
         }
         Relationships: [
           {
@@ -6382,7 +6421,7 @@ export interface Database {
       payment_status: 'pending' | 'authorised' | 'captured' | 'failed' | 'refunded' | 'partially_refunded'
       price_change_source: 'connector_sync' | 'manual' | 'demo'
       product_decision: 'add' | 'block' | 'test' | 'watch' | 'hold' | 'remove' | 'review'
-      product_recommendation: 'strong_candidate' | 'candidate' | 'review_required' | 'low_priority' | 'do_not_sell'
+      product_recommendation: 'strong_candidate' | 'candidate' | 'review_required' | 'low_priority' | 'do_not_sell' | 'unconfigured'
       product_stage: 'discovered' | 'researching' | 'supplier_review' | 'compliance_review' | 'approved' | 'testing' | 'proven' | 'scaling' | 'mature' | 'declining' | 'rejected' | 'paused' | 'removed'
       provider_source_type: 'official_api' | 'licensed_dataset' | 'permitted_public' | 'supplier_feed' | 'manual_entry' | 'simulated'
       provider_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'

@@ -229,3 +229,31 @@ export function assessPublicationReadiness(input: PublicationGateInput): Publica
     requiresOwnerApproval: !autoPermitted,
   }
 }
+
+export type ChannelFulfilmentAction = 'skip_no_channel' | 'skip_already_set' | 'write'
+
+/**
+ * Pure decision half of `establishChannelFulfilmentSupplier`
+ * (`shopify/publicationService.ts`) — split out for the same reason
+ * `maintenanceHealth.ts` splits its own pure logic from its store-backed
+ * orchestrator: the I/O half touches `server-only`-guarded Supabase code
+ * this test suite cannot import at all, so the actual decision has to
+ * live somewhere importable if it is to be unit-tested rather than only
+ * exercised live.
+ *
+ * Fixes a genuine circular dependency, found live testing the
+ * CJdropshipping pipeline: `getChannelReadiness` and
+ * `computeProductIntelligence` both read a product's fulfilment supplier
+ * only from `channel_products.fulfilment_supplier_id`, previously
+ * written only by `createDraft` — which itself requires profitability,
+ * which requires that same field. `'write'` is the only action that
+ * closes the loop; the other two are deliberate no-ops, never a
+ * fabricated write: nothing to attach a supplier to without a configured
+ * channel, and an existing value (an operator's own prior choice, e.g.
+ * from switching suppliers) is never silently replaced.
+ */
+export function decideChannelFulfilmentAction(input: { channelId: string | null; existingFulfilmentSupplierId: string | null }): ChannelFulfilmentAction {
+  if (!input.channelId) return 'skip_no_channel'
+  if (input.existingFulfilmentSupplierId) return 'skip_already_set'
+  return 'write'
+}

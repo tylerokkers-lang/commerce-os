@@ -56,12 +56,40 @@ function Field({
   )
 }
 
-export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdit: boolean }) {
+export function SettingsForm({ settings, canEdit, configured }: { settings: Settings; canEdit: boolean; configured: boolean }) {
   const [state, formAction, pending] = useActionState(saveBusinessSettings, initialSettingsState)
   const errors = state.fieldErrors
 
   return (
     <form action={formAction} className="grid gap-6">
+      <div
+        className={
+          configured
+            ? 'rounded-lg border border-positive/30 bg-positive-soft px-4 py-3 text-sm text-positive'
+            : 'rounded-lg border border-caution/30 bg-caution-soft px-4 py-3 text-sm text-caution'
+        }
+      >
+        {configured ? (
+          <>
+            <strong>Configured.</strong> These are your organisation&apos;s own saved settings. Product
+            Intelligence uses them as real business decisions.
+          </>
+        ) : (
+          <>
+            <strong>Not yet configured.</strong> No business settings have been saved for this
+            organisation. Every field below is blank, not a hidden default — until you save this form,
+            Commerce OS computes margin, quality, opportunity and risk figures using internal placeholder
+            values for reference only, and will not call any product a &quot;candidate&quot; or &quot;strong
+            candidate&quot; on the strength of them.
+          </>
+        )}
+        <p className="mt-2 text-xs opacity-80">
+          Saving this form for the first time is what moves every product from Unconfigured — every
+          field below except the capital fields is required for that. Changing a value here does not
+          retroactively re-score existing products: open each product and click Recalculate to apply it.
+        </p>
+      </div>
+
       <Card>
         <CardHeader
           title="Legal identity"
@@ -97,6 +125,17 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
             </label>
           </div>
           <Field label="VAT number" name="vat_number" defaultValue={settings.vat_number} error={errors.vat_number} />
+          <Field
+            label="VAT rate (%)"
+            name="vat_rate_pct"
+            type="number"
+            step="0.1"
+            min="0"
+            max="100"
+            defaultValue={settings.vat_rate_pct}
+            hint="Required once registered. Left blank, Product Intelligence treats VAT as genuinely unconfigured rather than assuming 0% — it will not guess the standard rate for you."
+            error={errors.vat_rate_pct}
+          />
         </div>
       </Card>
 
@@ -154,6 +193,41 @@ export function SettingsForm({ settings, canEdit }: { settings: Settings; canEdi
           <Field label="Cash buffer (£)" name="cash_buffer_major" type="number" step="0.01" min="0" defaultValue={settings.cash_buffer_minor !== null && settings.cash_buffer_minor !== undefined ? settings.cash_buffer_minor / 100 : null} hint="Reserve that capital calculations never treat as spendable" error={errors.cash_buffer_minor} />
           <Field label="Maximum supplier unit cost (£)" name="max_supplier_cost_major" type="number" step="0.01" min="0" defaultValue={settings.max_supplier_cost_minor !== null && settings.max_supplier_cost_minor !== undefined ? settings.max_supplier_cost_minor / 100 : null} hint="Optional hard ceiling. Leave blank for no ceiling." error={errors.max_supplier_cost_minor} />
         </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Cost model: packaging, returns, chargebacks and customs"
+          description="Every figure here feeds both the recommended selling price and the profitability calculation identically. Required fields must have a real value — 0 is a legitimate, explicit answer, but leaving one blank is not: Commerce OS will not treat the resulting recommendation as trustworthy until every required figure below is set."
+        />
+        <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+          <div>
+            <Field
+              label="Packaging cost per unit (£)"
+              name="packaging_cost_major"
+              type="number"
+              step="0.01"
+              min="0"
+              defaultValue={settings.packaging_cost_minor !== null && settings.packaging_cost_minor !== undefined ? settings.packaging_cost_minor / 100 : null}
+              hint="Optional — the normal dropshipping case is that the supplier packages the item directly, so this may genuinely not apply. Leave blank if so; that is never read as £0."
+              error={errors.packaging_cost_minor}
+            />
+            <p className="mt-1 text-xs font-medium">
+              {settings.packaging_cost_minor === null || settings.packaging_cost_minor === undefined ? (
+                <span className="text-ink-subtle">Currently: not configured (excluded from calculations, not treated as £0)</span>
+              ) : (
+                <span className="text-positive">Currently configured: £{(settings.packaging_cost_minor / 100).toFixed(2)}</span>
+              )}
+            </p>
+          </div>
+          <Field label="Expected return rate (% of orders) *" name="return_rate_pct" type="number" step="0.1" min="0" max="100" defaultValue={settings.return_rate_pct} hint="Required. 0 is valid if you genuinely expect no returns." error={errors.return_rate_pct} />
+          <Field label="Return loss (% of a returned unit's cost that is unrecoverable) *" name="return_loss_pct" type="number" step="0.1" min="0" max="100" defaultValue={settings.return_loss_pct} hint="Required. 100 means a returned unit is a total write-off." error={errors.return_loss_pct} />
+          <Field label="Expected refund rate (% of revenue, beyond returns) *" name="refund_rate_pct" type="number" step="0.1" min="0" max="100" defaultValue={settings.refund_rate_pct} hint="Required. Goodwill/partial refunds not tied to a physical return." error={errors.refund_rate_pct} />
+          <Field label="Expected chargeback rate (% of orders) *" name="chargeback_rate_pct" type="number" step="0.01" min="0" max="100" defaultValue={settings.chargeback_rate_pct} hint="Required. 0 is valid if you genuinely expect none." error={errors.chargeback_rate_pct} />
+          <Field label="Chargeback fixed fee (£, per dispute) *" name="chargeback_fee_major" type="number" step="0.01" min="0" defaultValue={settings.chargeback_fee_minor !== null && settings.chargeback_fee_minor !== undefined ? settings.chargeback_fee_minor / 100 : null} hint="Required. Your payment processor's own published dispute fee." error={errors.chargeback_fee_minor} />
+          <Field label="Import duty (% of landed supplier cost) *" name="import_duty_pct" type="number" step="0.1" min="0" max="100" defaultValue={settings.import_duty_pct} hint="Required. A conservative assumption you choose — not a real customs calculator. 0 is valid if duty genuinely doesn't apply." error={errors.import_duty_pct} />
+        </div>
+        <p className="px-5 pb-4 text-xs text-ink-subtle">* Required for Product Intelligence to move a product past &quot;Unconfigured&quot;.</p>
       </Card>
 
       <Card>

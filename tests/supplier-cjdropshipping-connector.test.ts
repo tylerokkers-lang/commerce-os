@@ -207,6 +207,65 @@ describe('product discovery (fetchStatus, no knownRefs)', () => {
     }
   })
 
+  it('parses the REAL live /product/listV2 response shape — found live, not documented: data.content is a one-element array wrapping { productList }, not the product array itself', async () => {
+    const { restore } = mockFetchSequence([
+      jsonResponse(TOKEN_RESPONSE),
+      jsonResponse({
+        code: 200,
+        result: true,
+        message: 'Success',
+        data: {
+          pageSize: 20,
+          pageNumber: 1,
+          totalRecords: 6000,
+          totalPages: 300,
+          content: [
+            {
+              productList: [
+                { id: 'pid-live-1', nameEn: 'Wireless Mouse', sku: 'CJWM-1', sellPrice: '9.99', warehouseInventoryNum: 42, oneCategoryName: 'Electronics', twoCategoryName: 'Computer Peripherals', threeCategoryName: 'Mice' },
+                { id: 'pid-live-2', nameEn: 'USB Cable', sku: 'CJUC-2', sellPrice: '3.50', warehouseInventoryNum: 0 },
+              ],
+              relatedCategoryList: [],
+              keyWord: '',
+              keyWordOld: '',
+            },
+          ],
+        },
+      }),
+    ])
+    try {
+      const result = await cjdropshippingConnector.fetchStatus({ limit: 10 })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.warnings).toHaveLength(0) // a recognised shape must never warn
+      expect(result.value.statuses).toHaveLength(2)
+      expect(result.value.statuses[0].productRef).toBe('pid-live-1')
+      expect(result.value.statuses[0].unitCost.minor).toBe(999)
+      expect(result.value.statuses[0].inStock).toBe(true)
+      expect(result.value.statuses[0].category).toBe('Electronics > Computer Peripherals > Mice')
+      expect(result.value.statuses[1].inStock).toBe(false)
+      expect(result.value.statuses[1].category).toBeUndefined() // no hierarchy fields on this item -> genuinely unknown, never fabricated
+    } finally {
+      restore()
+    }
+  })
+
+  it('still falls back to the old flat { list: [...] } shape, kept for compatibility, never removed', async () => {
+    const { restore } = mockFetchSequence([
+      jsonResponse(TOKEN_RESPONSE),
+      jsonResponse({ code: 200, result: true, message: 'Success', data: { list: [{ pid: 'pid-legacy', productNameEn: 'Legacy Shape Product', sellPrice: '5.00' }] } }),
+    ])
+    try {
+      const result = await cjdropshippingConnector.fetchStatus({ limit: 10 })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.statuses).toHaveLength(1)
+      expect(result.value.statuses[0].productRef).toBe('pid-legacy')
+    } finally {
+      restore()
+    }
+  })
+
   it('treats a response with no recognisable list shape as an empty result with a warning, never a crash', async () => {
     const { restore } = mockFetchSequence([
       jsonResponse(TOKEN_RESPONSE),
@@ -283,6 +342,47 @@ describe('rich product detail (readProductDetail)', () => {
     }
   })
 
+  // Milestone: product-catalogue correction (supplier URL). CJ's real
+  // `/product/query` response has never once included a `productUrl`
+  // field (confirmed live against an already-imported product, and
+  // against CJ's own published documentation) — this fixture's
+  // `productUrl` is a hypothetical value kept only to prove the parsing
+  // path works correctly if a future API version ever adds one.
+  it('parses a real productUrl when the response happens to include one, never dropping a value that is genuinely present', async () => {
+    const { restore } = mockFetchSequence([jsonResponse(TOKEN_RESPONSE), jsonResponse(PRODUCT_DETAIL_RESPONSE)])
+    try {
+      const result = await cjdropshippingConnector.readProductDetail('pid-1')
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.productUrl).toBe('https://cjdropshipping.com/product/pid-1.html')
+    } finally {
+      restore()
+    }
+  })
+
+  it('a response with no productUrl field at all (the real, confirmed CJ shape) parses to null — never fabricated', async () => {
+    const withoutUrl = { ...PRODUCT_DETAIL_RESPONSE, data: { ...PRODUCT_DETAIL_RESPONSE.data, productUrl: undefined } }
+    const { restore } = mockFetchSequence([jsonResponse(TOKEN_RESPONSE), jsonResponse(withoutUrl)])
+    try {
+      const result = await cjdropshippingConnector.readProductDetail('pid-1')
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.productUrl).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
+  it('a malformed/non-URL productUrl value is rejected to null, never passed through as a broken link', async () => {
+    const malformed = { ...PRODUCT_DETAIL_RESPONSE, data: { ...PRODUCT_DETAIL_RESPONSE.data, productUrl: 'not-a-url' } }
+    const { restore } = mockFetchSequence([jsonResponse(TOKEN_RESPONSE), jsonResponse(malformed)])
+    try {
+      const result = await cjdropshippingConnector.readProductDetail('pid-1')
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.productUrl).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
   it('fetches a destination-aware shipping quote only when a destination country is requested', async () => {
     const { restore, callCount } = mockFetchSequence([
       jsonResponse(TOKEN_RESPONSE),
@@ -351,6 +451,93 @@ describe('rich product detail (readProductDetail)', () => {
     expect(typeof parsed).toBe('function')
     expect(detail.vid).toBeTruthy()
   })
+
+  // Milestone: CJ import data-persistence fix. Real field names and units
+  // (grams / millimetres) confirmed live against CJ's own published
+  // documentation and a real, already-imported product's actual
+  // `/product/query` response — not assumed.
+  const PRODUCT_DETAIL_WITH_SPECS = {
+    code: 200,
+    result: true,
+    message: 'Success',
+    data: {
+      pid: 'pid-2',
+      productSku: 'CJWM-2',
+      nameEn: 'Padded Coat',
+      description: 'A padded winter coat.',
+      variants: [
+        { vid: 'vid-10', variantSku: 'CJWM-2-M', variantSellPrice: '19.99', variantWeight: 420, variantLength: 300, variantWidth: 200, variantHeight: 50, inventoryNum: 37 },
+        { vid: 'vid-11', variantSku: 'CJWM-2-L', variantSellPrice: '19.99' }, // no specs/stock reported for this variant at all
+      ],
+    },
+  }
+
+  it('parses real per-variant weight (grams) and dimensions (mm) when CJ reports them', async () => {
+    const { restore } = mockFetchSequence([jsonResponse(TOKEN_RESPONSE), jsonResponse(PRODUCT_DETAIL_WITH_SPECS)])
+    try {
+      const result = await cjdropshippingConnector.readProductDetail('pid-2')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const variant = result.value.variants[0]
+      expect(variant.weightGrams).toBe(420)
+      expect(variant.lengthMm).toBe(300)
+      expect(variant.widthMm).toBe(200)
+      expect(variant.heightMm).toBe(50)
+    } finally {
+      restore()
+    }
+  })
+
+  it('parses a real per-variant stock figure when CJ reports one, and derives inStock from it', async () => {
+    const { restore } = mockFetchSequence([jsonResponse(TOKEN_RESPONSE), jsonResponse(PRODUCT_DETAIL_WITH_SPECS)])
+    try {
+      const result = await cjdropshippingConnector.readProductDetail('pid-2')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const variant = result.value.variants[0]
+      expect(variant.stockQty).toBe(37)
+      expect(variant.inStock).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  it('a variant with no specs or stock reported stays genuinely unknown — never zero, never fabricated', async () => {
+    const { restore } = mockFetchSequence([jsonResponse(TOKEN_RESPONSE), jsonResponse(PRODUCT_DETAIL_WITH_SPECS)])
+    try {
+      const result = await cjdropshippingConnector.readProductDetail('pid-2')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const variant = result.value.variants[1]
+      expect(variant.weightGrams).toBeNull()
+      expect(variant.lengthMm).toBeNull()
+      expect(variant.widthMm).toBeNull()
+      expect(variant.heightMm).toBeNull()
+      expect(variant.stockQty).toBeNull()
+      expect(variant.inStock).toBe('unknown')
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('categoryFromListItem — live three-level hierarchy joining', () => {
+  it('joins all three levels with " > ", matching the detail endpoint\'s own real format', () => {
+    expect(cj.categoryFromListItem({ oneCategoryName: 'Men\'s Clothing', twoCategoryName: 'Outerwear & Jackets', threeCategoryName: "Men's Sweaters" })).toBe("Men's Clothing > Outerwear & Jackets > Men's Sweaters")
+  })
+
+  it('joins only the levels actually present, never inventing a missing one', () => {
+    expect(cj.categoryFromListItem({ oneCategoryName: 'Electronics' })).toBe('Electronics')
+    expect(cj.categoryFromListItem({ oneCategoryName: 'Electronics', threeCategoryName: 'Mice' })).toBe('Electronics > Mice')
+  })
+
+  it('returns undefined, never an empty string, when no category field is present at all', () => {
+    expect(cj.categoryFromListItem({})).toBeUndefined()
+  })
+
+  it('prefers a flat categoryName if a future response ever provides one directly', () => {
+    expect(cj.categoryFromListItem({ categoryName: 'Flat Category', oneCategoryName: 'Should not be used' })).toBe('Flat Category')
+  })
 })
 
 describe('defensive field parsing', () => {
@@ -388,5 +575,66 @@ describe('financial safety (Phase 8 §36)', () => {
     for (const name of methodNames) {
       expect(name.toLowerCase()).not.toMatch(/placeorder|purchase|pay|charge/)
     }
+  })
+})
+
+/**
+ * Milestone: supplier product verification link. `getProductSourceLink`
+ * never makes a network call (pure URL construction from data the caller
+ * already has) — no CJ_API_KEY/token mocking needed here, unlike every
+ * other method in this file. The search route itself
+ * (`https://m.cjdropshipping.com/search?keyWord=`) was found and confirmed
+ * live: a real browser session navigated to it and CJ's own real search
+ * box came back pre-filled from the URL parameter — not guessed. The
+ * connector deliberately never returns `type: 'product'` — see
+ * `CJ_SEARCH_BASE_URL`'s own module comment for why a constructed direct
+ * product-page URL could not be safely verified (CJ's own anti-automation
+ * "Human verification" wall, which this codebase must not attempt to
+ * defeat).
+ */
+describe('getProductSourceLink', () => {
+  it('a valid supplier SKU produces a real CJ search URL, on the official CJ domain, honestly typed as "search" — never "product"', async () => {
+    const result = await cjdropshippingConnector.getProductSourceLink({ productRef: 'pid-1', supplierSku: 'CJYD2334853' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.type).toBe('search')
+    expect(result.value.url).toBe('https://m.cjdropshipping.com/search?keyWord=CJYD2334853')
+    expect(new URL(result.value.url).hostname.endsWith('cjdropshipping.com')).toBe(true)
+  })
+
+  it('prefers the human-recognisable supplier SKU over the bare numeric pid when both are available', async () => {
+    const result = await cjdropshippingConnector.getProductSourceLink({ productRef: '2503221215301600700', supplierSku: 'CJYD2334853' })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.url).toContain('CJYD2334853')
+  })
+
+  it('falls back to the bare product reference when no supplier SKU is on file — never fabricates one', async () => {
+    const result = await cjdropshippingConnector.getProductSourceLink({ productRef: '2503221215301600700', supplierSku: null })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.url).toBe('https://m.cjdropshipping.com/search?keyWord=2503221215301600700')
+  })
+
+  it('an empty product reference and no SKU produces an honest error, never a fabricated URL', async () => {
+    const result = await cjdropshippingConnector.getProductSourceLink({ productRef: '', supplierSku: null })
+    expect(result.ok).toBe(false)
+  })
+
+  it('special characters in the SKU are safely URL-encoded, never producing a malformed link', async () => {
+    const result = await cjdropshippingConnector.getProductSourceLink({ productRef: 'pid-1', supplierSku: 'CJ SKU/with spaces&stuff' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Must parse as a well-formed URL — proves encoding actually happened.
+    expect(() => new URL(result.value.url)).not.toThrow()
+    expect(result.value.url).not.toContain(' ')
+  })
+
+  it('the descriptor honestly declares resolvesProductSourceLink: true — this connector genuinely implements the method, not a stub', () => {
+    expect(cjdropshippingConnector.descriptor.capabilities.resolvesProductSourceLink).toBe(true)
+  })
+
+  it('never returns type "product" — no constructed direct product-page URL has been safely verified for this connector', async () => {
+    const result = await cjdropshippingConnector.getProductSourceLink({ productRef: 'pid-1', supplierSku: 'CJYD2334853' })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).not.toBe('product')
   })
 })

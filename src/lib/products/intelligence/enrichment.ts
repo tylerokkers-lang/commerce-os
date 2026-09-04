@@ -16,6 +16,8 @@
  * the meantime.
  */
 
+import type { CurrencyCode } from '@/lib/core/money'
+
 export type SourcedValue<T> = { value: T; source: 'known' } | { value: null; source: 'unknown' }
 
 export function known<T>(value: T | null | undefined): SourcedValue<T> {
@@ -78,6 +80,8 @@ export interface StorefrontFacts {
 export interface SupplierOfferFacts {
   unitCostMinor: number
   shippingCostMinor: number
+  /** The supplier's own currency (e.g. CJdropshipping quotes in USD) — never assumed to match the channel's currency. Found live, not by inspection: this was previously dropped here and every caller silently treated the raw minor units as if they were already in the channel currency. */
+  currency: CurrencyCode
   leadTimeDays: number | null
   stockQty: number | null
   inStock: boolean

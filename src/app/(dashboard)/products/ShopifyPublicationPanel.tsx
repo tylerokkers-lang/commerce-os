@@ -7,8 +7,8 @@ import {
   publishShopifyListingAction,
   pauseShopifyListingAction,
   overrideShopifyPriceAction,
-  initialPublicationState,
 } from './publicationActions'
+import { initialPublicationState } from './state'
 import type { ShopifyPublicationPreview } from '@/lib/marketplaces/shopify/publicationService'
 
 function formatMoneyMinor(minor: number | null, currency: string): string {

@@ -26,16 +26,27 @@ const MAX_ITERATIONS = 40
 const CEILING_MULTIPLIER = 50 // Search up to 50x the unit cost before giving up.
 
 function findMinimumPriceForMargin(
-  costs: Omit<CostInputs, 'sellingPrice'>,
+  costs: Omit<CostInputs, 'sellingPrice' | 'adSpendPerUnit'>,
   currency: CurrencyCode,
   targetNetMarginPct: number,
   floorMinor: number,
   ceilingMinor: number,
+  advertisingAllowancePct: number,
 ): PriceSearchResult {
   if (ceilingMinor <= floorMinor) return { priceMinor: null, unreachable: true }
 
+  // Advertising is a percentage of the selling price (the same convention
+  // `assemble.ts`'s profitability call already uses), so it cannot be fixed
+  // in advance of the very price this search is solving for — found live
+  // testing the real CJdropshipping pipeline: a fixed, zero ad-spend
+  // assumption here previously let this search converge on a price that
+  // then failed to hit its own target margin the moment the *separate*
+  // profitability calculation (correctly) applied advertising to it.
+  // Recomputing it fresh at every candidate price keeps the two
+  // calculations self-consistent by construction.
   const meetsTarget = (priceMinor: number): boolean => {
-    const result = calculateProfitability({ ...costs, sellingPrice: money(priceMinor, currency) })
+    const adSpendPerUnit = money(Math.round((priceMinor * advertisingAllowancePct) / 100), currency)
+    const result = calculateProfitability({ ...costs, sellingPrice: money(priceMinor, currency), adSpendPerUnit })
     return result.netProfit.minor > 0 && (result.netMarginPct ?? -Infinity) >= targetNetMarginPct
   }
 
@@ -62,23 +73,28 @@ export interface PricingRecommendation {
 }
 
 /**
- * `costs` must not include `sellingPrice` — that's exactly what this
- * function searches for. `unitCostMinor` anchors the search range: prices
- * below cost are never worth searching, and 50x cost is a generous
- * ceiling no real dropshipping product should need.
+ * `costs` must not include `sellingPrice` or `adSpendPerUnit` — the price
+ * is exactly what this function searches for, and advertising is derived
+ * fresh from each candidate price via `advertisingAllowancePct` (the same
+ * org-configured percentage `assemble.ts`'s profitability calculation
+ * applies), never a fixed figure the caller supplies. `unitCostMinor`
+ * anchors the search range: prices below cost are never worth searching,
+ * and 50x cost is a generous ceiling no real dropshipping product should
+ * need.
  */
 export function recommendPricing(
-  costs: Omit<CostInputs, 'sellingPrice'>,
+  costs: Omit<CostInputs, 'sellingPrice' | 'adSpendPerUnit'>,
   currency: CurrencyCode,
   unitCostMinor: number,
   minNetMarginPct: number,
   targetNetMarginPct: number,
+  advertisingAllowancePct: number,
 ): PricingRecommendation {
   const floor = Math.max(1, unitCostMinor)
   const ceiling = Math.max(floor * CEILING_MULTIPLIER, floor + 10000)
 
-  const minimum = findMinimumPriceForMargin(costs, currency, minNetMarginPct, floor, ceiling)
-  const recommended = findMinimumPriceForMargin(costs, currency, targetNetMarginPct, floor, ceiling)
+  const minimum = findMinimumPriceForMargin(costs, currency, minNetMarginPct, floor, ceiling, advertisingAllowancePct)
+  const recommended = findMinimumPriceForMargin(costs, currency, targetNetMarginPct, floor, ceiling, advertisingAllowancePct)
 
   const basis = minimum.unreachable
     ? `No price up to ${(ceiling / 100).toFixed(2)} clears the configured minimum net margin of ${minNetMarginPct}% — this product cannot currently be priced into profitability.`

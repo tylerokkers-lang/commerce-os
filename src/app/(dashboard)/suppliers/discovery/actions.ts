@@ -30,12 +30,29 @@ export async function captureCandidateAction(_previous: CaptureFormState, formDa
     category: (formData.get('category') as string) || null,
     supplierId: (formData.get('supplierId') as string) || null,
     supplierSku: (formData.get('supplierSku') as string) || null,
+    // This form's "Product URL / reference" field is already a real,
+    // `type="url"`-validated supplier product link when one is entered —
+    // reused directly as the canonical supplier URL, never a second,
+    // duplicate input for the same fact.
     sourceReference: (formData.get('sourceReference') as string) || null,
+    sourceUrl: (formData.get('sourceReference') as string) || null,
+    // A human explicitly pasted this — trusted as the real product page,
+    // never merely a search route, matching how this field has always
+    // behaved (this milestone only adds the explicit label).
+    sourceUrlType: (formData.get('sourceReference') as string) ? 'product' : null,
     imageUrl: (formData.get('imageUrl') as string) || null,
     imageUrls: [],
     variants: [],
     connectorKey: null,
     connectorProductRef: null,
+    // The manual entry form has no dimension/weight/stock inputs — left
+    // genuinely unknown rather than guessed, same as every other unset
+    // field on this form.
+    weightGrams: null,
+    lengthMm: null,
+    widthMm: null,
+    heightMm: null,
+    stockQty: null,
     source: 'manual',
     unitCostMinor: (() => {
       const major = numberOrNull('unitCostMajor')
@@ -149,6 +166,24 @@ export async function captureFromCjAction(_previous: CaptureFormState, formData:
   if (!detail.ok) return { status: 'error', message: detail.error, fieldErrors: {} }
 
   const primaryVariant = detail.value.variants[0]
+
+  // Milestone: supplier product verification link. CJ's real
+  // `/product/query` response has no product-page URL field (confirmed
+  // live against this exact product and against CJ's own published
+  // documentation) — `productUrl` is therefore always `null` today, never
+  // a guessed/constructed link. When that's the case, fall back to the
+  // connector's own official search route (a genuinely different, weaker
+  // claim — never presented as the exact product page).
+  let sourceUrl = detail.value.productUrl
+  let sourceUrlType: 'product' | 'search' | null = sourceUrl ? 'product' : null
+  if (!sourceUrl && connector.descriptor.capabilities.resolvesProductSourceLink) {
+    const link = await connector.getProductSourceLink({ productRef, supplierSku: detail.value.supplierSku })
+    if (link.ok) {
+      sourceUrl = link.value.url
+      sourceUrlType = link.value.type
+    }
+  }
+
   const result = await captureCandidate({
     orgId: session.orgId,
     candidateTitle: detail.value.title,
@@ -156,9 +191,11 @@ export async function captureFromCjAction(_previous: CaptureFormState, formData:
     supplierId,
     supplierSku: detail.value.supplierSku,
     sourceReference: detail.value.productUrl,
+    sourceUrl,
+    sourceUrlType,
     imageUrl: detail.value.primaryImageUrl,
     imageUrls: detail.value.additionalImageUrls,
-    variants: detail.value.variants.map((v) => ({ sku: v.sku, attributes: v.attributes, unitCostMinor: v.unitCost.minor, imageUrls: v.imageUrls })),
+    variants: detail.value.variants.map((v) => ({ sku: v.sku, attributes: v.attributes, unitCostMinor: v.unitCost.minor, imageUrls: v.imageUrls, weightGrams: v.weightGrams })),
     connectorKey: 'cjdropshipping',
     connectorProductRef: productRef,
     source: 'supplier_catalogue',
@@ -168,6 +205,17 @@ export async function captureFromCjAction(_previous: CaptureFormState, formData:
     deliveryDaysMin: detail.value.shippingQuotes[0]?.totalDeliveryDaysMin ?? null,
     deliveryDaysMax: detail.value.shippingQuotes[0]?.totalDeliveryDaysMax ?? null,
     notes: detail.value.description,
+    // Real physical specifications and stock, when CJ reported them —
+    // CJ's dimensions/weight are per-variant, so these are the primary
+    // (first) variant's own real figures, the same "first variant/first
+    // image represents the product" convention this file already applies
+    // to `unitCostMinor` and `imageUrl` above. `null` when the supplier
+    // genuinely didn't report a figure, never guessed.
+    weightGrams: primaryVariant?.weightGrams ?? null,
+    lengthMm: primaryVariant?.lengthMm ?? null,
+    widthMm: primaryVariant?.widthMm ?? null,
+    heightMm: primaryVariant?.heightMm ?? null,
+    stockQty: primaryVariant?.stockQty ?? null,
     identifiers: [],
     actorUserId: session.userId,
     actorLabel: session.email,

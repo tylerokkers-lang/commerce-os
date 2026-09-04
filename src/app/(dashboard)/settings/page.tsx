@@ -17,6 +17,7 @@ const DEMO_DEFAULTS: Partial<Tables<'business_settings'>> = {
   company_number: '00000000',
   vat_registered: true,
   vat_number: 'GB000000000',
+  vat_rate_pct: 20,
   automation_level: 'assisted',
   min_gross_margin_pct: 25,
   min_net_margin_pct: 10,
@@ -34,6 +35,10 @@ export default async function SettingsPage() {
   const session = await requireSession()
 
   let settings: Partial<Tables<'business_settings'>> = DEMO_DEFAULTS
+  // Demo mode is explicitly its own illustrative scenario (Part B) — the
+  // "configured" banner below only ever describes a real organisation's
+  // own saved row, never demo mode's own placeholder defaults.
+  let configured = false
   if (!session.isDemo) {
     const supabase = await createServerSupabase()
     const { data } = await supabase
@@ -42,6 +47,7 @@ export default async function SettingsPage() {
       .eq('org_id', session.orgId)
       .maybeSingle()
     settings = data ?? {}
+    configured = data !== null
   }
 
   return (
@@ -62,7 +68,7 @@ export default async function SettingsPage() {
         </Card>
       ) : null}
 
-      <SettingsForm settings={settings} canEdit={canWrite(session) && !session.isDemo} />
+      <SettingsForm settings={settings} canEdit={canWrite(session) && !session.isDemo} configured={configured} />
     </>
   )
 }

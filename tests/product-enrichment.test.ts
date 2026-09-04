@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseWeightToGrams, normalizeProduct, known } from '@/lib/products/intelligence/enrichment'
+import { scoreProductQuality, type QualitySignals } from '@/lib/products/intelligence/qualityScore'
 
 describe('parseWeightToGrams — the brief\'s own "0.5 kg / 500g / 500 g" example', () => {
   it('parses "0.5kg" to 500 grams', () => {
@@ -66,8 +67,77 @@ describe('normalizeProduct', () => {
   })
 
   it('supplier facts are known when a real offer is passed', () => {
-    const result = normalizeProduct(product, null, { unitCostMinor: 400, shippingCostMinor: 200, leadTimeDays: 7, stockQty: 50, inStock: true })
+    const result = normalizeProduct(product, null, { unitCostMinor: 400, shippingCostMinor: 200, currency: 'GBP', leadTimeDays: 7, stockQty: 50, inStock: true })
     expect(result.supplierCostMinor).toEqual({ value: 400, source: 'known' })
     expect(result.supplierInStock).toEqual({ value: true, source: 'known' })
+  })
+})
+
+/**
+ * Milestone: CJ import data-persistence fix. `assemble.ts` (server-only,
+ * untestable directly) builds `QualitySignals` from exactly these two
+ * sources — `normalizeProduct`'s output plus the raw `product`/
+ * `supplierOffer` rows. This proves the real, previously-broken chain end
+ * to end: a persisted description/dimensions/weight/lead-time genuinely
+ * reaches the existing quality scorer as a non-null signal, and their
+ * absence stays an excluded "unknown" component, never a false positive.
+ */
+describe('normalizeProduct -> scoreProductQuality: the real persisted-facts chain', () => {
+  const productRowWithRealFacts = { title: 'A Product', description: 'A real, 1796-character supplier description.', category: 'Home', weight_grams: 420, length_mm: 300, width_mm: 200, height_mm: 50 }
+
+  function qualitySignalsFrom(
+    product: { description: string | null; weight_grams: number | null; length_mm: number | null; width_mm: number | null; height_mm: number | null },
+    supplierOffer: { unitCostMinor: number; shippingCostMinor: number; currency: 'GBP'; leadTimeDays: number | null; stockQty: number | null; inStock: boolean } | null,
+  ): QualitySignals {
+    const normalized = normalizeProduct(product as never, null, supplierOffer)
+    // Mirrors assemble.ts's own qualitySignals construction exactly.
+    return {
+      imageCount: normalized.imageCount.value ?? undefined,
+      descriptionLength: normalized.description.value?.length,
+      hasMeaningfulVariants: normalized.hasMeaningfulVariants.value ?? undefined,
+      variantCount: normalized.variantCount.value ?? undefined,
+      hasDimensions: product.length_mm !== null && product.width_mm !== null && product.height_mm !== null,
+      hasWeight: product.weight_grams !== null,
+      supplierAssigned: supplierOffer !== null,
+      supplierHasCost: supplierOffer ? true : false,
+      supplierHasLeadTime: supplierOffer ? supplierOffer.leadTimeDays !== null : undefined,
+      supplierHasStockFigure: supplierOffer ? supplierOffer.stockQty !== null : undefined,
+    }
+  }
+
+  it('a persisted description reaches the description component as a real, non-null score — not excluded as missing', () => {
+    const signals = qualitySignalsFrom(productRowWithRealFacts, null)
+    const quality = scoreProductQuality(signals)
+    const description = quality.components.find((c) => c.key === 'description')
+    expect(description?.score).not.toBeNull()
+    expect(description?.score).toBeGreaterThan(0)
+  })
+
+  it('persisted weight/dimensions reach the specifications component as fully known, not excluded', () => {
+    const signals = qualitySignalsFrom(productRowWithRealFacts, null)
+    const quality = scoreProductQuality(signals)
+    const specs = quality.components.find((c) => c.key === 'specifications')
+    expect(specs?.score).toBe(100)
+  })
+
+  it('a persisted supplier lead time reaches the shipping-data component as satisfied, not excluded', () => {
+    const signals = qualitySignalsFrom(productRowWithRealFacts, { unitCostMinor: 3814, shippingCostMinor: 594, currency: 'GBP', leadTimeDays: 7, stockQty: null, inStock: true })
+    const quality = scoreProductQuality(signals)
+    const shipping = quality.components.find((c) => c.key === 'shippingData')
+    expect(shipping?.score).toBe(100)
+  })
+
+  it('a genuinely absent description is excluded (unknown, never a false positive); genuinely-checked-and-absent specs/lead-time correctly score zero, since the product/supplier row is real and definitively says "no data on file" rather than "never checked"', () => {
+    const signals = qualitySignalsFrom(
+      { description: null, weight_grams: null, length_mm: null, width_mm: null, height_mm: null },
+      { unitCostMinor: 3814, shippingCostMinor: 594, currency: 'GBP', leadTimeDays: null, stockQty: null, inStock: true },
+    )
+    const quality = scoreProductQuality(signals)
+    // No products row description at all -> descriptionLength is undefined -> excluded.
+    expect(quality.components.find((c) => c.key === 'description')?.score).toBeNull()
+    // A real products row with every dimension/weight column null -> a definite "no", not "never checked" -> 0, not excluded.
+    expect(quality.components.find((c) => c.key === 'specifications')?.score).toBe(0)
+    // A real, assigned supplier offer with a null lead_time_days -> a definite "no", not "never checked" -> 0, not excluded.
+    expect(quality.components.find((c) => c.key === 'shippingData')?.score).toBe(0)
   })
 })

@@ -6,6 +6,7 @@ import { runCampaignReviewForConnectedOrgs, type MultiOrgCampaignReviewResult } 
 import { runOrderIngestionForConnectedOrgs, type OrderIngestionRunResult } from '@/lib/orders/ingestionRun'
 import { runPurchaseWorkflowForConnectedOrgs, type PurchaseWorkflowResult } from '@/lib/orders/purchaseWorkflow'
 import { runMonitoringForAllOrgs, type OrgMonitoringResult } from '@/lib/monitoring/scheduledRun'
+import { refreshFxRatesForAllOrgs, type OrgFxRefreshResult } from '@/lib/fx/refreshAllOrgs'
 import { runScheduledJobBatch } from './scheduledJobBatch'
 import { classifyMaintenanceOutcome, MAINTENANCE_JOB_KEY, MAINTENANCE_LOCK_STALE_AFTER_MS, type SchedulerProvenance } from './maintenanceHealth'
 import type { AutomationStore, MaintenanceRunRecord } from './store'
@@ -138,6 +139,11 @@ export type MaintenanceOutcome =
       // advertising campaign review — this is the unrelated product/
       // supplier/compliance/FX/market monitor sweep (`runMonitoringForAllOrgs`).
       subjectMonitoring: { organisations: readonly OrgMonitoringResult[]; errors: readonly string[] }
+      // Real FX rate ingestion (Milestone: FX rate ingestion layer) —
+      // deliberately runs before subjectMonitoring below, in this same
+      // cycle, so the existing fx_rates monitor observes a just-refreshed
+      // rate's real freshness rather than yesterday's.
+      fxRefresh: { organisations: readonly OrgFxRefreshResult[]; errors: readonly string[] }
       jobQueue: WorkerBatchResult
     }
 
@@ -204,6 +210,21 @@ export async function runMaintenance(store: AutomationStore, triggeredBy: 'sched
     purchaseWorkflow = { ordersChecked: 0, fulfilmentsCreated: 0, ordersWithNoSupplierAvailable: 0, errors: [error instanceof Error ? error.message : String(error)] }
   }
 
+  // Real FX rate ingestion — runs before subjectMonitoring (below) so the
+  // existing fx_rates monitor observes this cycle's own freshly-fetched
+  // rate, not the state from before this run. A provider failure for one
+  // pair, or for every pair, never throws out of this step and never
+  // touches a previously-stored rate — see `fx/ingest.ts`'s own comment.
+  let fxRefresh: { organisations: readonly OrgFxRefreshResult[]; errors: readonly string[] }
+  let fxRefreshThrew = false
+  try {
+    const organisations = await refreshFxRatesForAllOrgs()
+    fxRefresh = { organisations, errors: [] }
+  } catch (error) {
+    fxRefreshThrew = true
+    fxRefresh = { organisations: [], errors: [error instanceof Error ? error.message : String(error)] }
+  }
+
   let subjectMonitoring: { organisations: readonly OrgMonitoringResult[]; errors: readonly string[] }
   let subjectMonitoringThrew = false
   try {
@@ -227,29 +248,33 @@ export async function runMaintenance(store: AutomationStore, triggeredBy: 'sched
     jobQueue = { claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 }
   }
 
+  const fxRefreshFailedCount = fxRefresh.organisations.reduce((n, org) => n + org.outcomes.filter((o) => o.status === 'failed').length, 0)
+  const fxRefreshFailureMessages = fxRefresh.organisations.flatMap((org) => org.outcomes.filter((o) => o.status === 'failed').map((o) => `fx ${o.base}->${o.quote}: ${o.reason}`))
+
   const status = classifyMaintenanceOutcome([
     { threw: recoveryThrew, errorCount: recovery.errors.length },
     { threw: advertisingSyncThrew, errorCount: advertisingSync.errors.length },
     { threw: monitoringThrew, errorCount: monitoring.totals.errors.length },
     { threw: orderIngestionThrew, errorCount: orderIngestion.errors.length },
     { threw: purchaseWorkflowThrew, errorCount: purchaseWorkflow.errors.length },
+    { threw: fxRefreshThrew, errorCount: fxRefreshFailedCount },
     { threw: subjectMonitoringThrew, errorCount: subjectMonitoring.errors.length },
     { threw: jobQueueThrew, errorCount: jobQueue.failed + jobQueue.deadLettered },
   ])
 
   const allErrors = [
     ...recovery.errors, ...advertisingSync.errors, ...monitoring.totals.errors, ...orderIngestion.errors,
-    ...purchaseWorkflow.errors, ...subjectMonitoring.errors,
+    ...purchaseWorkflow.errors, ...fxRefresh.errors, ...fxRefreshFailureMessages, ...subjectMonitoring.errors,
     ...(jobQueueError ? [jobQueueError] : []),
   ]
 
   await store.completeMaintenanceRun(lock.runId, {
     status,
     itemsProcessed: recovery.candidatesFound + advertisingSync.accountsChecked + monitoring.totals.campaignsEvaluated + orderIngestion.ordersFetched + purchaseWorkflow.ordersChecked + jobQueue.claimed,
-    itemsFailed: recovery.failed + recovery.unknown + advertisingSync.reportsFailed + monitoring.totals.errors.length + orderIngestion.rejected + purchaseWorkflow.errors.length + jobQueue.failed + jobQueue.deadLettered,
+    itemsFailed: recovery.failed + recovery.unknown + advertisingSync.reportsFailed + monitoring.totals.errors.length + orderIngestion.rejected + purchaseWorkflow.errors.length + fxRefreshFailedCount + jobQueue.failed + jobQueue.deadLettered,
     decisionsCreated: monitoring.totals.recommendationsCreated,
     error: allErrors.length > 0 ? allErrors.join('; ') : null,
-    summary: { triggeredBy, schedulerProvenance, recovery, advertisingSync, monitoring, orderIngestion, purchaseWorkflow, subjectMonitoring, jobQueue },
+    summary: { triggeredBy, schedulerProvenance, recovery, advertisingSync, monitoring, orderIngestion, purchaseWorkflow, fxRefresh, subjectMonitoring, jobQueue },
   })
 
   const finishedAt = new Date().toISOString()
@@ -264,6 +289,7 @@ export async function runMaintenance(store: AutomationStore, triggeredBy: 'sched
     monitoring,
     orderIngestion,
     purchaseWorkflow,
+    fxRefresh,
     subjectMonitoring,
     jobQueue,
   }

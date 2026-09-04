@@ -60,6 +60,16 @@ describe('manual supplier connector', () => {
     expect(changed).toHaveLength(1)
     expect(changed[0].supplierRef).toBe('sup-2')
   })
+
+  // Milestone: supplier product verification link.
+  it('declares resolvesProductSourceLink: false — nothing to derive; a human already pastes a URL directly into the capture form', () => {
+    expect(manualSupplierConnector.descriptor.capabilities.resolvesProductSourceLink).toBe(false)
+  })
+
+  it('getProductSourceLink is an honest, explicit error, never a fabricated link', async () => {
+    const result = await manualSupplierConnector.getProductSourceLink({ productRef: 'x', supplierSku: 'x' })
+    expect(result.ok).toBe(false)
+  })
 })
 
 describe('connector registry', () => {
@@ -96,6 +106,18 @@ describe('connector registry', () => {
     const connector = getConnector('dsers_compatible')!
     const result = await connector.fetchStatus({ limit: 10 })
     expect(result.ok).toBe(false)
+  })
+
+  it('refuses to derive a source link from an unavailable (planned, not-yet-built) connector', async () => {
+    const connector = getConnector('dsers_compatible')!
+    const result = await connector.getProductSourceLink({ productRef: 'x', supplierSku: null })
+    expect(result.ok).toBe(false)
+  })
+
+  it('every planned connector honestly declares resolvesProductSourceLink: false — none has a written implementation yet', () => {
+    for (const key of ['dsers_compatible', 'syncee_type', 'eprolo_type', 'autods_type', 'direct_api', 'csv_feed']) {
+      expect(getConnector(key)!.descriptor.capabilities.resolvesProductSourceLink, key).toBe(false)
+    }
   })
 
   it('never reports a connector as ready without its credentials', () => {

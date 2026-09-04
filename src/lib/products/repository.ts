@@ -92,6 +92,14 @@ export interface ProductDetail {
   id: string
   sku: string
   title: string
+  /**
+   * Milestone: product-catalogue correction. The supplier's own,
+   * untouched title — preserved separately from `title` (Commerce OS's
+   * generated clean name) so "what was the supplier actually calling
+   * this" stays answerable. `null` for a product with no supplier origin
+   * (manually created before this milestone, or genuinely no supplier).
+   */
+  supplierTitle: string | null
   category: string | null
   stage: string
   decision: ProductDecision
@@ -99,6 +107,11 @@ export interface ProductDetail {
   decisionChangedAt: string
   /** From `product_decision_transitions`' most recent row — `products` itself has no "changed by" column, only what/when. */
   decisionChangedBy: string | null
+  /** Milestone: supplier product verification link. For the manual verification comparison table — `null` means genuinely unknown, never inferred or defaulted. */
+  weightGrams: number | null
+  lengthMm: number | null
+  widthMm: number | null
+  heightMm: number | null
 }
 
 /**
@@ -118,19 +131,24 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
       id: product.id,
       sku: product.sku,
       title: product.title,
+      supplierTitle: null,
       category: product.category,
       stage: product.stage,
       decision: product.decision,
       decisionReason: 'Demo data — no real decision history exists.',
       decisionChangedAt: new Date().toISOString(),
       decisionChangedBy: 'Demo',
+      weightGrams: null,
+      lengthMm: null,
+      widthMm: null,
+      heightMm: null,
     }
   }
 
   const supabase = await createServerSupabase()
   const { data, error } = await supabase
     .from('products')
-    .select('id, sku, title, category, stage, decision, decision_reason, decision_changed_at')
+    .select('id, sku, title, supplier_title, category, stage, decision, decision_reason, decision_changed_at, weight_grams, length_mm, width_mm, height_mm')
     .eq('org_id', session.orgId)
     .eq('id', productId)
     .maybeSingle()
@@ -151,12 +169,17 @@ export async function getProductDetail(productId: string): Promise<ProductDetail
     id: data.id,
     sku: data.sku,
     title: data.title,
+    supplierTitle: data.supplier_title,
     category: data.category,
     stage: data.stage,
     decision: data.decision,
     decisionReason: data.decision_reason,
     decisionChangedAt: data.decision_changed_at,
     decisionChangedBy: lastTransition?.actor_label ?? null,
+    weightGrams: data.weight_grams,
+    lengthMm: data.length_mm,
+    widthMm: data.width_mm,
+    heightMm: data.height_mm,
   }
 }
 

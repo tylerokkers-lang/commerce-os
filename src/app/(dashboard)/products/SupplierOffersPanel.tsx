@@ -38,6 +38,7 @@ export function SupplierOffersPanel({ offers }: { offers: readonly SupplierOffer
           <thead>
             <tr className="border-b border-border text-xs font-medium uppercase tracking-wide text-ink-subtle">
               <th className="px-3 py-2">Supplier</th>
+              <th className="px-3 py-2">Source</th>
               <th className="px-3 py-2">Cost</th>
               <th className="px-3 py-2">Shipping</th>
               <th className="px-3 py-2">Delivery</th>
@@ -53,6 +54,26 @@ export function SupplierOffersPanel({ offers }: { offers: readonly SupplierOffer
                   <td className="px-3 py-2 text-ink">
                     {offer.supplierName}
                     {ranked.supplierId === comparison.preferredSupplierId ? <Badge tone="positive" className="ml-2">Preferred</Badge> : null}
+                  </td>
+                  <td className="px-3 py-2 text-ink">
+                    {offer.supplierSku ? <p className="text-xs text-ink-subtle">SKU {offer.supplierSku}</p> : null}
+                    {offer.sourceUrl && offer.sourceUrlType === 'product' ? (
+                      <a href={offer.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-accent hover:underline">
+                        View supplier product ↗
+                      </a>
+                    ) : offer.sourceUrl && offer.sourceUrlType === 'search' ? (
+                      <a
+                        href={offer.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-accent hover:underline"
+                        title="Opens the supplier's own official search using the stored product reference — Commerce OS cannot guarantee the result is the exact product; confirm that yourself."
+                      >
+                        Search supplier ↗
+                      </a>
+                    ) : (
+                      <p className="text-xs text-ink-subtle">Supplier link unavailable</p>
+                    )}
                   </td>
                   <td className="px-3 py-2 tabular-nums text-ink">{formatMoney(offer.unitCostMinor, offer.currency)}</td>
                   <td className="px-3 py-2 tabular-nums text-ink">{formatMoney(offer.shippingCostMinor, offer.currency)}</td>

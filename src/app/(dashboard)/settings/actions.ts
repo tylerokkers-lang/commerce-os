@@ -14,6 +14,13 @@ function majorToMinorOrNull(value: FormDataEntryValue | null): number | null {
   return Number.isFinite(pounds) ? Math.round(pounds * 100) : null
 }
 
+/** Same "blank means genuinely unset" rule as `majorToMinorOrNull`, for a plain (non-money) numeric field — currently only `vat_rate_pct`. */
+function numberOrNull(value: FormDataEntryValue | null): number | null {
+  if (value === null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 /**
  * Saves business settings.
  *
@@ -37,6 +44,7 @@ export async function saveBusinessSettings(
     company_number: formData.get('company_number'),
     vat_registered: formData.get('vat_registered') === 'on',
     vat_number: formData.get('vat_number'),
+    vat_rate_pct: numberOrNull(formData.get('vat_rate_pct')),
     automation_level: formData.get('automation_level'),
     min_gross_margin_pct: formData.get('min_gross_margin_pct'),
     min_net_margin_pct: formData.get('min_net_margin_pct'),
@@ -66,6 +74,22 @@ export async function saveBusinessSettings(
     min_image_height_px: formData.get('min_image_height_px'),
     max_image_file_size_bytes: Math.round(Number(formData.get('max_image_file_size_mb') ?? 5) * 1024 * 1024),
     allowed_image_formats: formData.getAll('allowed_image_formats'),
+    // Economic-model cost completeness (0047). Packaging is money, pounds
+    // in the form, and — like capital — genuinely absent rather than zero
+    // when left blank. The rest are required, same convention as the
+    // margin/threshold fields above.
+    packaging_cost_minor: majorToMinorOrNull(formData.get('packaging_cost_major')),
+    return_rate_pct: formData.get('return_rate_pct'),
+    return_loss_pct: formData.get('return_loss_pct'),
+    refund_rate_pct: formData.get('refund_rate_pct'),
+    chargeback_rate_pct: formData.get('chargeback_rate_pct'),
+    // Required, but still money (pounds in the form) — unlike the plain
+    // percentage fields above, this needs the *100 conversion, so it
+    // can't just pass the raw FormData value through; `majorToMinorOrNull`
+    // is what correctly turns a genuinely blank field into `null` (which
+    // `chargeback_fee_minor`'s schema then rejects) rather than `0`.
+    chargeback_fee_minor: majorToMinorOrNull(formData.get('chargeback_fee_major')),
+    import_duty_pct: formData.get('import_duty_pct'),
   })
 
   if (!parsed.success) {

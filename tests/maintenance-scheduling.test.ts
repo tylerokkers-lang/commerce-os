@@ -20,6 +20,7 @@ const advertisingSyncMock = vi.fn()
 const campaignReviewMock = vi.fn()
 const orderIngestionMock = vi.fn()
 const purchaseWorkflowMock = vi.fn()
+const fxRefreshMock = vi.fn()
 const monitoringMock = vi.fn()
 const jobQueueMock = vi.fn()
 
@@ -36,6 +37,7 @@ vi.mock('@/lib/advertising/sync', () => ({ runAdvertisingSyncForConnectedOrgs: (
 vi.mock('@/lib/advertising/monitor', () => ({ runCampaignReviewForConnectedOrgs: () => campaignReviewMock() }))
 vi.mock('@/lib/orders/ingestionRun', () => ({ runOrderIngestionForConnectedOrgs: () => orderIngestionMock() }))
 vi.mock('@/lib/orders/purchaseWorkflow', () => ({ runPurchaseWorkflowForConnectedOrgs: () => purchaseWorkflowMock() }))
+vi.mock('@/lib/fx/refreshAllOrgs', () => ({ refreshFxRatesForAllOrgs: () => fxRefreshMock() }))
 vi.mock('@/lib/monitoring/scheduledRun', () => ({ runMonitoringForAllOrgs: () => monitoringMock() }))
 vi.mock('@/lib/automation/scheduledJobBatch', () => ({ runScheduledJobBatch: () => jobQueueMock() }))
 
@@ -44,6 +46,7 @@ const OK_ADSYNC = { accountsChecked: 0, reportsRequested: 0, reportsProcessing: 
 const OK_CAMPAIGN = { organisationsEvaluated: 0, providersChecked: 0, totals: { orgId: 'all', campaignsEvaluated: 0, campaignsSkipped: 0, recommendationsCreated: 0, duplicatesAvoided: 0, blocked: 0, blockedByFreshness: 0, errors: [] }, perOrg: [] }
 const OK_ORDERS = { channelsChecked: 0, ordersFetched: 0, created: 0, statusChanged: 0, statusChangeBlocked: 0, alreadyIngested: 0, rejected: 0, errors: [], createdOrderIds: [] }
 const OK_PURCHASE = { ordersChecked: 0, fulfilmentsCreated: 0, ordersWithNoSupplierAvailable: 0, errors: [] }
+const OK_FXREFRESH: readonly unknown[] = []
 const OK_MONITORING: readonly unknown[] = []
 const OK_JOBQUEUE = { claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 }
 
@@ -53,6 +56,7 @@ function mockAllHealthy() {
   campaignReviewMock.mockResolvedValue(OK_CAMPAIGN)
   orderIngestionMock.mockResolvedValue(OK_ORDERS)
   purchaseWorkflowMock.mockResolvedValue(OK_PURCHASE)
+  fxRefreshMock.mockResolvedValue(OK_FXREFRESH)
   monitoringMock.mockResolvedValue(OK_MONITORING)
   jobQueueMock.mockResolvedValue(OK_JOBQUEUE)
 }
@@ -148,6 +152,7 @@ describe('runMaintenance: the two new scheduled subsystems', () => {
     campaignReviewMock.mockRejectedValue(new Error('c'))
     orderIngestionMock.mockRejectedValue(new Error('o'))
     purchaseWorkflowMock.mockRejectedValue(new Error('p'))
+    fxRefreshMock.mockRejectedValue(new Error('f'))
     monitoringMock.mockRejectedValue(new Error('m'))
     jobQueueMock.mockRejectedValue(new Error('j'))
 

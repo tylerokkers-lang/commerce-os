@@ -81,6 +81,16 @@ export interface SupplierOfferSummary {
   providesTracking: boolean
   handlesReturns: boolean
   reliabilityScore: number | null
+  /** Milestone: product-catalogue correction. The supplier's own SKU for this offer — already collected, previously not surfaced from this read. */
+  supplierSku: string | null
+  /** The supplier's own product-page URL, or an official supplier search route — `null` means genuinely unavailable, never a guessed link. */
+  sourceUrl: string | null
+  /** Whether `sourceUrl` is presented as the exact product page or an unverified search route — see `ProductSourceLink`'s own doc comment. `null` only when `sourceUrl` itself is `null`. */
+  sourceUrlType: 'product' | 'search' | null
+  /** Which connector produced this offer, if any — for traceability, never used to claim a live connection. */
+  connectorKey: string | null
+  /** The supplier's own product reference (e.g. CJ's `pid`) this offer was captured against — for manual verification alongside `sourceUrl`. */
+  connectorProductRef: string | null
 }
 
 /**
@@ -94,7 +104,7 @@ export async function getSupplierOffersForProduct(orgId: string, productId: stri
   const supabase = await createServerSupabase()
   const { data } = await supabase
     .from('supplier_products')
-    .select('supplier_id, unit_cost_minor, shipping_cost_minor, currency, lead_time_days, stock_qty, in_stock, suppliers(name, provides_tracking, handles_returns, current_score)')
+    .select('supplier_id, supplier_sku, unit_cost_minor, shipping_cost_minor, currency, lead_time_days, stock_qty, in_stock, source_url, source_url_type, connector_key, connector_product_ref, suppliers(name, provides_tracking, handles_returns, current_score)')
     .eq('org_id', orgId)
     .eq('product_id', productId)
     .is('variant_id', null)
@@ -112,6 +122,11 @@ export async function getSupplierOffersForProduct(orgId: string, productId: stri
       providesTracking: supplier?.provides_tracking ?? false,
       handlesReturns: supplier?.handles_returns ?? false,
       reliabilityScore: supplier?.current_score ?? null,
+      supplierSku: row.supplier_sku,
+      sourceUrl: row.source_url,
+      sourceUrlType: row.source_url_type as 'product' | 'search' | null,
+      connectorProductRef: row.connector_product_ref,
+      connectorKey: row.connector_key,
     }
   })
 }

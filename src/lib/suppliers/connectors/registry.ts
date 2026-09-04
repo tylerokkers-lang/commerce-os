@@ -7,6 +7,7 @@ import type {
   ConnectorStatus,
   FetchStatusOptions,
   FetchStatusOutcome,
+  ProductSourceLink,
   ReadProductDetailOptions,
   SupplierConnector,
   SupplierProductDetail,
@@ -47,6 +48,10 @@ class UnavailableConnector implements SupplierConnector {
   async readProductDetail(productRef: string, _options?: ReadProductDetailOptions): Promise<Result<SupplierProductDetail, string>> {
     return err(`${this.descriptor.label} is not available: ${this.reason} (requested detail for "${productRef}")`)
   }
+
+  async getProductSourceLink(input: { productRef: string; supplierSku: string | null }): Promise<Result<ProductSourceLink, string>> {
+    return err(`${this.descriptor.label} is not available: ${this.reason} (requested a source link for "${input.productRef}")`)
+  }
 }
 
 /**
@@ -80,7 +85,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
-        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false, resolvesProductSourceLink: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -102,7 +107,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
-        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false, resolvesProductSourceLink: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -123,7 +128,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: true, readProductMedia: false,
-        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false, resolvesProductSourceLink: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -144,7 +149,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: true,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
-        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false, resolvesProductSourceLink: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -168,7 +173,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: false, readProducts: true, readStock: false, readShipping: false,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
-        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false, resolvesProductSourceLink: false,
       },
       usagePolicy: {
         termsUrl: null,
@@ -190,7 +195,7 @@ const PLANNED: readonly { descriptor: ConnectorDescriptor; reason: string }[] = 
       capabilities: {
         discoverProducts: true, readProducts: true, readStock: true, readShipping: false,
         placeOrders: false, cancelOrders: false, trackingUpdates: false, readProductMedia: false,
-        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+        readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false, resolvesProductSourceLink: false,
       },
       usagePolicy: {
         termsUrl: null,

@@ -7,6 +7,8 @@ import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { computeProductIntelligence } from '@/lib/products/intelligence/assemble'
 import { captureAndValidateMedia } from '@/lib/products/media/assemble'
 import { fetchAndAssessShipping } from '@/lib/suppliers/shippingQuotes'
+import { establishChannelFulfilmentSupplier } from '@/lib/marketplaces/shopify/publicationService'
+import { generateCleanProductName } from '@/lib/products/naming'
 import { detectDuplicateCandidate, type CandidateIdentity, type DuplicateCheckResult } from './duplicateDetection'
 import { validateCandidateInput, generateCandidateSku } from './validation'
 
@@ -57,6 +59,38 @@ export interface CaptureCandidateInput {
   /** Milestone: real supplier connector (Phase 8). Which connector this candidate came from, if any — for traceability only, never used to claim a live connection. */
   connectorKey: string | null
   connectorProductRef: string | null
+  /**
+   * Real physical specifications and stock captured at discovery time
+   * (Milestone: CJ import data-persistence fix), when the source actually
+   * reported them — `null` for a manual entry or any connector response
+   * that didn't include a figure. Carried through to `products`/
+   * `supplier_products` on import so `qualityScore.ts` reads real data
+   * instead of a permanent gap. Never inferred from the title/description,
+   * never invented.
+   */
+  weightGrams: number | null
+  lengthMm: number | null
+  widthMm: number | null
+  heightMm: number | null
+  stockQty: number | null
+  /**
+   * Milestone: product-catalogue correction (supplier URL & clean naming).
+   * The supplier's own product-page URL, when the source genuinely
+   * provides one — `null` when it does not (verified against CJ's real
+   * API response and documentation: neither reports one). Never
+   * constructed from a guessed pattern. Persisted to
+   * `supplier_products.source_url` on import.
+   */
+  sourceUrl: string | null
+  /**
+   * Milestone: supplier product verification link. Whether `sourceUrl`
+   * above is presented as the exact product page (`'product'` — only
+   * ever from a real supplier-provided or human-pasted URL) or the
+   * supplier's own official search route, pre-filled with the stored
+   * reference (`'search'` — never guaranteed to be the exact product).
+   * `null` only when `sourceUrl` itself is `null`.
+   */
+  sourceUrlType: 'product' | 'search' | null
   identifiers: readonly { idType: string; value: string }[]
   actorUserId: string
   actorLabel: string | null
@@ -67,6 +101,8 @@ export interface CandidateVariantInput {
   attributes: readonly { name: string; value: string }[]
   unitCostMinor: number
   imageUrls: readonly string[]
+  /** Real per-variant weight in grams, when the source reported one — persisted to `product_variants.weight_grams` on import. `null` otherwise, never invented. */
+  weightGrams?: number | null
 }
 
 export interface CapturedCandidate {
@@ -162,6 +198,13 @@ export async function captureCandidate(input: CaptureCandidateInput): Promise<Re
         variants: input.variants,
         connectorKey: input.connectorKey,
         connectorProductRef: input.connectorProductRef,
+        weightGrams: input.weightGrams,
+        lengthMm: input.lengthMm,
+        widthMm: input.widthMm,
+        heightMm: input.heightMm,
+        stockQty: input.stockQty,
+        sourceUrl: input.sourceUrl,
+        sourceUrlType: input.sourceUrlType,
       } as never,
     })
     .select('id')
@@ -196,6 +239,7 @@ interface CandidateRow {
   estimated_unit_cost_minor: number | null
   estimated_shipping_minor: number | null
   currency: string
+  notes: string | null
   rejected_reason: string | null
   raw_signals: {
     imageUrl?: string | null
@@ -203,6 +247,15 @@ interface CandidateRow {
     variants?: readonly CandidateVariantInput[]
     connectorKey?: string | null
     connectorProductRef?: string | null
+    deliveryDaysMin?: number | null
+    deliveryDaysMax?: number | null
+    weightGrams?: number | null
+    lengthMm?: number | null
+    widthMm?: number | null
+    heightMm?: number | null
+    stockQty?: number | null
+    sourceUrl?: string | null
+    sourceUrlType?: 'product' | 'search' | null
   } | null
 }
 
@@ -221,7 +274,7 @@ export async function importCandidate(
 
   const { data: candidate } = await supabase
     .from('product_research')
-    .select('id, org_id, candidate_title, category, status, product_id, supplier_id, supplier_sku, estimated_unit_cost_minor, estimated_shipping_minor, currency, rejected_reason, raw_signals')
+    .select('id, org_id, candidate_title, category, status, product_id, supplier_id, supplier_sku, estimated_unit_cost_minor, estimated_shipping_minor, currency, notes, rejected_reason, raw_signals')
     .eq('org_id', orgId)
     .eq('id', candidateId)
     .maybeSingle<CandidateRow>()
@@ -249,14 +302,43 @@ export async function importCandidate(
 
   const sku = generateCandidateSku(candidate.id, candidate.supplier_sku)
 
+  // Real facts captured at discovery time (Milestone: CJ import
+  // data-persistence fix) — found live testing the real CJ pipeline: a
+  // genuine ~1,800-character supplier description, real delivery-day
+  // estimates and real per-variant weight/dimensions were being captured
+  // into `product_research` (`notes`/`raw_signals`) and then silently
+  // dropped on import, leaving `qualityScore.ts` unable to tell "the
+  // supplier gave us nothing" from "we had this and lost it." `notes` is
+  // copied verbatim — the supplier's own text, never rewritten — and
+  // every dimension/weight figure is used exactly as reported, never
+  // inferred from the title or averaged across variants.
+  //
+  // Milestone: product-catalogue correction. `title` is the one field
+  // every catalogue/Product Intelligence/dashboard view already reads as
+  // "the product's name" — from here on its value is Commerce OS's own
+  // clean, deterministically-generated name, never the supplier's raw
+  // text directly. `supplier_title` preserves that raw text, verbatim,
+  // permanently on the product's own record (not only in
+  // `product_research`, a staging table) so "what was the supplier
+  // actually calling this" stays answerable forever. When no confident
+  // clean name can be generated, `generateCleanProductName` itself
+  // returns the original title unchanged — never a guess.
+  const naming = generateCleanProductName({ supplierTitle: candidate.candidate_title, category: candidate.category })
+
   const { data: product, error: productError } = await supabase
     .from('products')
     .insert({
       org_id: orgId,
       sku,
-      title: candidate.candidate_title,
+      title: naming.name,
+      supplier_title: candidate.candidate_title,
       category: candidate.category,
       stage: 'discovered',
+      description: candidate.notes,
+      weight_grams: candidate.raw_signals?.weightGrams ?? null,
+      length_mm: candidate.raw_signals?.lengthMm ?? null,
+      width_mm: candidate.raw_signals?.widthMm ?? null,
+      height_mm: candidate.raw_signals?.heightMm ?? null,
     })
     .select('id')
     .single()
@@ -271,9 +353,42 @@ export async function importCandidate(
     unit_cost_minor: candidate.estimated_unit_cost_minor,
     shipping_cost_minor: candidate.estimated_shipping_minor ?? 0,
     currency: candidate.currency,
+    // `lead_time_days` is a single column standing in for a min/max
+    // delivery-day range; every existing reader of this field
+    // (`assemble.ts`, `discovery/repository.ts`) already treats it as the
+    // *maximum* — the conservative, worst-case estimate — so this follows
+    // that established convention rather than inventing an average.
+    lead_time_days: candidate.raw_signals?.deliveryDaysMax ?? null,
+    stock_qty: candidate.raw_signals?.stockQty ?? null,
+    // Milestone: product-catalogue correction. The supplier's own
+    // product-page URL (null when the source genuinely has none — never
+    // constructed from a guessed pattern), and the connector/reference
+    // that produced this offer, persisted onto the one durable record
+    // that already owns `supplier_sku`, rather than staying reachable
+    // only via `product_research.raw_signals`.
+    source_url: candidate.raw_signals?.sourceUrl ?? null,
+    source_url_type: candidate.raw_signals?.sourceUrlType ?? null,
+    connector_key: candidate.raw_signals?.connectorKey ?? null,
+    connector_product_ref: candidate.raw_signals?.connectorProductRef ?? null,
   })
 
   if (offerError) return err(`Product was created but the supplier offer could not be saved: ${offerError.message}`)
+
+  // Establishes the real, already-known fulfilment-supplier relationship
+  // on the Shopify channel — closes a genuine circular dependency found
+  // live testing this exact pipeline: Product Intelligence and the
+  // Shopify eligibility gate both read the fulfilment supplier only from
+  // `channel_products.fulfilment_supplier_id`, which was previously only
+  // ever written by `createDraft` itself, and `createDraft` refuses to
+  // run until profitability (which needs this same field) passes. Never
+  // invents a supplier — `candidate.supplier_id` is the one just proven
+  // real by the successful insert immediately above. A failure here must
+  // never undo the import, matching every other post-import step below.
+  try {
+    await establishChannelFulfilmentSupplier(orgId, product.id, candidate.supplier_id)
+  } catch (error) {
+    console.error('[supplier-discovery] establishing channel fulfilment supplier failed after import', { productId: product.id, error })
+  }
 
   const { error: updateError } = await supabase
     .from('product_research')
@@ -302,7 +417,12 @@ export async function importCandidate(
     actorType: 'user',
     actorUserId: actor.userId,
     actorLabel: actor.label,
-    newValue: { sku, title: candidate.candidate_title, source: 'supplier_discovery_candidate' },
+    // Mirrors exactly what was written to `products` above — the clean
+    // name actually saved, plus the original supplier title, so the audit
+    // trail itself can answer "what was the supplier calling this" and
+    // "what name did Commerce OS assign" without joining back to the
+    // product row at all.
+    newValue: { sku, title: naming.name, supplierTitle: candidate.candidate_title, source: 'supplier_discovery_candidate' },
     reason: `Created from supplier discovery candidate ${candidateId}.`,
   })
 
@@ -327,6 +447,7 @@ export async function importCandidate(
           sku: variant.sku ?? generateCandidateSku(`${candidateId}-${variantIdBySku.size + 1}`, null),
           title: variant.attributes.map((a) => a.value).join(' / ') || 'Variant',
           options: Object.fromEntries(variant.attributes.map((a) => [a.name, a.value])) as never,
+          weight_grams: variant.weightGrams ?? null,
         })
         .select('id')
         .single()

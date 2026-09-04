@@ -4,6 +4,7 @@ import type {
   ConnectorDescriptor,
   FetchStatusOptions,
   FetchStatusOutcome,
+  ProductSourceLink,
   ReadProductDetailOptions,
   SupplierConnector,
   SupplierProductDetail,
@@ -81,6 +82,36 @@ import type {
  */
 
 const CJ_BASE_URL = 'https://developers.cjdropshipping.com/api2.0/v1'
+
+/**
+ * Milestone: supplier product verification link.
+ *
+ * CJ's developer API (above) genuinely has no product-URL field
+ * (confirmed live and against CJ's own published documentation — see
+ * `types.ts`'s `productUrl` comment). This is CJ's real, *public
+ * storefront* (a completely different surface, cjdropshipping.com, not
+ * the developer API), and this exact `/search?keyWord=` route was found
+ * live: navigating a real browser session to
+ * `https://m.cjdropshipping.com/search?keyWord=<value>` genuinely loads
+ * CJ's own search UI with the query pre-filled into the real search box —
+ * not guessed, not constructed from a plausible-looking pattern.
+ *
+ * A genuine, correctly-slugged CJ product-page URL was also found live —
+ * real links harvested directly from CJ's own homepage HTML follow
+ * `https://cjdropshipping.com/product/<seo-slug>-p-<pid>.html`, the same
+ * `pid` this connector already stores as `connector_product_ref`. That
+ * URL is deliberately NOT constructed here: clicking through to it (even
+ * using CJ's own real, unmodified link, copied verbatim) triggers CJ's
+ * own "Human verification" wall for this automated session, which this
+ * codebase must not attempt to defeat — so whether an arbitrary/mismatched
+ * slug still resolves to the correct product by `pid` alone could not be
+ * safely confirmed. Presenting an unverified constructed link as the
+ * exact product page is exactly the "believable-looking URL" this
+ * milestone exists to prevent — so this connector only ever returns
+ * `type: 'search'`, honestly, never `type: 'product'`, until that
+ * resolution can genuinely be confirmed by some future, safe means.
+ */
+const CJ_SEARCH_BASE_URL = 'https://m.cjdropshipping.com/search'
 const MIN_MS_BETWEEN_REQUESTS = 1100
 const REQUEST_TIMEOUT_MS = 15_000
 
@@ -234,28 +265,80 @@ interface CjProductListItem {
   productImage?: string
   bigImage?: string
   sellPrice?: string | number
+  /** Documented/hypothetical flat field — never observed on a real response (see `oneCategoryName` etc. below), kept only as a fallback. */
   categoryName?: string
   categoryId?: string
+  /** The real, live shape of `/product/listV2` (found live, not documented): category arrives as this three-level hierarchy, never as a single joined `categoryName` — unlike `/product/query`'s detail response, which already returns one pre-joined string. */
+  oneCategoryName?: string
+  twoCategoryName?: string
+  threeCategoryName?: string
   warehouseInventoryNum?: string | number
   listedNum?: string | number
 }
 
-/** Discovery-mode listing (Phase 8) — a lightweight browse, distinct from `readProductDetail`'s rich single-product read. Uses `/product/listV2`. */
+/**
+ * Discovery-mode listing (Phase 8) — a lightweight browse, distinct from
+ * `readProductDetail`'s rich single-product read. Uses `/product/listV2`.
+ *
+ * Found live, not by inspection (first real exercise of this endpoint,
+ * this session): CJ's actual response nests the real product array one
+ * level deeper than documented/assumed — `data.content` is not itself an
+ * array of products, it is a single-element array whose one entry wraps
+ * `{ productList, relatedCategoryList, keyWord, keyWordOld }`. Every real
+ * product lives in that `productList`. The previous code treated
+ * `content` as the product array directly, so every real response was
+ * silently read as "0 products" (that lone wrapper object, having none
+ * of the fields a product needs, was filtered out downstream) with no
+ * error ever surfaced. The old `.list`/bare-array/flat-`.content`
+ * fallbacks are kept, in that order, in case a future CJ response
+ * reverts to one of those shapes — never removed, only no longer tried
+ * first.
+ */
 async function listProducts(accessToken: string, options: { keyword?: string; limit: number; page: number }): Promise<Result<{ items: readonly CjProductListItem[]; warnings: readonly string[] }, string>> {
-  const result = await cjRequest<{ list?: readonly CjProductListItem[]; content?: readonly CjProductListItem[] } | readonly CjProductListItem[]>(
-    '/product/listV2',
-    { method: 'GET', accessToken, query: { keyWord: options.keyword, page: options.page, size: options.limit } },
-  )
+  const result = await cjRequest<
+    | { content?: readonly { productList?: readonly CjProductListItem[] }[] }
+    | { list?: readonly CjProductListItem[]; content?: readonly CjProductListItem[] }
+    | readonly CjProductListItem[]
+  >('/product/listV2', { method: 'GET', accessToken, query: { keyWord: options.keyword, page: options.page, size: options.limit } })
   if (!result.ok) return result
 
   const raw = result.value
-  const wrapped = raw as { list?: readonly CjProductListItem[]; content?: readonly CjProductListItem[] }
-  const items: readonly CjProductListItem[] = Array.isArray(raw) ? raw : (wrapped.list ?? wrapped.content ?? [])
+  const nested = raw as { content?: readonly { productList?: readonly CjProductListItem[] }[] }
+  const flat = raw as { list?: readonly CjProductListItem[]; content?: readonly CjProductListItem[] }
+
   const warnings: string[] = []
-  if (!Array.isArray(raw) && !wrapped.list && !wrapped.content) {
-    warnings.push('Product list response did not contain a recognised "list" or "content" array — treated as empty.')
+  let items: readonly CjProductListItem[]
+  if (Array.isArray(nested.content) && nested.content[0]?.productList !== undefined) {
+    items = nested.content[0].productList ?? []
+  } else if (Array.isArray(raw)) {
+    items = raw
+  } else if (flat.list) {
+    items = flat.list
+  } else if (flat.content) {
+    items = flat.content
+  } else {
+    items = []
+    warnings.push('Product list response did not contain a recognised "content[0].productList", "list", or "content" array — treated as empty.')
   }
   return ok({ items, warnings })
+}
+
+/**
+ * The live list-browse response has no single joined category string
+ * (unlike `/product/query`'s detail read, confirmed separately to
+ * already return one, e.g. `"Men's Clothing > Outerwear & Jackets >
+ * Men's Sweaters"`) — only the three separate hierarchy levels. Joined
+ * with the same `" > "` separator for consistency with that existing
+ * representation, most-specific-first levels dropped when absent rather
+ * than rendered as an empty segment. `categoryName` (never observed live,
+ * kept only as a documented/hypothetical fallback) wins if a future
+ * response ever provides it directly.
+ */
+function categoryFromListItem(item: CjProductListItem): string | undefined {
+  const flat = safeString(item.categoryName)
+  if (flat) return flat
+  const levels = [item.oneCategoryName, item.twoCategoryName, item.threeCategoryName].map(safeString).filter((s): s is string => s !== null)
+  return levels.length > 0 ? levels.join(' > ') : undefined
 }
 
 function statusFromListItem(item: CjProductListItem): SupplierProductStatus {
@@ -271,6 +354,7 @@ function statusFromListItem(item: CjProductListItem): SupplierProductStatus {
     stockQty: stockQty ?? undefined,
     inStock: stockQty === null ? true : stockQty > 0, // CJ's list endpoint has no explicit "unavailable" flag; a reported warehouse quantity of 0 is the only signal read here.
     stockCheckedAt: new Date().toISOString(),
+    category: categoryFromListItem(item),
     documentationOnFile: [],
     raw: item as Record<string, unknown>,
   }
@@ -285,10 +369,24 @@ interface CjVariantData {
   vid?: string
   variantSku?: string
   variantSellPrice?: string | number
+  /** Grams — confirmed against CJ's own published field documentation (developers.cjdropshipping.cn), not assumed. */
   variantWeight?: string | number
+  /** Millimetres — same source as `variantWeight`. CJ reports package dimensions per variant, never a single product-level figure, so these are only ever attached to one variant here. */
+  variantLength?: string | number
+  variantWidth?: string | number
+  variantHeight?: string | number
   variantImage?: string
   variantNameEn?: string
   variantKey?: string
+  /**
+   * Real per-variant stock figure, when CJ returns one on this endpoint —
+   * found live (not documented) alongside a real, already-imported
+   * product's genuine `/product/query` response. Absent/null on some
+   * products (CJ's fuller per-country breakdown lives behind a separate
+   * `/product/stock/queryByVid` call this connector does not make) — never
+   * treated as zero when missing.
+   */
+  inventoryNum?: string | number
 }
 
 interface CjProductDetailData {
@@ -302,6 +400,17 @@ interface CjProductDetailData {
   bigImage?: string
   productImageSet?: readonly string[]
   images?: readonly string[]
+  /**
+   * Milestone: product-catalogue correction. Kept typed even though it has
+   * never once appeared on a real `/product/query` response this codebase
+   * has captured (confirmed live against an already-imported product, and
+   * against CJ's own published field-by-field documentation, which lists
+   * no URL/link field for this endpoint at all) — `safeUrl` below
+   * therefore always maps this to `null` in practice today. Left in place
+   * rather than removed, so a future CJ API version that does add a real
+   * field by this name starts working immediately, honestly, with no code
+   * change required.
+   */
   productUrl?: string
   sourceFrom?: string
   variants?: readonly CjVariantData[]
@@ -311,6 +420,12 @@ interface CjProductDetailData {
 function parseVariant(raw: CjVariantData): SupplierVariantDetail {
   const priceMajor = safeNumber(raw.variantSellPrice) ?? 0
   const image = safeUrl(raw.variantImage)
+  // `inventoryNum` is genuinely present on `/product/query`'s real response
+  // shape (confirmed live), but null on many products — CJ's fuller,
+  // per-country stock breakdown lives behind a separate
+  // `/product/stock/queryByVid` call this connector does not make. A real
+  // number here is used as-is; a missing one stays unknown, never zero.
+  const stockQty = safeNumber(raw.inventoryNum)
   return {
     variantRef: safeString(raw.vid) ?? '',
     sku: safeString(raw.variantSku),
@@ -320,9 +435,13 @@ function parseVariant(raw: CjVariantData): SupplierVariantDetail {
         ? [{ name: 'Name', value: raw.variantNameEn }]
         : [],
     unitCost: money(Math.round(priceMajor * 100), 'USD'),
-    stockQty: null, // CJ reports variant stock per-country via a separate call (`/product/stock/queryByVid`) — never fabricated here as a single figure.
-    inStock: 'unknown',
+    stockQty,
+    inStock: stockQty === null ? 'unknown' : stockQty > 0,
     imageUrls: image ? [image] : [],
+    weightGrams: safeNumber(raw.variantWeight),
+    lengthMm: safeNumber(raw.variantLength),
+    widthMm: safeNumber(raw.variantWidth),
+    heightMm: safeNumber(raw.variantHeight),
   }
 }
 
@@ -439,6 +558,7 @@ const DESCRIPTOR: ConnectorDescriptor = {
     readVariants: true,
     readShippingRates: true,
     readOrders: false,
+    resolvesProductSourceLink: true,
   },
   usagePolicy: {
     termsUrl: 'https://developers.cjdropshipping.com/',
@@ -508,6 +628,22 @@ export class CjDropshippingConnector implements SupplierConnector {
     if (!tokenResult.ok) return tokenResult
     return fetchProductDetail(tokenResult.value, productRef, options)
   }
+
+  /**
+   * See `CJ_SEARCH_BASE_URL`'s own comment for the live verification
+   * behind this. Prefers the supplier's own SKU (a human-recognisable
+   * product code, e.g. "CJYD2334853") over the bare numeric `pid` as the
+   * search query — CJ's site search is built for a person typing a
+   * product code, not treating the internal database key as meaningful.
+   * No network call: this is pure URL construction from data the caller
+   * already has, never a fetch that could be mistaken for "verifying"
+   * anything.
+   */
+  async getProductSourceLink(input: { productRef: string; supplierSku: string | null }): Promise<Result<ProductSourceLink, string>> {
+    const query = input.supplierSku ?? input.productRef
+    if (!query) return err('No supplier SKU or product reference on file to search CJdropshipping with.')
+    return ok({ type: 'search', url: `${CJ_SEARCH_BASE_URL}?keyWord=${encodeURIComponent(query)}` })
+  }
 }
 
 export const cjdropshippingConnector = new CjDropshippingConnector()
@@ -527,6 +663,7 @@ export const __internal = {
   safeString,
   getAccessToken,
   listProducts,
+  categoryFromListItem,
   fetchProductDetail,
   fetchShippingQuotes,
 }

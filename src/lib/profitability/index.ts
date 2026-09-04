@@ -50,6 +50,18 @@ export interface CostInputs {
   /** Expected refunds as a percentage of revenue, beyond returns. */
   refundRatePct?: number
   /**
+   * Import duty as a percentage of landed supplier cost (product cost +
+   * supplier shipping) — the customary duty basis, not the resale price.
+   * Pass 0 only when the business has explicitly decided duty does not
+   * apply (already-duty-paid stock, a domestic supplier, etc.); never a
+   * default for "we don't know."
+   */
+  importDutyPct?: number
+  /** Expected chargebacks as a percentage of orders. */
+  chargebackRatePct?: number
+  /** The card network/processor's fixed dispute fee, charged per chargeback event regardless of order value — separate from the revenue itself being reversed. */
+  chargebackFeeFixed?: Money
+  /**
    * VAT rate applied to the sale. Pass 0 when not VAT registered or when the
    * supply is outside scope. Never assume 20.
    */
@@ -116,7 +128,12 @@ export function calculateProfitability(input: CostInputs): Profitability {
 
   const productCost = input.productCost
   const supplierShipping = orZero(input.supplierShipping, currency)
-  const cogs = add(productCost, supplierShipping)
+  // Duty is levied on the landed supplier cost (product + inbound
+  // shipping), never on the resale price — the customary customs basis,
+  // and a genuinely different number from the selling price this function
+  // is also given.
+  const importDuty = percentOf(add(productCost, supplierShipping), input.importDutyPct ?? 0)
+  const cogs = add(productCost, supplierShipping, importDuty)
   const grossProfit = subtract(netRevenue, cogs)
 
   const fulfilment = orZero(input.fulfilment, currency)
@@ -141,6 +158,17 @@ export function calculateProfitability(input: CostInputs): Profitability {
 
   const refundsCost = percentOf(netRevenue, input.refundRatePct ?? 0)
 
+  // A chargeback reverses the transaction (the same "share of net revenue
+  // lost" convention refunds already use above) AND carries the card
+  // network/processor's own fixed dispute fee — a real cost regardless of
+  // the order's value, weighted by how often a chargeback happens.
+  const chargebackRate = (input.chargebackRatePct ?? 0) / 100
+  const chargebackFeeFixed = orZero(input.chargebackFeeFixed, currency)
+  const chargebackCost = add(
+    percentOf(netRevenue, input.chargebackRatePct ?? 0),
+    multiply(chargebackFeeFixed, chargebackRate),
+  )
+
   const variableCosts = add(
     fulfilment,
     packaging,
@@ -148,6 +176,7 @@ export function calculateProfitability(input: CostInputs): Profitability {
     paymentFee,
     returnsCost,
     refundsCost,
+    chargebackCost,
   )
   const contribution = subtract(grossProfit, variableCosts)
 
@@ -160,16 +189,22 @@ export function calculateProfitability(input: CostInputs): Profitability {
   const vatShare = vatRate === 0 ? 0 : vatInclusive ? vatRate / (100 + vatRate) : 0
   const pctCosts = ((input.channelFeePct ?? 0) + (input.paymentFeePct ?? 0)) / 100
   const refundShare = ((input.refundRatePct ?? 0) / 100) * (1 - vatShare)
+  // Only the percentage-of-revenue share of the chargeback cost scales
+  // with price; its fixed per-event fee (below) does not, exactly the
+  // same split channel/payment fees already get between their `Pct` and
+  // `Fixed` components.
+  const chargebackShare = chargebackRate * (1 - vatShare)
   const fixedCosts = add(
-    cogs,
+    cogs, // already includes import duty
     fulfilment,
     packaging,
     orZero(input.channelFeeFixed, currency),
     orZero(input.paymentFeeFixed, currency),
     returnsCost,
+    multiply(chargebackFeeFixed, chargebackRate),
     adSpend,
   )
-  const denominator = 1 - vatShare - pctCosts - refundShare
+  const denominator = 1 - vatShare - pctCosts - refundShare - chargebackShare
   const breakEvenPrice = denominator > 0
     ? money(Math.ceil(fixedCosts.minor / denominator), currency)
     : money(0, currency)
@@ -188,12 +223,14 @@ export function calculateProfitability(input: CostInputs): Profitability {
     { label: 'Net revenue', amount: netRevenue, basis: 'Selling price less VAT' },
     { label: 'Product cost', amount: productCost, basis: 'Supplier unit cost' },
     { label: 'Supplier shipping', amount: supplierShipping, basis: 'Inbound / dropship shipping' },
+    { label: 'Import duty', amount: importDuty, basis: input.importDutyPct === undefined ? 'Not configured — treated as 0 for this calculation, not a confirmed business decision' : `${input.importDutyPct}% of landed supplier cost` },
     { label: 'Fulfilment', amount: fulfilment, basis: 'Pick, pack and dispatch' },
-    { label: 'Packaging', amount: packaging, basis: 'Boxes, inserts, labels' },
+    { label: 'Packaging', amount: packaging, basis: input.packaging === undefined ? 'Not configured — treated as 0 for this calculation, not a confirmed business decision' : 'Boxes, inserts, labels' },
     { label: 'Channel fees', amount: channelFee, basis: `${input.channelFeePct ?? 0}% of gross${input.channelFeeFixed ? ' plus fixed fee' : ''}` },
     { label: 'Payment fees', amount: paymentFee, basis: `${input.paymentFeePct ?? 0}% of gross${input.paymentFeeFixed ? ' plus fixed fee' : ''}` },
-    { label: 'Returns allowance', amount: returnsCost, basis: `${input.returnRatePct ?? 0}% return rate, ${input.returnLossPct ?? 100}% unrecoverable` },
-    { label: 'Refunds allowance', amount: refundsCost, basis: `${input.refundRatePct ?? 0}% of net revenue` },
+    { label: 'Returns allowance', amount: returnsCost, basis: input.returnRatePct === undefined ? 'Not configured — treated as 0 for this calculation, not a confirmed business decision' : `${input.returnRatePct}% return rate, ${input.returnLossPct ?? 100}% unrecoverable` },
+    { label: 'Refunds allowance', amount: refundsCost, basis: input.refundRatePct === undefined ? 'Not configured — treated as 0 for this calculation, not a confirmed business decision' : `${input.refundRatePct}% of net revenue` },
+    { label: 'Chargebacks', amount: chargebackCost, basis: input.chargebackRatePct === undefined ? 'Not configured — treated as 0 for this calculation, not a confirmed business decision' : `${input.chargebackRatePct}% of orders, plus the fixed dispute fee` },
     { label: 'Advertising', amount: adSpend, basis: 'Attributed spend per unit' },
   ]
 

@@ -8,3 +8,31 @@ export interface DecisionChangeState {
 }
 
 export const initialDecisionChangeState: DecisionChangeState = { status: 'idle', message: '' }
+
+export interface IntelligenceActionState {
+  status: 'idle' | 'ok' | 'error'
+  message?: string
+}
+
+export const initialIntelligenceState: IntelligenceActionState = { status: 'idle' }
+
+export interface ShippingActionState {
+  status: 'idle' | 'ok' | 'error'
+  message: string
+}
+
+export const initialShippingState: ShippingActionState = { status: 'idle', message: '' }
+
+export interface MediaActionState {
+  status: 'idle' | 'ok' | 'error'
+  message: string
+}
+
+export const initialMediaState: MediaActionState = { status: 'idle', message: '' }
+
+export interface PublicationActionState {
+  status: 'idle' | 'ok' | 'error'
+  message: string
+}
+
+export const initialPublicationState: PublicationActionState = { status: 'idle', message: '' }

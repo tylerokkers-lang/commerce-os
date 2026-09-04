@@ -9,8 +9,8 @@ import {
   setPrimaryMediaAction,
   removeMediaAction,
   refreshMediaAction,
-  initialMediaState,
 } from './mediaActions'
+import { initialMediaState } from './state'
 import type { ProductMediaRow } from '@/lib/products/media/repository'
 import type { MediaReadinessResult } from '@/lib/products/media/mediaScore'
 

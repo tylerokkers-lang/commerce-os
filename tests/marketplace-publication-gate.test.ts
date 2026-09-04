@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assessPublicationReadiness, type PublicationGateInput } from '@/lib/marketplaces/publicationGate'
+import { assessPublicationReadiness, decideChannelFulfilmentAction, type PublicationGateInput } from '@/lib/marketplaces/publicationGate'
 import { assessCompliance } from '@/lib/compliance/rules'
 import { assessAmazonCapability, assessShopifyCapability } from '@/lib/suppliers/scoring'
 import type { SupplierSignals } from '@/lib/suppliers/scoring'
@@ -303,5 +303,23 @@ describe('publicationGate: compliance verdicts other than "pass" always block, i
     const nullish = assessPublicationReadiness(baseInput({ compliance: null }))
     expect(nullish.requirements.find((r) => r.key === 'compliance')?.satisfied).toBe(false)
     expect(nullish.outcome).toBe(explicit.outcome)
+  })
+})
+
+describe('decideChannelFulfilmentAction: closing the circular dependency (a freshly-imported product could never be assessed, and could never reach a state where createDraft would succeed)', () => {
+  it('writes when a channel exists and no fulfilment supplier is on file yet — the exact case that was previously impossible to escape', () => {
+    expect(decideChannelFulfilmentAction({ channelId: 'chan-1', existingFulfilmentSupplierId: null })).toBe('write')
+  })
+
+  it('never invents a channel: no channel configured for the org -> skip, never a fabricated write', () => {
+    expect(decideChannelFulfilmentAction({ channelId: null, existingFulfilmentSupplierId: null })).toBe('skip_no_channel')
+  })
+
+  it('never overwrites an operator\'s own prior choice (e.g. after switching suppliers)', () => {
+    expect(decideChannelFulfilmentAction({ channelId: 'chan-1', existingFulfilmentSupplierId: 'supplier-already-set' })).toBe('skip_already_set')
+  })
+
+  it('no channel takes priority over an existing supplier value when both are somehow present', () => {
+    expect(decideChannelFulfilmentAction({ channelId: null, existingFulfilmentSupplierId: 'supplier-x' })).toBe('skip_no_channel')
   })
 })

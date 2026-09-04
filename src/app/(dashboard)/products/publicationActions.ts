@@ -3,13 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { requireWriteAccess } from '@/lib/security/session'
 import { createDraft, publishLive, pauseListing, overrideSellingPrice } from '@/lib/marketplaces/shopify/publicationService'
-
-export interface PublicationActionState {
-  status: 'idle' | 'ok' | 'error'
-  message: string
-}
-
-export const initialPublicationState: PublicationActionState = { status: 'idle', message: '' }
+import type { PublicationActionState } from './state'
 
 /**
  * Creates a Shopify DRAFT — never live. The only UI-facing trigger for

@@ -3,13 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { requireWriteAccess } from '@/lib/security/session'
 import { refreshShippingQuoteForProduct } from '@/lib/suppliers/shippingQuotes'
-
-export interface ShippingActionState {
-  status: 'idle' | 'ok' | 'error'
-  message: string
-}
-
-export const initialShippingState: ShippingActionState = { status: 'idle', message: '' }
+import type { ShippingActionState } from './state'
 
 /**
  * "Check/refresh UK shipping" (Milestone: shipping-aware publication,

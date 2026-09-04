@@ -4,13 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { requireWriteAccess, requireSession, canApprove } from '@/lib/security/session'
 import { captureAndValidateMedia } from '@/lib/products/media/assemble'
 import { approveMedia, rejectMedia, setPrimaryMedia, removeMedia, refreshMedia } from '@/lib/products/media/moderation'
-
-export interface MediaActionState {
-  status: 'idle' | 'ok' | 'error'
-  message: string
-}
-
-export const initialMediaState: MediaActionState = { status: 'idle', message: '' }
+import type { MediaActionState } from './state'
 
 /**
  * Manual media attach — the one UI-facing way today to add media to a

@@ -2,7 +2,8 @@
 
 import { useActionState } from 'react'
 import { Badge, CardHeader, type Tone } from '@/components/ui'
-import { recalculateProductIntelligence, initialIntelligenceState } from './actions'
+import { recalculateProductIntelligence } from './actions'
+import { initialIntelligenceState } from './state'
 import type { ProductIntelligenceRow } from '@/lib/products/intelligence/repository'
 import { RECOMMENDATION_LABELS, type ProductRecommendation } from '@/lib/products/intelligence/recommendation'
 
@@ -12,6 +13,7 @@ const RECOMMENDATION_TONES: Record<ProductRecommendation, Tone> = {
   review_required: 'caution',
   low_priority: 'neutral',
   do_not_sell: 'negative',
+  unconfigured: 'neutral',
 }
 
 const QUALITY_BAND_TONES: Record<string, Tone> = { excellent: 'positive', good: 'accent', fair: 'caution', poor: 'negative' }

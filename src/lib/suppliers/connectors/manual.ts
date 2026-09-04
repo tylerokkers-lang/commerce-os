@@ -4,6 +4,7 @@ import type {
   ConnectorDescriptor,
   FetchStatusOptions,
   FetchStatusOutcome,
+  ProductSourceLink,
   ReadProductDetailOptions,
   SupplierConnector,
   SupplierProductDetail,
@@ -51,6 +52,11 @@ const DESCRIPTOR: ConnectorDescriptor = {
     // not a gap in this connector so much as a limit of what "a person
     // typed this in" can mean without a form for each of these.
     readProductDetails: false, readVariants: false, readShippingRates: false, readOrders: false,
+    // A manually-captured candidate's own "Product URL / reference" field
+    // already IS the real product link, when a human pastes one — set
+    // directly at capture time, never derived here. This connector has no
+    // supplier of its own to search.
+    resolvesProductSourceLink: false,
   },
   usagePolicy: {
     termsUrl: null,
@@ -144,6 +150,12 @@ export class ManualSupplierConnector implements SupplierConnector {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept named to document the interface's real parameter, unused by this honest stub
   async readProductDetail(productRef: string, _options?: ReadProductDetailOptions): Promise<Result<SupplierProductDetail, string>> {
     return err(`The manual connector has no structured product detail for "${productRef}" — see fetchStatus for what it does report.`)
+  }
+
+  /** Honestly unsupported — see `capabilities.resolvesProductSourceLink`. */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept named to document the interface's real parameter, unused by this honest stub
+  async getProductSourceLink(input: { productRef: string; supplierSku: string | null }): Promise<Result<ProductSourceLink, string>> {
+    return err('The manual connector has no supplier of its own to search — a pasted "Product URL / reference" is stored directly at capture time instead.')
   }
 }
 

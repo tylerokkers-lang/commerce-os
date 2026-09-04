@@ -2,7 +2,8 @@
 
 import { useActionState } from 'react'
 import { Badge, CardHeader, type Tone } from '@/components/ui'
-import { refreshShippingQuoteAction, initialShippingState } from './shippingActions'
+import { refreshShippingQuoteAction } from './shippingActions'
+import { initialShippingState } from './state'
 import type { ShopifyPublicationPreview } from '@/lib/marketplaces/shopify/publicationService'
 
 function formatMoneyMinor(minor: number | null, currency: string | null): string {

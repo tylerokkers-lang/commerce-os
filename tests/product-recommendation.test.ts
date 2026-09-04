@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { recommendProduct, type RecommendationInputs } from '@/lib/products/intelligence/recommendation'
 
 const BASE: RecommendationInputs = {
+  businessSettingsConfigured: true,
+  missingRequiredSettings: [],
   profitabilityGatePasses: true,
   profitabilityFailureReason: null,
   supplierAssigned: true,
@@ -83,5 +85,16 @@ describe('Product Intelligence recommendation ladder', () => {
   it('capital not configured does not block the ladder — falls through to the opportunity checks', () => {
     const result = recommendProduct({ ...BASE, capitalStatus: 'not_configured', capitalEfficiencyScore: null })
     expect(result.recommendation).toBe('strong_candidate')
+  })
+
+  it('unconfigured business settings is UNCONFIGURED regardless of how good every other score is — checked before anything else', () => {
+    const result = recommendProduct({ ...BASE, businessSettingsConfigured: false })
+    expect(result.recommendation).toBe('unconfigured')
+    expect(result.reason).toMatch(/business settings/i)
+  })
+
+  it('unconfigured business settings takes precedence even over a failing profitability gate — the threshold that failed it was itself a placeholder', () => {
+    const result = recommendProduct({ ...BASE, businessSettingsConfigured: false, profitabilityGatePasses: false, profitabilityFailureReason: 'Net profit is negative.' })
+    expect(result.recommendation).toBe('unconfigured')
   })
 })
