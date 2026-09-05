@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { amazonConnector } from '@/lib/marketplaces/connectors/amazon'
 import { amazonDemoConnector } from '@/lib/marketplaces/connectors/amazonDemo'
@@ -196,7 +197,7 @@ describe('successful demo connection', () => {
 })
 
 describe('capabilities are declared, not assumed', () => {
-  it('Shopify (Milestone Shopify-Read-Only) requests only read capability: no write/refund/verify/webhook/fee capability at all this phase', () => {
+  it('Shopify declares no write capability of any kind — verification is the one exception, and it is a read', () => {
     expect(shopifyConnector.descriptor.capabilities).toEqual({
       readListings: true,
       writeListings: false,
@@ -206,9 +207,46 @@ describe('capabilities are declared, not assumed', () => {
       processRefunds: false,
       readFees: false,
       webhooks: false,
-      verifyWrites: false,
+      // Milestone: production autonomy proof. `verifyListingState` is now a
+      // real single-product GraphQL read, live-verified against the
+      // connected store, and needs only `read_products` — which Shopify's
+      // own token response confirms is granted. It opens no write path:
+      // every write is gated on `writeListings`/`createListings` (both
+      // still false) long before verification is reached.
+      verifyWrites: true,
       createListings: false,
     })
+  })
+
+  it('every Shopify WRITE capability remains false, so no listing can be created or changed', () => {
+    const caps = shopifyConnector.descriptor.capabilities
+    expect(caps.writeListings).toBe(false)
+    expect(caps.createListings).toBe(false)
+    expect(caps.updateFulfilment).toBe(false)
+    expect(caps.processRefunds).toBe(false)
+  })
+
+  it('Shopify write verification fails safe when credentials are absent — never a fabricated snapshot', async () => {
+    // No Shopify env vars in the test environment, so this exercises the
+    // real guard rather than the network path.
+    const result = await shopifyConnector.verifyListingState('gid://shopify/Product/1')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/not configured/i)
+  })
+
+  it('Shopify write verification is a real single-product read that treats "no such product" as a failure, never as confirmation', () => {
+    const source = readFileSync('src/lib/marketplaces/connectors/shopify.ts', 'utf8')
+    const start = source.indexOf('async verifyListingState(')
+    const body = source.slice(start, start + 900)
+
+    // A real query, reusing the same mapper as the listings read so a
+    // verification can never disagree with a listing read about status.
+    expect(body).toContain('PRODUCT_BY_ID_QUERY')
+    expect(body).toContain('mapListing(')
+    // The critical safety property: a null product is an error, not an
+    // empty snapshot a caller might read as "present and correct".
+    expect(body).toMatch(/if \(!node\) return err\(/)
+    expect(body, 'the old stub must be gone').not.toMatch(/verification is not implemented/i)
   })
 
   it('Amazon correctly declares that seller-submitted refunds are not a supported capability', () => {

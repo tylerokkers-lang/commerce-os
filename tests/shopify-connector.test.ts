@@ -557,7 +557,7 @@ describe('11. Fulfilment mapping (read-side)', () => {
 })
 
 describe('12. Capability truthfulness (Milestone Shopify-Read-Only)', () => {
-  it('declares exactly the read-only capability set the brief requires — no write/refund/verify/webhook/fee capability', () => {
+  it('declares exactly the read-only capability set the brief requires — no write/refund/webhook/fee capability', () => {
     expect(shopifyConnector.descriptor.capabilities).toEqual({
       readListings: true,
       writeListings: false,
@@ -567,7 +567,13 @@ describe('12. Capability truthfulness (Milestone Shopify-Read-Only)', () => {
       processRefunds: false,
       readFees: false,
       webhooks: false,
-      verifyWrites: false,
+      // Milestone: production autonomy proof — the single change to this
+      // set. Verification is a READ (`read_products`, which Shopify's own
+      // token response confirms is granted), it is genuinely implemented
+      // and was live-verified against the connected store, and it unlocks
+      // no write: `writeListings`/`createListings` both remain false and
+      // are checked first on every write path.
+      verifyWrites: true,
       createListings: false,
     })
   })

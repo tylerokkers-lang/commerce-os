@@ -7,6 +7,7 @@ import { buildChannelProfiles } from '@/lib/profitability/channels'
 import { assessCompliance, type ComplianceAssessment, type ComplianceContext } from '@/lib/compliance/rules'
 import type { IdentifierRecord } from '@/lib/products/identifiers'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
+import { resolveBusinessConfiguration } from '@/lib/automation/settingsTypes'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { money } from '@/lib/core/money'
 import type { ChannelKey, ProductDecision, ProductStage } from '@/lib/core/domain'
@@ -275,6 +276,23 @@ export async function getChannelReadiness(
     const profile = buildChannelProfiles({ category: null, sellingPrice }).find((p) => p.channel === channel)
     if (profile) {
       const settings = await getAutomationSettingsForOrg(orgId)
+      // Milestone: production autonomy proof. These economics previously
+      // diverged from `products/intelligence/assemble.ts`'s, for the same
+      // product, in three ways that all pointed the same direction —
+      // flattering: `vatRatePct` was hardcoded `0`, `minGrossMarginPct` was
+      // hardcoded `0`, and none of the configured return/refund/chargeback/
+      // duty/packaging assumptions were passed at all. That mattered far
+      // more after this verdict became the persisted
+      // `profitability_records` row gating `compliance_review -> approved`:
+      // six of the seven business settings an operator is asked to
+      // configure had no effect whatsoever on the gate that authorises
+      // approval, and a VAT-registered business would have had ~1/6 of a
+      // VAT-inclusive price counted as margin that HMRC will take. Now
+      // identical to the intelligence engine's inputs, including its
+      // "unknown is not zero" discipline: an unset assumption is passed as
+      // `undefined` so the breakdown reports it as not configured, never
+      // as a confirmed zero.
+      const businessConfiguration = resolveBusinessConfiguration(settings)
       const result = calculateProfitability({
         sellingPrice,
         productCost: money(offer.unit_cost_minor, currency as never),
@@ -285,9 +303,16 @@ export async function getChannelReadiness(
         paymentFeePct: profile.paymentFeePct,
         paymentFeeFixed: profile.paymentFeeFixed,
         adSpendPerUnit: profile.adSpendPerUnit,
-        vatRatePct: 0,
+        vatRatePct: businessConfiguration.effectiveVatRatePct,
+        packaging: settings.packagingCostMinor !== null ? money(settings.packagingCostMinor, currency as never) : undefined,
+        importDutyPct: settings.importDutyPct ?? undefined,
+        returnRatePct: settings.returnRatePct ?? undefined,
+        returnLossPct: settings.returnLossPct ?? undefined,
+        refundRatePct: settings.refundRatePct ?? undefined,
+        chargebackRatePct: settings.chargebackRatePct ?? undefined,
+        chargebackFeeFixed: settings.chargebackFeeMinor !== null ? money(settings.chargebackFeeMinor, currency as never) : undefined,
       })
-      const thresholds = { minGrossMarginPct: 0, minNetMarginPct: settings.minNetMarginPct }
+      const thresholds = { minGrossMarginPct: settings.minGrossMarginPct, minNetMarginPct: settings.minNetMarginPct }
       const gate = assessProfitabilityGate(result, thresholds)
       profitability.verdict = gate.passes ? 'pass' : 'fail'
       profitability.grossMarginPct = result.grossMarginPct

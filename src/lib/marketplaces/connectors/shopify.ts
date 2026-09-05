@@ -46,10 +46,11 @@ import type {
  * across calls (the same known, shared, deliberate inefficiency those two
  * connectors already carry, not a new one).
  *
- * READ-ONLY THIS PHASE: `capabilities.writeListings`/`syncInventory`
- * (write half)/`updateFulfilment`/`processRefunds`/`verifyWrites` are all
- * honestly `false` — every write method below returns `not_supported`
- * unconditionally, never even attempting a request. This is a structural
+ * READ-ONLY: `capabilities.writeListings`/`syncInventory` (write half)/
+ * `updateFulfilment`/`processRefunds` are all honestly `false` — every
+ * write method below returns `not_supported` unconditionally, never even
+ * attempting a request. (`verifyWrites` is `true`, but verification is a
+ * read: see the descriptor's own note.) This is a structural
  * gate, not a convention: `automation/priceExecution.ts` checks
  * `capabilities.writeListings` before ever calling `updateListingPrice`,
  * so a real Shopify write cannot be reached through the existing
@@ -92,7 +93,22 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
     processRefunds: false,
     readFees: false, // Fee reporting requires the separate Shopify Payments Payouts API, not implemented here — matches fetchFees()'s own honest error.
     webhooks: false,
-    verifyWrites: false,
+    // Milestone: production autonomy proof. Genuinely implemented AND
+    // live-verified: `verifyListingState` below runs a real single-product
+    // GraphQL read that was executed against the connected store
+    // (informax-pdy9ltd9.myshopify.com) and returned a real product with
+    // its status, price, currency and inventory. Verification is a READ,
+    // needing only `read_products`, which Shopify's own token response
+    // confirms is granted — so unlike every write flag here, this one does
+    // not depend on a scope the app does not hold.
+    //
+    // Enables no write. Every write path is gated on `writeListings` or
+    // `createListings` (both false) BEFORE verification is ever reached;
+    // all this changes is that the execution reaper and the
+    // SUBMIT -> VERIFY -> RECONCILE pipeline can now genuinely confirm a
+    // listing's state instead of recording "cannot verify" as a failed
+    // verification.
+    verifyWrites: true,
     // Milestone: controlled Shopify publication (Phase 6). Confirmed by
     // inspection: this app's configured OAuth scopes are read_products/
     // read_orders/read_inventory/read_fulfillments only — write_products
@@ -310,6 +326,36 @@ interface ProductsQueryResult {
       }
     }[]
   }
+}
+
+/**
+ * Single-product read for write verification (Milestone: production
+ * autonomy proof). Deliberately requests the exact same fields as
+ * `PRODUCTS_QUERY` above so both go through the identical `mapListing`
+ * mapper — a verification that mapped status or price even slightly
+ * differently from the listing read would be able to disagree with itself.
+ *
+ * Needs only `read_products`, which this app is genuinely granted (verified
+ * against Shopify's own token response, not assumed from configuration), so
+ * this is implementable and testable today even though `write_products` is
+ * not granted and no write is possible.
+ */
+const PRODUCT_BY_ID_QUERY = `
+  query($id: ID!) {
+    shop { currencyCode }
+    product(id: $id) {
+      id
+      title
+      status
+      variants(first: 1) {
+        edges { node { id price inventoryQuantity } }
+      }
+    }
+  }
+`
+interface ProductByIdQueryResult {
+  shop: { currencyCode: string }
+  product: ProductsQueryResult['products']['edges'][number]['node'] | null
 }
 
 const PRODUCT_STATUS_MAP: Record<string, MarketplaceListingSnapshot['status']> = {
@@ -580,8 +626,28 @@ export class ShopifyConnector implements MarketplaceConnector {
     return err({ reason: 'not_supported', detail: 'Shopify listing-status writes are disabled for this phase (SHOPIFY_READ_ONLY).' })
   }
 
+  /**
+   * Reads one product back from Shopify so a write can be confirmed against
+   * the marketplace's own reported state rather than against the write
+   * call's acknowledgement.
+   *
+   * A `product` that resolves to `null` is a real, distinct answer — the
+   * listing does not exist (or is not visible to this app) — and is
+   * returned as an error rather than as an empty snapshot, so a caller can
+   * never read "nothing there" as "there and correct". Callers treat any
+   * error here as `uncertain`/failed verification, never as success.
+   */
   async verifyListingState(externalId: string): Promise<Result<MarketplaceListingSnapshot, string>> {
-    return err(`Shopify write verification is not implemented (capabilities.verifyWrites is false) — requested for "${externalId}".`)
+    const creds = credentials()
+    if (!creds) return err('Shopify is not configured.')
+
+    const result = await graphqlRequest<ProductByIdQueryResult>(creds, PRODUCT_BY_ID_QUERY, { id: externalId })
+    if (!result.ok) return result
+
+    const node = result.value.data.product
+    if (!node) return err(`Shopify returned no product for "${externalId}" — it does not exist, or this app cannot see it.`)
+
+    return ok(mapListing(node, result.value.data.shop.currencyCode))
   }
 
   /**
