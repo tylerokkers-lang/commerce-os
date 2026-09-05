@@ -4882,6 +4882,97 @@ export interface Database {
           },
         ]
       }
+      profitability_records: {
+        Row: {
+          id: string
+          org_id: string
+          product_id: string
+          channel: Database['public']['Enums']['channel_key']
+          verdict: Database['public']['Enums']['profitability_verdict']
+          failure_reasons: string[]
+          gross_margin_pct: number | null
+          net_margin_pct: number | null
+          min_gross_margin_pct: number | null
+          min_net_margin_pct: number | null
+          selling_price_minor: number | null
+          unit_cost_minor: number | null
+          shipping_cost_minor: number | null
+          currency: string | null
+          supplier_id: string | null
+          engine_version: string
+          assessed_at: string
+          assessed_by: Database['public']['Enums']['actor_type']
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          org_id: string
+          product_id: string
+          channel: Database['public']['Enums']['channel_key']
+          verdict?: Database['public']['Enums']['profitability_verdict']
+          failure_reasons?: string[]
+          gross_margin_pct?: number | null
+          net_margin_pct?: number | null
+          min_gross_margin_pct?: number | null
+          min_net_margin_pct?: number | null
+          selling_price_minor?: number | null
+          unit_cost_minor?: number | null
+          shipping_cost_minor?: number | null
+          currency?: string | null
+          supplier_id?: string | null
+          engine_version: string
+          assessed_at?: string
+          assessed_by?: Database['public']['Enums']['actor_type']
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          org_id?: string
+          product_id?: string
+          channel?: Database['public']['Enums']['channel_key']
+          verdict?: Database['public']['Enums']['profitability_verdict']
+          failure_reasons?: string[]
+          gross_margin_pct?: number | null
+          net_margin_pct?: number | null
+          min_gross_margin_pct?: number | null
+          min_net_margin_pct?: number | null
+          selling_price_minor?: number | null
+          unit_cost_minor?: number | null
+          shipping_cost_minor?: number | null
+          currency?: string | null
+          supplier_id?: string | null
+          engine_version?: string
+          assessed_at?: string
+          assessed_by?: Database['public']['Enums']['actor_type']
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'profitability_records_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organisations'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'profitability_records_product_id_fkey'
+            columns: ['product_id']
+            isOneToOne: false
+            referencedRelation: 'products'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'profitability_records_supplier_id_fkey'
+            columns: ['supplier_id']
+            isOneToOne: false
+            referencedRelation: 'suppliers'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       refunds: {
         Row: {
           id: string
@@ -6423,6 +6514,7 @@ export interface Database {
       product_decision: 'add' | 'block' | 'test' | 'watch' | 'hold' | 'remove' | 'review'
       product_recommendation: 'strong_candidate' | 'candidate' | 'review_required' | 'low_priority' | 'do_not_sell' | 'unconfigured'
       product_stage: 'discovered' | 'researching' | 'supplier_review' | 'compliance_review' | 'approved' | 'testing' | 'proven' | 'scaling' | 'mature' | 'declining' | 'rejected' | 'paused' | 'removed'
+      profitability_verdict: 'pass' | 'fail' | 'not_assessed'
       provider_source_type: 'official_api' | 'licensed_dataset' | 'permitted_public' | 'supplier_feed' | 'manual_entry' | 'simulated'
       provider_status: 'not_configured' | 'disabled' | 'ready' | 'healthy' | 'degraded' | 'failing' | 'rate_limited'
       refund_reason: 'customer_changed_mind' | 'damaged' | 'not_as_described' | 'not_delivered' | 'late_delivery' | 'faulty' | 'goodwill' | 'pricing_error' | 'other'

@@ -9,12 +9,13 @@ import {
   type ChannelProductFacts,
   type FactsLoader,
   type ProductFacts,
+  type LifecycleVerdictFacts,
   type ProductIntelligenceFacts,
   type SupplierFacts,
   type SupplierOperationalFacts,
 } from './factsTypes'
 
-export type { Fact, Freshness, ProductFacts, SupplierFacts, ChannelProductFacts, SupplierOperationalFacts, ProductIntelligenceFacts, FactsLoader } from './factsTypes'
+export type { Fact, Freshness, ProductFacts, SupplierFacts, ChannelProductFacts, SupplierOperationalFacts, ProductIntelligenceFacts, LifecycleVerdictFacts, FactsLoader } from './factsTypes'
 export { allFactsFresh, describeFactState, FRESHNESS_WINDOW_HOURS } from './factsTypes'
 
 /**
@@ -191,6 +192,45 @@ export function getSupabaseFactsLoader(): FactsLoader {
         productId,
         recommendation: factFrom(data?.recommendation ?? null, data?.computed_at ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
         recommendationReason: factFrom(data?.recommendation_reason ?? null, data?.computed_at ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
+      }
+    },
+
+    /**
+     * The persisted compliance and profitability verdicts for one
+     * (product, channel). Reads only — the verdicts themselves are written
+     * by `products/lifecycleFactRefresh.ts`, which is the single place
+     * either engine's result becomes durable.
+     *
+     * A missing row is `unavailable` (never assessed), never a fabricated
+     * `not_assessed` row, and never a pass.
+     */
+    async loadLifecycleVerdictFacts(orgId: string, productId: string, channel: string, now: Date = new Date()): Promise<LifecycleVerdictFacts> {
+      const supabase = createServiceSupabase()
+
+      const [{ data: complianceRow }, { data: profitabilityRow }] = await Promise.all([
+        supabase
+          .from('compliance_records')
+          .select('verdict, blocking_reasons, assessed_at')
+          .eq('org_id', orgId)
+          .eq('product_id', productId)
+          .eq('channel', channel as never)
+          .maybeSingle(),
+        supabase
+          .from('profitability_records')
+          .select('verdict, failure_reasons, assessed_at')
+          .eq('org_id', orgId)
+          .eq('product_id', productId)
+          .eq('channel', channel as never)
+          .maybeSingle(),
+      ])
+
+      return {
+        productId,
+        channel,
+        compliance: factFrom(complianceRow?.verdict ?? null, complianceRow?.assessed_at ?? null, FRESHNESS_WINDOW_HOURS.complianceVerdict, now),
+        profitability: factFrom(profitabilityRow?.verdict ?? null, profitabilityRow?.assessed_at ?? null, FRESHNESS_WINDOW_HOURS.profitabilityVerdict, now),
+        complianceBlockingReasons: complianceRow?.blocking_reasons ?? [],
+        profitabilityFailureReasons: profitabilityRow?.failure_reasons ?? [],
       }
     },
   }

@@ -1,4 +1,5 @@
 import type { Money } from '@/lib/core/money'
+import { MAX_ASSESSMENT_AGE_DAYS as MAX_COMPLIANCE_ASSESSMENT_AGE_DAYS } from '@/lib/orders/complianceRecheck'
 
 /**
  * The live data-assembly layer's shared types (Milestone 7 brief §3).
@@ -47,6 +48,18 @@ export const FRESHNESS_WINDOW_HOURS = {
   // becomes "no data" — shorter than that would flag every candidate as
   // stale on day one of this monitor existing.
   candidateIntelligence: 24 * 14,
+  // Milestone: continuous candidate lifecycle. Neither number is new:
+  // compliance reuses `decideComplianceRecheck`'s own long-established
+  // 90-day `MAX_ASSESSMENT_AGE_DAYS` (`orders/complianceRecheck.ts`), so
+  // there is exactly one compliance-staleness rule in the codebase rather
+  // than two that can drift apart. Profitability is deliberately pinned to
+  // `supplierPricing` above: a profitability verdict is only ever as fresh
+  // as the most volatile input it was computed from, and that is the
+  // supplier's unit cost — treating the verdict as fresher than its own
+  // inputs would be exactly the kind of quiet fabrication this model exists
+  // to prevent.
+  complianceVerdict: 24 * MAX_COMPLIANCE_ASSESSMENT_AGE_DAYS,
+  profitabilityVerdict: 24,
 } as const
 
 export interface ProductFacts {
@@ -113,12 +126,36 @@ export interface ProductIntelligenceFacts {
   recommendationReason: Fact<string>
 }
 
+/**
+ * The persisted compliance and profitability verdicts for one
+ * (product, channel), as current facts (Milestone: continuous candidate
+ * lifecycle).
+ *
+ * Both are genuinely three-state, and the three states are never collapsed:
+ * a `value` of `'pass'`/`'fail'` is what the real engine returned, while
+ * `'not_assessed'` — or a `freshness` of `unavailable`/`stale` — means the
+ * lifecycle gate does not know, which is never the same thing as a failure
+ * and absolutely never the same thing as a pass.
+ */
+export interface LifecycleVerdictFacts {
+  productId: string
+  channel: string
+  /** `'pass' | 'fail' | 'review_required' | 'not_assessed'` — `compliance_records.verdict`. */
+  compliance: Fact<string>
+  /** `'pass' | 'fail' | 'not_assessed'` — `profitability_records.verdict`. */
+  profitability: Fact<string>
+  /** Why the stored verdict is what it is, for the operator-facing reason string. Empty when it passed. */
+  complianceBlockingReasons: readonly string[]
+  profitabilityFailureReasons: readonly string[]
+}
+
 export interface FactsLoader {
   loadProductFacts(orgId: string, productId: string): Promise<ProductFacts>
   loadSupplierFactsForProduct(orgId: string, supplierId: string, productId: string): Promise<SupplierFacts>
   loadChannelProductFacts(orgId: string, channelProductId: string): Promise<ChannelProductFacts>
   loadSupplierOperationalFacts(orgId: string, supplierId: string): Promise<SupplierOperationalFacts>
   loadProductIntelligenceFacts(orgId: string, productId: string): Promise<ProductIntelligenceFacts>
+  loadLifecycleVerdictFacts(orgId: string, productId: string, channel: string): Promise<LifecycleVerdictFacts>
 }
 
 /** True only when every given fact is fresh — the automation engine's gate before acting on a batch of facts together. */

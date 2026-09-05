@@ -1,52 +1,46 @@
+import { AUTONOMOUS_STAGE_PATH } from '@/lib/products/candidateGateState'
 import type { Monitor, MonitorContext, MonitorRunOutcome } from '../eventTypes'
 import type { ProductStage } from '@/lib/core/domain'
 
 /**
- * Candidate intelligence monitoring (Milestone: autonomous decision &
- * capability layer, closing the read-only audit's central finding: every
- * pre-launch candidate's score/recommendation is computed exactly once, at
- * import time, and never again until a human clicks "recalculate"
- * (`products/actions.ts`) — there was no continuous "REFRESH STALE FACTS" /
- * "SCORE OPPORTUNITIES" step for the discovery domain at all, unlike every
- * post-listing domain (supplier, profitability, compliance, marketplace).
+ * Candidate lifecycle monitoring (Milestone: autonomous decision &
+ * capability layer, extended by: continuous candidate lifecycle).
  *
- * This monitor does not recompute anything itself — `computeProductIntelligence`
- * (`products/intelligence/assemble.ts`) stays exactly what it always was: a
- * human-triggered, `server-only` engine. This only reads the LAST-PERSISTED
- * verdict via `ctx.facts.loadProductIntelligenceFacts` (real, freshness-aware,
- * satisfies the same `FactsLoader` interface every other monitor already
- * uses) and reacts to two, and only two, real facts:
+ * The gap this closes: every post-listing domain (supplier, profitability,
+ * compliance, marketplace) already had a monitor, but a pre-launch
+ * candidate had none — its score was computed once at import and it then
+ * sat at `discovered` forever, because nothing ever looked at it again.
  *
- *   1. The candidate's intelligence has gone stale (never recomputed inside
- *      the configured window) — worth telling a human to re-run it.
- *   2. The candidate is still sitting at `discovered` despite having a
- *      genuinely fresh score on file — eligible for the one, single,
- *      completely ungated lifecycle transition (`lifecycle.ts`'s own
- *      `ALLOWED` graph has zero gate conditions for `researching` as a
- *      target), so it is worth automatically advancing rather than leaving
- *      every real candidate stuck at `discovered` forever.
+ * This monitor observes and never acts, exactly like every other one. It
+ * decides only whether a candidate is *worth re-evaluating* right now, and
+ * enqueues `candidate_lifecycle_review` if so. Every actual decision — what
+ * the gate state is, which transition (if any) is warranted, what to
+ * recheck — belongs to that job, which re-reads the facts itself at
+ * execution time.
  *
- * Deliberately does NOT attempt to auto-advance past `researching` —
- * `supplier_review`/`compliance_review`/`approved`/`testing` all have real
- * gate conditions (`lifecycle.ts`'s `checkGates`) that need per-channel
- * compliance-pass and profitability-pass booleans nothing in this codebase
- * exposes as an independently-queryable, already-computed fact yet (only as
- * values transiently produced inside `product_compliance_recheck`/
- * `product_profitability_recheck` job runs). Building that GateState
- * assembly without a real, tested source for those two booleans would be
- * exactly the "fake automation" the brief prohibits — left as a documented,
- * scoped follow-up, not attempted here.
+ * "Worth re-evaluating" is deliberately broad: any candidate still on the
+ * autonomous pre-launch path is a candidate whose facts may have changed
+ * since the last cycle. What stops this from producing an endless stream of
+ * duplicate work is the dedupe key, not a narrow trigger condition — it is
+ * keyed on the facts that would change the answer (stage plus the freshness
+ * anchor of the intelligence), so an unchanged candidate produces exactly
+ * one event no matter how many cycles run, and a candidate whose facts have
+ * genuinely moved produces exactly one more.
  */
 
 export interface CandidateIntelligenceSubject {
   productId: string
   stage: ProductStage
+  /** The channel whose persisted verdicts gate this candidate. */
+  channel: string
+  /** The supplier recorded as fulfilling it, when there is one. `null` leaves the supplier gates UNKNOWN rather than assumed. */
+  supplierId: string | null
 }
 
 const MONITOR_KEY = 'candidate_intelligence'
 
 export const candidateIntelligenceMonitor: Monitor<CandidateIntelligenceSubject> = {
-  descriptor: { key: MONITOR_KEY, label: 'Candidate intelligence', category: 'discovery', defaultIntervalMinutes: 24 * 60 },
+  descriptor: { key: MONITOR_KEY, label: 'Candidate lifecycle', category: 'discovery', defaultIntervalMinutes: 24 * 60 },
 
   async run(ctx: MonitorContext, subjects: readonly CandidateIntelligenceSubject[]): Promise<MonitorRunOutcome> {
     const errors: string[] = []
@@ -55,16 +49,19 @@ export const candidateIntelligenceMonitor: Monitor<CandidateIntelligenceSubject>
 
     for (const subject of subjects) {
       try {
+        // A candidate that has left the pre-launch path (already trading,
+        // rejected, removed, paused) is a safe no-op — never an attempted
+        // invalid transition. `AUTONOMOUS_STAGE_PATH` is the single source
+        // of truth for which stages this loop covers.
+        if (!AUTONOMOUS_STAGE_PATH[subject.stage]) continue
+
         const intel = await ctx.facts.loadProductIntelligenceFacts(ctx.orgId, subject.productId)
 
-        // Never computed at all: not this monitor's job to force one — the
-        // real trigger (import, or a human clicking "recalculate") has
-        // simply not happened yet. "Unknown" stays unknown, never guessed.
+        // Never scored at all: nothing in this system can compute a first
+        // score on its own (that is a human-triggered engine), so there is
+        // no useful review to enqueue and nothing to say that a stale-facts
+        // notification would not repeat every cycle.
         if (intel.recommendation.freshness === 'unavailable') continue
-
-        const isStale = intel.recommendation.freshness === 'stale'
-        const readyToAdvance = !isStale && subject.stage === 'discovered'
-        if (!isStale && !readyToAdvance) continue // Fresh, and already past `discovered` — nothing due.
 
         const result = await ctx.events.createEvent({
           orgId: ctx.orgId,
@@ -72,12 +69,22 @@ export const candidateIntelligenceMonitor: Monitor<CandidateIntelligenceSubject>
           subjectType: 'product',
           subjectId: subject.productId,
           source: 'internal',
-          severity: isStale ? 'warning' : 'info',
-          facts: { stage: subject.stage, recommendation: intel.recommendation.value, recommendationAsOf: intel.recommendation.asOf, isStale },
-          // Keyed on the actual computed_at, matching every other monitor's
-          // dedup discipline: a NEW staleness/readiness fact at a new
-          // computed_at is a fresh condition, not a repeat of the last one.
-          dedupeKey: `candidate-review:${subject.productId}:${intel.recommendation.asOf ?? 'never'}`,
+          severity: 'info',
+          facts: {
+            stage: subject.stage,
+            channel: subject.channel,
+            recommendation: intel.recommendation.value,
+            recommendationAsOf: intel.recommendation.asOf,
+            freshness: intel.recommendation.freshness,
+          },
+          // Keyed on everything that would change the review's answer: the
+          // stage it is being reviewed from, and the intelligence's own
+          // freshness anchor. An unchanged candidate therefore dedupes
+          // across every subsequent cycle; a candidate that has just
+          // advanced, or been re-scored, is a genuinely new condition and
+          // gets exactly one new review. This is what makes the loop
+          // continuous without being repetitive.
+          dedupeKey: `candidate-review:${subject.productId}:${subject.channel}:${subject.stage}:${intel.recommendation.asOf ?? 'never'}`,
         })
 
         if (!result.deduplicated) {
@@ -85,7 +92,7 @@ export const candidateIntelligenceMonitor: Monitor<CandidateIntelligenceSubject>
           await ctx.store.enqueueJob({
             orgId: ctx.orgId,
             jobType: 'candidate_lifecycle_review',
-            payload: { productId: subject.productId, stage: subject.stage },
+            payload: { productId: subject.productId, channel: subject.channel, supplierId: subject.supplierId },
             idempotencyKey: `event:${result.id}`,
             correlationId: result.id,
           })

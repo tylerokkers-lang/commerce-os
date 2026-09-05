@@ -1,4 +1,4 @@
-import { factFrom, FRESHNESS_WINDOW_HOURS, type ChannelProductFacts, type FactsLoader, type ProductFacts, type ProductIntelligenceFacts, type SupplierFacts, type SupplierOperationalFacts } from './factsTypes'
+import { factFrom, FRESHNESS_WINDOW_HOURS, type ChannelProductFacts, type FactsLoader, type LifecycleVerdictFacts, type ProductFacts, type ProductIntelligenceFacts, type SupplierFacts, type SupplierOperationalFacts } from './factsTypes'
 import type { Money } from '@/lib/core/money'
 
 /**
@@ -57,6 +57,16 @@ export interface SeedProductIntelligence {
   computedAt: string | null
 }
 
+/** Milestone: continuous candidate lifecycle. Key: `${productId}:${channel}`. Omit entirely for "never assessed" — never seed a `not_assessed` row to mean the same thing, since the two are genuinely different facts. */
+export interface SeedLifecycleVerdicts {
+  complianceVerdict?: string
+  complianceAssessedAt?: string | null
+  complianceBlockingReasons?: readonly string[]
+  profitabilityVerdict?: string
+  profitabilityAssessedAt?: string | null
+  profitabilityFailureReasons?: readonly string[]
+}
+
 export function createInMemoryFactsLoader(seed?: {
   products?: Record<string, SeedProduct>
   suppliers?: Record<string, SeedSupplier>
@@ -64,6 +74,7 @@ export function createInMemoryFactsLoader(seed?: {
   channelProducts?: Record<string, SeedChannelProduct>
   supplierOperations?: Record<string, SeedSupplierOperations> // key: supplierId
   productIntelligence?: Record<string, SeedProductIntelligence> // key: productId
+  lifecycleVerdicts?: Record<string, SeedLifecycleVerdicts> // key: `${productId}:${channel}`
 }): FactsLoader {
   const products = seed?.products ?? {}
   const suppliers = seed?.suppliers ?? {}
@@ -71,6 +82,7 @@ export function createInMemoryFactsLoader(seed?: {
   const channelProducts = seed?.channelProducts ?? {}
   const supplierOperations = seed?.supplierOperations ?? {}
   const productIntelligence = seed?.productIntelligence ?? {}
+  const lifecycleVerdicts = seed?.lifecycleVerdicts ?? {}
 
   return {
     async loadProductFacts(_orgId: string, productId: string, now: Date = new Date()): Promise<ProductFacts> {
@@ -129,6 +141,18 @@ export function createInMemoryFactsLoader(seed?: {
         productId,
         recommendation: factFrom(intel?.recommendation ?? null, intel?.computedAt ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
         recommendationReason: factFrom(intel?.recommendationReason ?? null, intel?.computedAt ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
+      }
+    },
+
+    async loadLifecycleVerdictFacts(_orgId: string, productId: string, channel: string, now: Date = new Date()): Promise<LifecycleVerdictFacts> {
+      const seeded = lifecycleVerdicts[`${productId}:${channel}`]
+      return {
+        productId,
+        channel,
+        compliance: factFrom(seeded?.complianceVerdict ?? null, seeded?.complianceAssessedAt ?? null, FRESHNESS_WINDOW_HOURS.complianceVerdict, now),
+        profitability: factFrom(seeded?.profitabilityVerdict ?? null, seeded?.profitabilityAssessedAt ?? null, FRESHNESS_WINDOW_HOURS.profitabilityVerdict, now),
+        complianceBlockingReasons: seeded?.complianceBlockingReasons ?? [],
+        profitabilityFailureReasons: seeded?.profitabilityFailureReasons ?? [],
       }
     },
   }

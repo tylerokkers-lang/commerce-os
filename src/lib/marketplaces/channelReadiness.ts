@@ -38,6 +38,18 @@ import type { ChannelKey, ProductDecision, ProductStage } from '@/lib/core/domai
  * connector work applied.
  */
 
+/**
+ * Milestone: continuous candidate lifecycle. Every query in this module
+ * already filters `org_id` explicitly (never relying on RLS alone for its
+ * scoping), so the same code is safe to run either as the signed-in user
+ * (`createServerSupabase`, the original and still-default behaviour for
+ * every page/action caller) or as the service role from a background job
+ * that has no session at all. Injecting the client is what makes the
+ * compliance/profitability assembly reachable from automation without
+ * duplicating a single line of it.
+ */
+export type ReadinessClient = Awaited<ReturnType<typeof createServerSupabase>>
+
 interface SupplierRow {
   country: string | null
   platform: string | null
@@ -51,8 +63,7 @@ interface SupplierRow {
   name: string
 }
 
-async function loadSupplier(orgId: string, supplierId: string): Promise<SupplierRow | null> {
-  const supabase = await createServerSupabase()
+async function loadSupplier(supabase: ReadinessClient, orgId: string, supplierId: string): Promise<SupplierRow | null> {
   const { data } = await supabase
     .from('suppliers')
     .select('name, country, platform, supports_blind_shipping, supports_custom_packaging, supports_custom_invoice, provides_tracking, handles_returns, typical_delivery_days_min, typical_delivery_days_max')
@@ -62,8 +73,7 @@ async function loadSupplier(orgId: string, supplierId: string): Promise<Supplier
   return data
 }
 
-async function loadSupplierOffer(orgId: string, supplierId: string, productId: string) {
-  const supabase = await createServerSupabase()
+async function loadSupplierOffer(supabase: ReadinessClient, orgId: string, supplierId: string, productId: string) {
   const { data } = await supabase
     .from('supplier_products')
     .select('unit_cost_minor, shipping_cost_minor, currency')
@@ -103,16 +113,14 @@ const COMPLIANCE_DATA_CAVEATS: readonly string[] = [
 ]
 
 async function loadComplianceContext(
+  supabase: ReadinessClient,
   orgId: string,
   productId: string,
-  supplierId: string | null,
   supplier: SupplierRow | null,
   supplierCapability: ReturnType<typeof assessShopifyCapability> | null,
   offer: { unit_cost_minor: number } | null,
   priceMinor: number | null,
 ): Promise<ComplianceContext | null> {
-  const supabase = await createServerSupabase()
-
   const { data: product } = await supabase
     .from('products')
     .select('title, description, category, brand')
@@ -173,11 +181,37 @@ async function loadComplianceContext(
   }
 }
 
+/**
+ * The profitability verdict as a real three-state fact (Milestone:
+ * continuous candidate lifecycle). `ProfitabilityGate` itself is a boolean
+ * — correct for its own purpose, but structurally unable to distinguish
+ * "calculated, and it failed" from "could not be calculated at all" (no
+ * price on file, no supplier cost, eBay's fee schedule unwired). The
+ * lifecycle gate must never read the second as the first, so this carries
+ * both the verdict and the inputs it was computed from.
+ */
+export interface ChannelProfitabilityVerdict {
+  verdict: 'pass' | 'fail' | 'not_assessed'
+  grossMarginPct: number | null
+  netMarginPct: number | null
+  failureReasons: readonly string[]
+  minGrossMarginPct: number | null
+  minNetMarginPct: number | null
+  sellingPriceMinor: number | null
+  unitCostMinor: number | null
+  shippingCostMinor: number | null
+  currency: string | null
+}
+
 export interface ChannelReadinessResult {
   readiness: PublicationDecision
   compliance: ComplianceAssessment | null
   /** Present only when a compliance assessment was actually computed — explains what it could not check and why. */
   complianceCaveats: readonly string[]
+  /** Milestone: continuous candidate lifecycle — the same profitability result the gate above consumed, kept in full so it can be persisted as a current fact rather than recomputed. */
+  profitability: ChannelProfitabilityVerdict
+  /** The supplier whose economics `profitability` describes; `null` when no fulfilment supplier is on file for this channel. */
+  supplierId: string | null
 }
 
 export async function getChannelReadiness(
@@ -186,8 +220,9 @@ export async function getChannelReadiness(
   channel: ChannelKey,
   productStage: ProductStage,
   productDecision: ProductDecision,
+  client?: ReadinessClient,
 ): Promise<ChannelReadinessResult> {
-  const supabase = await createServerSupabase()
+  const supabase = client ?? (await createServerSupabase())
 
   const { data: channelDecisionRow } = await supabase
     .from('channel_product_decisions')
@@ -218,12 +253,22 @@ export async function getChannelReadiness(
     }
   }
 
-  const supplier = supplierId ? await loadSupplier(orgId, supplierId) : null
-  const offer = supplierId ? await loadSupplierOffer(orgId, supplierId, productId) : null
+  const supplier = supplierId ? await loadSupplier(supabase, orgId, supplierId) : null
+  const offer = supplierId ? await loadSupplierOffer(supabase, orgId, supplierId, productId) : null
   const supplierCapability = supplier ? assessSupplierCapability(channel, supplier) : null
 
-  let profitabilityGatePasses = false
-  let profitabilityFailureReason: string | null = 'Not assessed — no listing price and/or no supplier cost is on file for this channel yet.'
+  const profitability: ChannelProfitabilityVerdict = {
+    verdict: 'not_assessed',
+    grossMarginPct: null,
+    netMarginPct: null,
+    failureReasons: ['Not assessed — no listing price and/or no supplier cost is on file for this channel yet.'],
+    minGrossMarginPct: null,
+    minNetMarginPct: null,
+    sellingPriceMinor: priceMinor,
+    unitCostMinor: offer?.unit_cost_minor ?? null,
+    shippingCostMinor: offer?.shipping_cost_minor ?? null,
+    currency: offer ? currency : null,
+  }
 
   if (priceMinor !== null && offer && (channel === 'shopify' || channel === 'amazon_uk')) {
     const sellingPrice = money(priceMinor, currency as never)
@@ -242,15 +287,29 @@ export async function getChannelReadiness(
         adSpendPerUnit: profile.adSpendPerUnit,
         vatRatePct: 0,
       })
-      const gate = assessProfitabilityGate(result, { minGrossMarginPct: 0, minNetMarginPct: settings.minNetMarginPct })
-      profitabilityGatePasses = gate.passes
-      profitabilityFailureReason = gate.passes ? null : gate.failures.join(' ')
+      const thresholds = { minGrossMarginPct: 0, minNetMarginPct: settings.minNetMarginPct }
+      const gate = assessProfitabilityGate(result, thresholds)
+      profitability.verdict = gate.passes ? 'pass' : 'fail'
+      profitability.grossMarginPct = result.grossMarginPct
+      profitability.netMarginPct = result.netMarginPct
+      profitability.failureReasons = gate.passes ? [] : gate.failures
+      profitability.minGrossMarginPct = thresholds.minGrossMarginPct
+      profitability.minNetMarginPct = thresholds.minNetMarginPct
+      profitability.currency = currency
     }
   } else if (channel === 'ebay') {
-    profitabilityFailureReason = 'Not assessed — eBay\'s real UK fee schedule is not yet wired into the profitability engine (unverified against official documentation).'
+    profitability.failureReasons = ['Not assessed — eBay\'s real UK fee schedule is not yet wired into the profitability engine (unverified against official documentation).']
   }
 
-  const complianceContext = await loadComplianceContext(orgId, productId, supplierId, supplier, supplierCapability, offer, priceMinor)
+  // The gate's own input stays a boolean, exactly as before: `not_assessed`
+  // is passed as `false` with its reason intact, which
+  // `assessPublicationReadiness` already treats as an unmet requirement —
+  // never as a pass. The tri-state distinction is preserved separately, in
+  // `profitability`, for the lifecycle gate and for persistence.
+  const profitabilityGatePasses = profitability.verdict === 'pass'
+  const profitabilityFailureReason = profitability.verdict === 'pass' ? null : profitability.failureReasons.join(' ')
+
+  const complianceContext = await loadComplianceContext(supabase, orgId, productId, supplier, supplierCapability, offer, priceMinor)
   const compliance = complianceContext ? assessCompliance(channel, complianceContext) : null
 
   const automationLevel = (await getAutomationSettingsForOrg(orgId)).automationLevel
@@ -267,5 +326,5 @@ export async function getChannelReadiness(
     automationLevel,
   })
 
-  return { readiness, compliance, complianceCaveats: compliance ? COMPLIANCE_DATA_CAVEATS : [] }
+  return { readiness, compliance, complianceCaveats: compliance ? COMPLIANCE_DATA_CAVEATS : [], profitability, supplierId }
 }

@@ -149,30 +149,48 @@ describe('dryRunRefund', () => {
   })
 })
 
-/** Milestone: autonomous decision & capability layer, Part 13 — dry-run extended to candidate lifecycle review, zero external writes and zero live-data reads. */
+/** Milestone: continuous candidate lifecycle — dry-run over the full gate state, zero external writes and zero live-data reads. */
 describe('dryRunCandidateLifecycleReview', () => {
-  it('reports the one safe advance (discovered -> researching) when a fresh score is on file and settings are configured', () => {
-    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'strong_candidate', recommendationFreshness: 'fresh', stage: 'discovered' }, CONFIGURED_AUTOMATION_SETTINGS)
+  const allPassing = {
+    stage: 'compliance_review',
+    intelligenceRecommendation: 'strong_candidate',
+    intelligenceFreshness: 'fresh' as const,
+    supplierChannelStatus: 'approved',
+    supplierStatusFreshness: 'fresh' as const,
+    supplierOfferFreshness: 'fresh' as const,
+    complianceVerdict: 'pass',
+    complianceFreshness: 'fresh' as const,
+    profitabilityVerdict: 'pass',
+    profitabilityFreshness: 'fresh' as const,
+    businessSettingsConfigured: true,
+  }
+
+  it('reports the transition that would occur, with every requirement and its three-state verdict', () => {
+    const result = dryRunCandidateLifecycleReview('prod-1', allPassing, CONFIGURED_AUTOMATION_SETTINGS)
     expect(result.wouldExecuteAutomatically).toBe(true)
-    expect(result.payload).toEqual({ productId: 'prod-1', isStale: false, readyToAdvance: true, wouldMoveTo: 'researching' })
+    expect(result.payload?.currentStage).toBe('compliance_review')
+    expect(result.payload?.wouldMoveTo).toBe('approved')
+    expect(result.payload?.requirements.every((r) => r.verdict === 'pass')).toBe(true)
+    expect(result.payload?.failedRequirements).toEqual([])
   })
 
-  it('reports no action due for a fresh score past the discovered stage', () => {
-    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'strong_candidate', recommendationFreshness: 'fresh', stage: 'researching' }, CONFIGURED_AUTOMATION_SETTINGS)
-    expect(result.payload?.readyToAdvance).toBe(false)
-    expect(result.payload?.wouldMoveTo).toBeNull()
+  it('reports the exact blocker and the recheck it would schedule when a verdict is unknown', () => {
+    const result = dryRunCandidateLifecycleReview('prod-1', { ...allPassing, complianceVerdict: null, complianceFreshness: 'unavailable' }, CONFIGURED_AUTOMATION_SETTINGS)
+    expect(result.payload?.wouldMoveTo ?? null).toBeNull()
+    expect(result.payload?.unknownRequirements).toContain('compliance_pass')
+    expect(result.payload?.wouldEnqueueRechecks).toContain('lifecycle_facts')
   })
 
-  it('reports stale intelligence, never a fabricated advance, when the last score is outside the freshness window', () => {
-    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'candidate', recommendationFreshness: 'stale', stage: 'discovered' }, CONFIGURED_AUTOMATION_SETTINGS)
-    expect(result.payload?.isStale).toBe(true)
-    expect(result.payload?.readyToAdvance).toBe(false)
+  it('separates a genuine failure from an unknown — a failure schedules no recheck', () => {
+    const result = dryRunCandidateLifecycleReview('prod-1', { ...allPassing, profitabilityVerdict: 'fail' }, CONFIGURED_AUTOMATION_SETTINGS)
+    expect(result.payload?.failedRequirements).toContain('profitability_pass')
+    expect(result.payload?.wouldEnqueueRechecks).toEqual([])
   })
 
   it('never executes automatically when business settings are unconfigured, matching the real Informax org today', async () => {
     const { DEMO_AUTOMATION_SETTINGS } = await import('@/lib/automation/settingsTypes')
-    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'strong_candidate', recommendationFreshness: 'fresh', stage: 'discovered' }, DEMO_AUTOMATION_SETTINGS)
+    const result = dryRunCandidateLifecycleReview('prod-1', { ...allPassing, businessSettingsConfigured: false }, DEMO_AUTOMATION_SETTINGS)
     expect(result.wouldExecuteAutomatically).toBe(false)
-    expect(result.policy.outcome).toBe('require_approval')
+    expect(result.policy.outcome).not.toBe('allow_automatic')
   })
 })

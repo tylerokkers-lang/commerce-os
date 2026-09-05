@@ -12,6 +12,9 @@ import { runAdvertisingSync } from '@/lib/advertising/sync'
 import { advertisingConnectorByKey } from '@/lib/advertising/connectors/registry'
 import { runCampaignReview } from '@/lib/advertising/monitor'
 import type { AdvertisingHandlerDeps } from './handlers/advertisingHandlers'
+import type { LifecycleHandlerDeps } from './handlers/productHandlers'
+import { refreshCandidateLifecycleFacts } from '@/lib/products/lifecycleFactRefresh'
+import type { ChannelKey } from '@/lib/core/domain'
 
 /**
  * The one, self-contained job-queue batch runner (Phase 15). Builds the
@@ -52,5 +55,17 @@ export async function runScheduledJobBatch(maxJobs = 25): Promise<WorkerBatchRes
     },
   }
 
-  return runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), maxJobs, marketDeps, advertisingDeps)
+  // Milestone: continuous candidate lifecycle. Injected for the same
+  // reason as `advertisingDeps` above — `refreshCandidateLifecycleFacts` is
+  // `server-only`, so the handler that needs it takes it as a dependency
+  // rather than importing it and dragging Supabase into every test that
+  // imports the worker.
+  const lifecycleDeps: LifecycleHandlerDeps = {
+    async refreshLifecycleFacts(orgId, productId, channel) {
+      const result = await refreshCandidateLifecycleFacts(orgId, productId, channel as ChannelKey)
+      return result.ok ? { ok: true } : { ok: false, error: result.error }
+    },
+  }
+
+  return runWorkerBatch(getSupabaseAutomationStore(), getSupabaseFactsLoader(), getMarketplaceConnector, randomUUID(), maxJobs, marketDeps, advertisingDeps, lifecycleDeps)
 }

@@ -101,9 +101,18 @@ export function dryRunRefund(input: RefundAutomationInput, automationLevel: Auto
 
 export interface CandidateLifecycleReviewDryRunPayload {
   productId: string
-  isStale: boolean
-  readyToAdvance: boolean
+  /** The stage the candidate is at right now. */
+  currentStage: string | null
+  /** The stage it would move to, or `null` when nothing would move. */
   wouldMoveTo: string | null
+  /** Every lifecycle requirement with its real three-state verdict. */
+  requirements: readonly { key: string; verdict: string; detail: string }[]
+  /** Requirements that are genuinely unknown — each is a recheck, not a rejection. */
+  unknownRequirements: readonly string[]
+  /** Requirements that genuinely failed. */
+  failedRequirements: readonly string[]
+  /** The rechecks this review would schedule to resolve the unknowns. */
+  wouldEnqueueRechecks: readonly string[]
 }
 
 /**
@@ -115,12 +124,28 @@ export interface CandidateLifecycleReviewDryRunPayload {
  */
 export function dryRunCandidateLifecycleReview(productId: string, input: CandidateLifecycleReviewInput, settings: AutomationSettings): DryRunResult<CandidateLifecycleReviewDryRunPayload> {
   const assessment = assessCandidateLifecycleReview(input, settings)
-  return buildResult(assessment.policy, {
-    productId,
-    isStale: assessment.isStale,
-    readyToAdvance: assessment.readyToAdvance,
-    wouldMoveTo: assessment.readyToAdvance ? 'researching' : null,
-  })
+  const base = buildResult(assessment.policy, null)
+
+  // Deliberately NOT `buildResult`'s own payload handling. Everywhere else
+  // the payload is "what would be sent to an external system", so blanking
+  // it on a block is right — there is nothing that would be sent. Here the
+  // payload IS the diagnosis (which requirement is unknown, which failed,
+  // what would be rechecked), and a dry run is at its most useful exactly
+  // when the answer is "this would not execute, and here is why". So it
+  // survives a block; `wouldMoveTo` still reflects only what a real
+  // execution would genuinely do, which is `null` whenever it is blocked.
+  return {
+    ...base,
+    payload: {
+      productId,
+      currentStage: assessment.gateState.stage,
+      wouldMoveTo: assessment.policy.outcome === 'allow_automatic' ? assessment.advance.to : null,
+      requirements: assessment.gateState.requirements.map((r) => ({ key: r.key, verdict: r.verdict, detail: r.detail })),
+      unknownRequirements: assessment.gateState.unknownKeys,
+      failedRequirements: assessment.gateState.failedKeys,
+      wouldEnqueueRechecks: assessment.rechecks,
+    },
+  }
 }
 
 export { buildResult as buildDryRunResult, describeExpectedResult }

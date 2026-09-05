@@ -29,8 +29,13 @@ export interface ComplianceRecheckDecision {
   reason: string
 }
 
-/** Compliance is never trusted indefinitely; a stale assessment is worth confirming even with no other change. */
-const MAX_ASSESSMENT_AGE_DAYS = 90
+/**
+ * Compliance is never trusted indefinitely; a stale assessment is worth
+ * confirming even with no other change. Exported (Milestone: continuous
+ * candidate lifecycle) so the persisted-verdict freshness window is this
+ * exact number rather than a second, independently-drifting one.
+ */
+export const MAX_ASSESSMENT_AGE_DAYS = 90
 
 export function decideComplianceRecheck(context: ComplianceRecheckContext): ComplianceRecheckDecision {
   if (context.fulfillingSupplierId === null) {

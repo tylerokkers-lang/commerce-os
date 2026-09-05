@@ -7,6 +7,8 @@ import {
   handleProductResume,
   handleProductPriceReview,
   handleCandidateLifecycleReview,
+  handleCandidateFactsRefresh,
+  type LifecycleHandlerDeps,
 } from './handlers/productHandlers'
 import {
   handleMarketplaceListingSync,
@@ -59,9 +61,11 @@ export interface JobHandlerResult {
  * assignable to a type expecting more, so none of the 14 existing handlers
  * needed to change. Only `handleMarketRecheck`/`handleFxRecheck` read it.
  * `advertisingDeps` (Milestone 15) is the 6th, added the same way — only
- * `handleAdvertisingSync` reads it.
+ * `handleAdvertisingSync` reads it. `lifecycleDeps` (Milestone: continuous
+ * candidate lifecycle) is the 7th, for the same reason again — only
+ * `handleCandidateFactsRefresh` reads it.
  */
-export type JobHandler = (job: JobRecord, store: AutomationStore, facts: FactsLoader, connectors: ConnectorLookup, marketDeps?: MarketHandlerDeps, advertisingDeps?: AdvertisingHandlerDeps) => Promise<JobHandlerResult>
+export type JobHandler = (job: JobRecord, store: AutomationStore, facts: FactsLoader, connectors: ConnectorLookup, marketDeps?: MarketHandlerDeps, advertisingDeps?: AdvertisingHandlerDeps, lifecycleDeps?: LifecycleHandlerDeps) => Promise<JobHandlerResult>
 
 /**
  * The job-handler registry (Milestone 7 brief §2). Every handler orchestrates
@@ -97,6 +101,7 @@ export const HANDLERS: Record<string, JobHandler> = {
   advertising_campaign_action: handleAdvertisingCampaignAction,
   advertising_campaign_review: handleAdvertisingCampaignReview,
   candidate_lifecycle_review: handleCandidateLifecycleReview,
+  candidate_facts_refresh: handleCandidateFactsRefresh,
 }
 
 export interface WorkerBatchResult {
@@ -114,6 +119,7 @@ export async function runWorkerBatch(
   maxJobs = 10,
   marketDeps?: MarketHandlerDeps,
   advertisingDeps?: AdvertisingHandlerDeps,
+  lifecycleDeps?: LifecycleHandlerDeps,
 ): Promise<WorkerBatchResult> {
   const result: WorkerBatchResult = { claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 }
 
@@ -124,7 +130,7 @@ export async function runWorkerBatch(
 
     const handler = HANDLERS[job.jobType]
     const outcome: JobHandlerResult = handler
-      ? await handler(job, store, facts, connectors, marketDeps, advertisingDeps).catch((error) => ({
+      ? await handler(job, store, facts, connectors, marketDeps, advertisingDeps, lifecycleDeps).catch((error) => ({
           succeeded: false,
           error: error instanceof Error ? error.message : String(error),
           retryable: true,

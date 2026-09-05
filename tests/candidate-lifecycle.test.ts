@@ -8,249 +8,479 @@ import { createInMemoryEventStore } from '@/lib/monitoring/inMemoryEventStore'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
 import { runWorkerBatch } from '@/lib/automation/worker'
+import { dryRunCandidateLifecycleReview } from '@/lib/automation/dryRun'
+import { assembleCandidateGateState, planCandidateAdvance } from '@/lib/products/candidateGateState'
 import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import { CONFIGURED_AUTOMATION_SETTINGS } from './helpers/automationSettings'
+import { fromMajor } from '@/lib/core/money'
+import type { LifecycleHandlerDeps } from '@/lib/automation/handlers/productHandlers'
 import type { MonitorContext } from '@/lib/monitoring/eventTypes'
+import type { AutomationSettings } from '@/lib/automation/settingsTypes'
 
-const ORG_A = 'org-a'
-const PRODUCT_ID = 'prod-1'
+const ORG = 'org-a'
+const PRODUCT = 'prod-1'
+const SUPPLIER = 'sup-1'
+const CHANNEL = 'shopify'
 
 /**
- * Milestone: autonomous decision & capability layer — closing the read-only
- * audit's central finding (no pre-listing candidate was ever continuously
- * monitored; scoring only ever happened once, at import). Covers the new
- * `candidateIntelligenceMonitor` (detection) and `handleCandidateLifecycleReview`
- * (the one safe, ungated `discovered` -> `researching` auto-advance) end to
- * end through the real `automation_jobs` queue and worker, exactly like
- * every other monitor -> job -> handler chain already proven in this
- * codebase.
+ * Milestone: continuous candidate lifecycle.
+ *
+ * Drives the whole loop through its real entry points — the real monitor,
+ * the real `automation_jobs` queue, the real `runWorkerBatch`, the real
+ * `lifecycle.ts` transition rules and the real policy engine — against the
+ * in-memory store and facts loader, which are genuine implementations of
+ * the same interfaces production uses, never mocks of the decision itself.
  */
 
-function makeStore(settings = CONFIGURED_AUTOMATION_SETTINGS) {
-  return createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: settings } })
+const NOW = new Date('2026-09-06T12:00:00Z')
+const FRESH = NOW.toISOString()
+const LONG_AGO = new Date(NOW.getTime() - 1000 * 60 * 60 * 24 * 120).toISOString() // 120 days: stale for every window in play.
+
+interface FactOverrides {
+  stage?: string
+  recommendation?: string
+  intelligenceComputedAt?: string | null
+  supplierStatus?: string
+  supplierAssessedAt?: string | null
+  offerVerifiedAt?: string | null
+  complianceVerdict?: string
+  complianceAssessedAt?: string | null
+  profitabilityVerdict?: string
+  profitabilityAssessedAt?: string | null
+  /** Omit the compliance/profitability rows entirely — "never assessed", genuinely different from `not_assessed`. */
+  omitVerdicts?: boolean
 }
 
-describe('candidateIntelligenceMonitor', () => {
-  it('never computed at all: no event, no job — this monitor never forces a first score', async () => {
-    const store = makeStore()
-    const events = createInMemoryEventStore()
-    const facts = createInMemoryFactsLoader() // No seeded productIntelligence for PRODUCT_ID.
-    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: CONFIGURED_AUTOMATION_SETTINGS, now: new Date() }
-    const subject: CandidateIntelligenceSubject = { productId: PRODUCT_ID, stage: 'discovered' }
+/** Everything fresh and passing, unless a test overrides one specific fact. */
+function facts(overrides: FactOverrides = {}) {
+  const {
+    stage = 'compliance_review',
+    recommendation = 'strong_candidate',
+    intelligenceComputedAt = FRESH,
+    supplierStatus = 'approved',
+    supplierAssessedAt = FRESH,
+    offerVerifiedAt = FRESH,
+    complianceVerdict = 'pass',
+    complianceAssessedAt = FRESH,
+    profitabilityVerdict = 'pass',
+    profitabilityAssessedAt = FRESH,
+    omitVerdicts = false,
+  } = overrides
 
-    const outcome = await candidateIntelligenceMonitor.run(ctx, [subject])
+  return createInMemoryFactsLoader({
+    products: { [PRODUCT]: { title: 'Widget', category: null, stage, updatedAt: FRESH } },
+    suppliers: { [SUPPLIER]: { shopifyStatus: supplierStatus, amazonStatus: supplierStatus, lastAssessedAt: supplierAssessedAt } },
+    offers: { [`${SUPPLIER}:${PRODUCT}`]: { unitCost: fromMajor(5), shippingCost: fromMajor(2), stockQty: 40, inStock: true, lastVerifiedAt: offerVerifiedAt } },
+    productIntelligence: { [PRODUCT]: { recommendation, recommendationReason: 'Clears every check.', computedAt: intelligenceComputedAt } },
+    lifecycleVerdicts: omitVerdicts
+      ? {}
+      : {
+          [`${PRODUCT}:${CHANNEL}`]: {
+            complianceVerdict,
+            complianceAssessedAt,
+            complianceBlockingReasons: complianceVerdict === 'fail' ? ['Missing UKCA documentation.'] : [],
+            profitabilityVerdict,
+            profitabilityAssessedAt,
+            profitabilityFailureReasons: profitabilityVerdict === 'fail' ? ['Net margin 2.1% is below the 10% minimum.'] : [],
+          },
+        },
+  })
+}
 
-    expect(outcome.eventsCreated).toBe(0)
-    expect(store.getState().jobs.length).toBe(0)
+function store(settings: AutomationSettings = CONFIGURED_AUTOMATION_SETTINGS) {
+  return createInMemoryAutomationStore({ settingsByOrg: { [ORG]: settings } })
+}
+
+/** A real (not mocked) refresher that records what it was asked to refresh. */
+function recordingRefresher(result: { ok: boolean; error?: string } = { ok: true }) {
+  const calls: { productId: string; channel: string }[] = []
+  const deps: LifecycleHandlerDeps = {
+    async refreshLifecycleFacts(_orgId, productId, channel) {
+      calls.push({ productId, channel })
+      return result
+    },
+  }
+  return { deps, calls }
+}
+
+async function enqueueReview(s: ReturnType<typeof store>, key?: string) {
+  return s.enqueueJob({
+    orgId: ORG,
+    jobType: 'candidate_lifecycle_review',
+    payload: { productId: PRODUCT, channel: CHANNEL, supplierId: SUPPLIER },
+    idempotencyKey: key,
+  })
+}
+
+async function runReview(s: ReturnType<typeof store>, f: ReturnType<typeof facts>, deps?: LifecycleHandlerDeps) {
+  return runWorkerBatch(s, f, () => undefined, 'worker-1', 10, undefined, undefined, deps)
+}
+
+// ---------------------------------------------------------------------------
+// The pure gate state (Part 4)
+// ---------------------------------------------------------------------------
+
+describe('assembleCandidateGateState', () => {
+  const base = {
+    stage: 'compliance_review',
+    intelligenceRecommendation: 'strong_candidate',
+    intelligenceFreshness: 'fresh' as const,
+    supplierChannelStatus: 'approved',
+    supplierStatusFreshness: 'fresh' as const,
+    supplierOfferFreshness: 'fresh' as const,
+    complianceVerdict: 'pass',
+    complianceFreshness: 'fresh' as const,
+    profitabilityVerdict: 'pass',
+    profitabilityFreshness: 'fresh' as const,
+    businessSettingsConfigured: true,
+  }
+
+  it('every requirement passes when every fact is fresh and passing', () => {
+    const state = assembleCandidateGateState(base)
+    expect(state.requirements.every((r) => r.verdict === 'pass')).toBe(true)
+    expect(planCandidateAdvance(state).to).toBe('approved')
   })
 
-  it('fresh score, still discovered: creates a review-due event and enqueues candidate_lifecycle_review', async () => {
-    const store = makeStore()
-    const events = createInMemoryEventStore()
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: CONFIGURED_AUTOMATION_SETTINGS, now }
-    const subject: CandidateIntelligenceSubject = { productId: PRODUCT_ID, stage: 'discovered' }
-
-    const outcome = await candidateIntelligenceMonitor.run(ctx, [subject])
-
-    expect(outcome.eventsCreated).toBe(1)
-    const jobs = store.getState().jobs
-    expect(jobs.length).toBe(1)
-    expect(jobs[0].jobType).toBe('candidate_lifecycle_review')
-
-    // EVENT_TO_JOB_MAPPING must agree with what the monitor actually did — the same discipline tests/monitoring-registry.test.ts already applies to every other monitor.
-    const event = events.getState().events[0]
-    expect(EVENT_TO_JOB_MAPPING[event.eventType]).toBe('candidate_lifecycle_review')
+  it('a missing verdict is UNKNOWN, never FAIL and never PASS', () => {
+    const state = assembleCandidateGateState({ ...base, complianceVerdict: null, complianceFreshness: 'unavailable' })
+    expect(state.requirements.find((r) => r.key === 'compliance_pass')?.verdict).toBe('unknown')
+    expect(state.lifecycleGates.compliancePassesAnyChannel).toBe(false)
+    expect(state.lifecycleGates.complianceAssessed).toBe(false)
   })
 
-  it('fresh score, past discovered: nothing due — already advanced, and fresh, so no review is needed', async () => {
-    const store = makeStore()
-    const events = createInMemoryEventStore()
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: CONFIGURED_AUTOMATION_SETTINGS, now }
-    const subject: CandidateIntelligenceSubject = { productId: PRODUCT_ID, stage: 'researching' }
-
-    const outcome = await candidateIntelligenceMonitor.run(ctx, [subject])
-
-    expect(outcome.eventsCreated).toBe(0)
-    expect(store.getState().jobs.length).toBe(0)
+  it('a stale verdict is UNKNOWN, never carried forward as a pass', () => {
+    const state = assembleCandidateGateState({ ...base, profitabilityFreshness: 'stale' })
+    expect(state.requirements.find((r) => r.key === 'profitability_pass')?.verdict).toBe('unknown')
+    expect(state.lifecycleGates.profitablePassesAnyChannel).toBe(false)
   })
 
-  it('stale score (computed long ago): creates an event and enqueues a review regardless of stage', async () => {
-    const store = makeStore()
-    const events = createInMemoryEventStore()
-    const now = new Date()
-    const longAgo = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 60).toISOString() // 60 days — well past the 14-day window.
-    const facts = createInMemoryFactsLoader({
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'candidate', recommendationReason: 'Clears every check.', computedAt: longAgo } },
-    })
-    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: CONFIGURED_AUTOMATION_SETTINGS, now }
-    const subject: CandidateIntelligenceSubject = { productId: PRODUCT_ID, stage: 'testing' }
-
-    const outcome = await candidateIntelligenceMonitor.run(ctx, [subject])
-
-    expect(outcome.eventsCreated).toBe(1)
-    expect(store.getState().jobs[0].jobType).toBe('candidate_lifecycle_review')
+  it('an explicit not_assessed verdict is UNKNOWN, distinct from a real fail', () => {
+    const unknown = assembleCandidateGateState({ ...base, profitabilityVerdict: 'not_assessed' })
+    const failed = assembleCandidateGateState({ ...base, profitabilityVerdict: 'fail' })
+    expect(unknown.requirements.find((r) => r.key === 'profitability_pass')?.verdict).toBe('unknown')
+    expect(failed.requirements.find((r) => r.key === 'profitability_pass')?.verdict).toBe('fail')
   })
 
-  it('a second run against the same unchanged condition deduplicates — never a duplicate job for the same computed_at', async () => {
-    const store = makeStore()
-    const events = createInMemoryEventStore()
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    const ctx: MonitorContext = { orgId: ORG_A, store, events, facts, connectors: () => undefined, settings: CONFIGURED_AUTOMATION_SETTINGS, now }
-    const subject: CandidateIntelligenceSubject = { productId: PRODUCT_ID, stage: 'discovered' }
+  it('never infers the opportunity-score gate from a recommendation that never reached that rung', () => {
+    // `do_not_sell` fires for an unassigned supplier long before the score
+    // is examined, so it says nothing about the score.
+    const state = assembleCandidateGateState({ ...base, intelligenceRecommendation: 'do_not_sell' })
+    expect(state.requirements.find((r) => r.key === 'meets_minimum_score')?.verdict).toBe('unknown')
+  })
 
-    await candidateIntelligenceMonitor.run(ctx, [subject])
-    const secondOutcome = await candidateIntelligenceMonitor.run(ctx, [subject])
+  it('a stage outside the pre-launch path never plans a transition', () => {
+    for (const stage of ['testing', 'proven', 'rejected', 'removed', 'paused']) {
+      expect(planCandidateAdvance(assembleCandidateGateState({ ...base, stage })).to).toBeNull()
+    }
+  })
 
-    expect(secondOutcome.eventsCreated).toBe(0)
-    expect(secondOutcome.eventsDeduplicated).toBe(1)
-    expect(store.getState().jobs.length).toBe(1)
+  it('distinguishes "blocked only by unknowns" (recheckable) from a real failure', () => {
+    const unknown = planCandidateAdvance(assembleCandidateGateState({ ...base, complianceFreshness: 'stale' }))
+    expect(unknown.to).toBeNull()
+    expect(unknown.blockedOnlyByUnknowns).toBe(true)
+
+    const failed = planCandidateAdvance(assembleCandidateGateState({ ...base, complianceVerdict: 'fail' }))
+    expect(failed.to).toBeNull()
+    expect(failed.blockedOnlyByUnknowns).toBe(false)
   })
 })
 
-describe('handleCandidateLifecycleReview (via the real worker)', () => {
-  function seedJob(store: ReturnType<typeof createInMemoryAutomationStore>, stage: string) {
-    return store.enqueueJob({ orgId: ORG_A, jobType: 'candidate_lifecycle_review', payload: { productId: PRODUCT_ID, stage } })
-  }
+// ---------------------------------------------------------------------------
+// Transitions through the real worker (Part 5, Part 11 scenarios 1-9)
+// ---------------------------------------------------------------------------
 
-  it('configured settings, fresh score, still discovered: advances to researching, audited as actorType "system", and notifies', async () => {
-    const store = makeStore(CONFIGURED_AUTOMATION_SETTINGS)
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'discovered', updatedAt: now.toISOString() } },
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'strong_candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    await seedJob(store, 'discovered')
+describe('candidate lifecycle transitions', () => {
+  it('1. fresh intelligence and every gate passing advances the stage', async () => {
+    const s = store()
+    await enqueueReview(s)
+    const batch = await runReview(s, facts({ stage: 'compliance_review' }))
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
     expect(batch.succeeded).toBe(1)
-
-    const state = store.getState()
-    expect(state.productStageChanges.length).toBe(1)
-    const plan = state.productStageChanges[0]
-    expect(plan.transitionRow.from_stage).toBe('discovered')
-    expect(plan.transitionRow.to_stage).toBe('researching')
-    expect(plan.transitionRow.actor_type).toBe('system')
-    expect(plan.auditEntry.actorType).toBe('system')
-
-    expect(state.notifications.some((n) => n.title.includes('Researching'))).toBe(true)
+    const changes = s.getState().productStageChanges
+    expect(changes.length).toBe(1)
+    expect(changes[0].transitionRow.from_stage).toBe('compliance_review')
+    expect(changes[0].transitionRow.to_stage).toBe('approved')
   })
 
-  it('configured settings, stale score: notifies to recalculate, never advances or writes a stage change', async () => {
-    const store = makeStore(CONFIGURED_AUTOMATION_SETTINGS)
-    const now = new Date()
-    const longAgo = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 60).toISOString()
-    const facts = createInMemoryFactsLoader({
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'discovered', updatedAt: now.toISOString() } },
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'candidate', recommendationReason: 'Clears every check.', computedAt: longAgo } },
-    })
-    await seedJob(store, 'discovered')
+  it('2. stale intelligence blocks the transition and asks for a recalculation instead', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'researching', intelligenceComputedAt: LONG_AGO }))
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(batch.succeeded).toBe(1)
-
-    const state = store.getState()
-    expect(state.productStageChanges.length).toBe(0)
-    expect(state.notifications.some((n) => n.title.includes('stale'))).toBe(true)
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().notifications.some((n) => n.title.includes('needs recalculating'))).toBe(true)
   })
 
-  it('global kill switch (automationPaused): blocks the decision — no stage change, no notification', async () => {
-    const pausedSettings = { ...CONFIGURED_AUTOMATION_SETTINGS, automationPaused: true }
-    const store = makeStore(pausedSettings)
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'discovered', updatedAt: now.toISOString() } },
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'strong_candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    await seedJob(store, 'discovered')
+  it('3. stale supplier facts block the transition into compliance_review', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'supplier_review', offerVerifiedAt: LONG_AGO }), recordingRefresher().deps)
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(batch.succeeded).toBe(1) // The job itself completes successfully — being blocked by policy is a normal, handled outcome, not a job failure.
-
-    const state = store.getState()
-    expect(state.productStageChanges.length).toBe(0)
-    expect(state.notifications.length).toBe(0)
-    expect(state.actions[0].policyResult.outcome).not.toBe('allow_automatic')
+    expect(s.getState().productStageChanges.length).toBe(0)
   })
 
-  it('unconfigured business settings (DEMO_AUTOMATION_SETTINGS, matching the real Informax org today): downgraded to require_approval, never auto-advances', async () => {
-    const store = makeStore(DEMO_AUTOMATION_SETTINGS)
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'discovered', updatedAt: now.toISOString() } },
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'strong_candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    await seedJob(store, 'discovered')
+  it('4. a supplier the channel has actually blocked is a FAIL, not a recheck', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'supplier_review', supplierStatus: 'blocked' }))
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(batch.succeeded).toBe(1)
-
-    const state = store.getState()
-    expect(state.productStageChanges.length).toBe(0)
-    expect(state.actions[0].policyResult.outcome).toBe('require_approval')
+    expect(s.getState().productStageChanges.length).toBe(0)
+    const action = s.getState().actions[0]
+    expect(action.decision).toMatchObject({ failedRequirements: expect.arrayContaining(['supplier_approved']) })
   })
 
-  it('the product already moved on (e.g. a human changed its stage before this job ran): completes without error, no duplicate/invalid transition', async () => {
-    const store = makeStore(CONFIGURED_AUTOMATION_SETTINGS)
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      // Facts re-read at execution time show the product already at `researching` — the job's payload snapshot (still says `discovered`) is stale.
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'researching', updatedAt: now.toISOString() } },
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'strong_candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    await seedJob(store, 'discovered')
+  it('5. compliance PASS and profitability PASS together reach approved', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review', complianceVerdict: 'pass', profitabilityVerdict: 'pass' }))
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(batch.succeeded).toBe(1)
-    expect(store.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().productStageChanges[0].transitionRow.to_stage).toBe('approved')
   })
 
-  it('never computed at all by the time the job runs: succeeds as a no-op, never fabricates a decision', async () => {
-    const store = makeStore(CONFIGURED_AUTOMATION_SETTINGS)
-    const facts = createInMemoryFactsLoader({
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'discovered', updatedAt: new Date().toISOString() } },
-    })
-    await seedJob(store, 'discovered')
+  it('6. compliance FAIL blocks approval and records the reason', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review', complianceVerdict: 'fail' }))
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(batch.succeeded).toBe(1)
-    expect(store.getState().productStageChanges.length).toBe(0)
-    expect(store.getState().actions.length).toBe(0)
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].decision).toMatchObject({ failedRequirements: expect.arrayContaining(['compliance_pass']) })
   })
 
-  it('malformed payload is rejected non-retryably, never silently succeeding having done nothing', async () => {
-    const store = makeStore(CONFIGURED_AUTOMATION_SETTINGS)
-    const facts = createInMemoryFactsLoader()
-    await store.enqueueJob({ orgId: ORG_A, jobType: 'candidate_lifecycle_review', payload: { stage: 'discovered' } })
+  it('7. profitability FAIL blocks approval and records the reason', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review', profitabilityVerdict: 'fail' }))
 
-    const batch = await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(batch.failed + batch.deadLettered).toBe(1)
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].decision).toMatchObject({ failedRequirements: expect.arrayContaining(['profitability_pass']) })
   })
 
-  it('idempotency: a duplicate job for the same idempotency key never creates a second automation action or a second stage change', async () => {
-    const store = makeStore(CONFIGURED_AUTOMATION_SETTINGS)
-    const now = new Date()
-    const facts = createInMemoryFactsLoader({
-      products: { [PRODUCT_ID]: { title: 'Widget', category: null, stage: 'discovered', updatedAt: now.toISOString() } },
-      productIntelligence: { [PRODUCT_ID]: { recommendation: 'strong_candidate', recommendationReason: 'Clears every check.', computedAt: now.toISOString() } },
-    })
-    const first = await store.enqueueJob({ orgId: ORG_A, jobType: 'candidate_lifecycle_review', payload: { productId: PRODUCT_ID, stage: 'discovered' }, idempotencyKey: 'event:evt-1' })
-    const second = await store.enqueueJob({ orgId: ORG_A, jobType: 'candidate_lifecycle_review', payload: { productId: PRODUCT_ID, stage: 'discovered' }, idempotencyKey: 'event:evt-1' })
+  it('8. compliance UNKNOWN blocks approval and enqueues a real recheck rather than rejecting', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review', omitVerdicts: true }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    const refreshJobs = s.getState().jobs.filter((j) => j.jobType === 'candidate_facts_refresh')
+    expect(refreshJobs.length).toBe(1)
+    expect(refreshJobs[0].payload).toMatchObject({ productId: PRODUCT, channel: CHANNEL })
+  })
+
+  it('9. profitability UNKNOWN blocks approval — never treated as a pass', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review', profitabilityVerdict: 'not_assessed' }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].decision).toMatchObject({ unknownRequirements: expect.arrayContaining(['profitability_pass']) })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Safety (Part 10, Part 11 scenarios 10-11)
+// ---------------------------------------------------------------------------
+
+describe('candidate lifecycle safety', () => {
+  it('10. unconfigured business settings never auto-advance — the real Informax state today', async () => {
+    const s = store(DEMO_AUTOMATION_SETTINGS)
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review' }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].policyResult.outcome).not.toBe('allow_automatic')
+  })
+
+  it('11. the kill switch blocks the transition, and schedules no work while paused', async () => {
+    const s = store({ ...CONFIGURED_AUTOMATION_SETTINGS, automationPaused: true })
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review', omitVerdicts: true }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().jobs.filter((j) => j.jobType === 'candidate_facts_refresh').length).toBe(0)
+    expect(s.getState().actions[0].policyResult.outcome).toBe('block')
+  })
+
+  it('11b. unknown automation state fails closed exactly like an explicit pause', async () => {
+    const s = store({ ...CONFIGURED_AUTOMATION_SETTINGS, automationStateKnown: false })
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review' }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].policyResult.outcome).not.toBe('allow_automatic')
+  })
+
+  it('a facts refresh is skipped entirely while automation is paused', async () => {
+    const s = store({ ...CONFIGURED_AUTOMATION_SETTINGS, automationPaused: true })
+    await s.enqueueJob({ orgId: ORG, jobType: 'candidate_facts_refresh', payload: { productId: PRODUCT, channel: CHANNEL } })
+    const refresher = recordingRefresher()
+    await runReview(s, facts(), refresher.deps)
+
+    expect(refresher.calls.length).toBe(0)
+  })
+
+  it('no marketplace connector is ever consulted anywhere in this lifecycle', async () => {
+    const connectorLookup = vi.fn(() => undefined)
+    const s = store()
+    await enqueueReview(s)
+    await runWorkerBatch(s, facts({ stage: 'compliance_review' }), connectorLookup, 'worker-1', 10, undefined, undefined, recordingRefresher().deps)
+
+    expect(connectorLookup).not.toHaveBeenCalled()
+    expect(s.getState().channelProductReconciliations).toEqual({})
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Idempotency and concurrency (Part 11 scenarios 12-15, 18)
+// ---------------------------------------------------------------------------
+
+describe('candidate lifecycle idempotency', () => {
+  it('12. a repeated monitoring cycle over unchanged facts creates no duplicate event or job', async () => {
+    const s = store()
+    const events = createInMemoryEventStore()
+    const f = facts({ stage: 'researching' })
+    const ctx: MonitorContext = { orgId: ORG, store: s, events, facts: f, connectors: () => undefined, settings: CONFIGURED_AUTOMATION_SETTINGS, now: NOW }
+    const subject: CandidateIntelligenceSubject = { productId: PRODUCT, stage: 'researching', channel: CHANNEL, supplierId: SUPPLIER }
+
+    const first = await candidateIntelligenceMonitor.run(ctx, [subject])
+    const second = await candidateIntelligenceMonitor.run(ctx, [subject])
+
+    expect(first.eventsCreated).toBe(1)
+    expect(second.eventsCreated).toBe(0)
+    expect(second.eventsDeduplicated).toBe(1)
+    expect(s.getState().jobs.filter((j) => j.jobType === 'candidate_lifecycle_review').length).toBe(1)
+    expect(EVENT_TO_JOB_MAPPING[events.getState().events[0].eventType]).toBe('candidate_lifecycle_review')
+  })
+
+  it('13. a duplicate job for the same idempotency key produces one action and one transition', async () => {
+    const s = store()
+    const first = await enqueueReview(s, 'event:evt-1')
+    const second = await enqueueReview(s, 'event:evt-1')
     expect(second.alreadyExisted).toBe(true)
     expect(second.id).toBe(first.id)
 
-    await runWorkerBatch(store, facts, () => undefined, 'worker-1')
-    expect(store.getState().productStageChanges.length).toBe(1)
-    expect(store.getState().actions.length).toBe(1)
+    await runReview(s, facts({ stage: 'compliance_review' }))
+    expect(s.getState().productStageChanges.length).toBe(1)
+    expect(s.getState().actions.length).toBe(1)
+  })
+
+  it('14. a product that already advanced past the reviewed stage is a safe no-op', async () => {
+    const s = store()
+    await enqueueReview(s)
+    // The payload was enqueued while it was a candidate; by execution time
+    // it is already trading.
+    await runReview(s, facts({ stage: 'proven' }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].policyResult.outcome).not.toBe('allow_automatic')
+  })
+
+  it('15. facts that changed between the event and execution are re-read, and a now-invalid transition is refused', async () => {
+    const s = store()
+    await enqueueReview(s)
+    // Enqueued when compliance passed; by execution time it genuinely fails.
+    await runReview(s, facts({ stage: 'compliance_review', complianceVerdict: 'fail' }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].inputFacts).toMatchObject({ complianceVerdict: 'fail' })
+  })
+
+  it('18. a candidate blocked for the same reason twice notifies once', async () => {
+    const s = store()
+    await enqueueReview(s, 'event:evt-1')
+    await runReview(s, facts({ stage: 'compliance_review', complianceVerdict: 'fail' }))
+    await enqueueReview(s, 'event:evt-2')
+    await runReview(s, facts({ stage: 'compliance_review', complianceVerdict: 'fail' }))
+
+    const blocked = s.getState().notifications.filter((n) => n.title.startsWith('Candidate blocked'))
+    expect(blocked.length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Audit, dry run, recheck honesty (Part 11 scenarios 16-17, 19-20)
+// ---------------------------------------------------------------------------
+
+describe('candidate lifecycle evidence and dry run', () => {
+  it('19. the transition is audited with the gate evidence it was decided on', async () => {
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review' }))
+
+    const plan = s.getState().productStageChanges[0]
+    expect(plan.transitionRow.actor_type).toBe('system')
+    expect(plan.auditEntry.action).toBe('PRODUCT_STAGE_CHANGED')
+    expect(plan.auditEntry.metadata).toMatchObject({ channel: CHANNEL })
+    expect(JSON.stringify(plan.transitionRow.evidence)).toContain('compliance_pass')
+  })
+
+  it('16. the dry run reaches the identical decision and writes nothing', async () => {
+    const input = {
+      stage: 'compliance_review',
+      intelligenceRecommendation: 'strong_candidate',
+      intelligenceFreshness: 'fresh' as const,
+      supplierChannelStatus: 'approved',
+      supplierStatusFreshness: 'fresh' as const,
+      supplierOfferFreshness: 'fresh' as const,
+      complianceVerdict: 'pass',
+      complianceFreshness: 'fresh' as const,
+      profitabilityVerdict: 'pass',
+      profitabilityFreshness: 'fresh' as const,
+      businessSettingsConfigured: true,
+    }
+    const dry = dryRunCandidateLifecycleReview(PRODUCT, input, CONFIGURED_AUTOMATION_SETTINGS)
+
+    const s = store()
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review' }))
+    const real = s.getState().productStageChanges[0]
+
+    expect(dry.payload?.wouldMoveTo).toBe(real.transitionRow.to_stage)
+    expect(dry.wouldExecuteAutomatically).toBe(true)
+
+    // And the dry run on its own store touches nothing at all.
+    const clean = store()
+    dryRunCandidateLifecycleReview(PRODUCT, input, CONFIGURED_AUTOMATION_SETTINGS)
+    expect(clean.getState()).toMatchObject({ jobs: [], actions: [], notifications: [], productStageChanges: [] })
+  })
+
+  it('17. a failed recheck is retryable and fabricates no verdict', async () => {
+    const s = store()
+    await s.enqueueJob({ orgId: ORG, jobType: 'candidate_facts_refresh', payload: { productId: PRODUCT, channel: CHANNEL } })
+    const refresher = recordingRefresher({ ok: false, error: 'Supplier read timed out.' })
+    const batch = await runReview(s, facts({ omitVerdicts: true }), refresher.deps)
+
+    expect(batch.succeeded).toBe(0)
+    expect(refresher.calls.length).toBe(1)
+    // Nothing was written, so the gate still reads UNKNOWN rather than a pass.
+    expect(s.getState().productStageChanges.length).toBe(0)
+  })
+
+  it('a refresh with no refresher wired fails non-retryably rather than silently succeeding', async () => {
+    const s = store()
+    await s.enqueueJob({ orgId: ORG, jobType: 'candidate_facts_refresh', payload: { productId: PRODUCT, channel: CHANNEL } })
+    const batch = await runReview(s, facts())
+
+    expect(batch.succeeded).toBe(0)
+  })
+
+  it('20. a candidate walks the full path from discovered to approved across successive cycles', async () => {
+    const s = store()
+    const stages = ['discovered', 'researching', 'supplier_review', 'compliance_review']
+    const reached: string[] = []
+
+    for (const [index, stage] of stages.entries()) {
+      await enqueueReview(s, `event:cycle-${index}`)
+      await runReview(s, facts({ stage }), recordingRefresher().deps)
+      const change = s.getState().productStageChanges[index]
+      expect(change, `cycle ${index} (${stage}) should have advanced`).toBeDefined()
+      reached.push(change.transitionRow.to_stage)
+    }
+
+    expect(reached).toEqual(['researching', 'supplier_review', 'compliance_review', 'approved'])
+    // And it stops there: `testing` means live on a channel, which nothing
+    // in this milestone may claim.
+    await enqueueReview(s, 'event:cycle-final')
+    await runReview(s, facts({ stage: 'approved' }))
+    expect(s.getState().productStageChanges.length).toBe(4)
   })
 })

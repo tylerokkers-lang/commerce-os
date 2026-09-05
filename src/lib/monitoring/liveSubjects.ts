@@ -320,15 +320,48 @@ async function discoverCandidateIntelligence(orgId: string): Promise<SubjectDisc
   if (products.error) errors.push(`products: ${products.error}`)
   if (products.rows.length === 0) return { subjects: [], errors }
 
+  const productIds = products.rows.map((p) => p.id)
+
+  // Deliberately NOT filtered on `is_preferred` (unlike
+  // `discoverSupplierProductChannelJoins` above). The production audit for
+  // this milestone found every real imported candidate has
+  // `is_preferred = false` — `importCandidate` has never set it — which is
+  // exactly why the supplier and profitability monitors observe zero
+  // subjects today. A pre-launch candidate's own supplier offer is a real
+  // fact regardless of whether anything has marked it preferred, so this
+  // requires only that an offer exists at all: the one honest signal that a
+  // human genuinely imported this product rather than it being a bare row.
   const offers = await paginate<{ product_id: string }>((from, to) =>
-    supabase.from('supplier_products').select('product_id').eq('org_id', orgId).in('product_id', products.rows.map((p) => p.id)).range(from, to),
+    supabase.from('supplier_products').select('product_id').eq('org_id', orgId).in('product_id', productIds).range(from, to),
   )
   if (offers.error) errors.push(`supplier_products: ${offers.error}`)
   const importedProductIds = new Set(offers.rows.map((o) => o.product_id))
 
+  const { map: channelKeyById, error: channelsError } = await loadChannelKeyMap(orgId)
+  if (channelsError) errors.push(`channels: ${channelsError}`)
+
+  // The channel (and its recorded fulfilment supplier) each candidate is
+  // gated against. Unlike the compliance monitor's own discovery, listing
+  // status is NOT filtered here: a pre-launch candidate is `not_listed` by
+  // definition, and excluding that status is precisely why the existing
+  // compliance monitor sees none of them.
+  const listings = await paginate<{ product_id: string; channel_id: string; fulfilment_supplier_id: string | null }>((from, to) =>
+    supabase.from('channel_products').select('product_id, channel_id, fulfilment_supplier_id').eq('org_id', orgId).in('product_id', productIds).range(from, to),
+  )
+  if (listings.error) errors.push(`channel_products: ${listings.error}`)
+  const listingByProduct = new Map(listings.rows.map((l) => [l.product_id, l]))
+
   const subjects = products.rows
     .filter((p) => importedProductIds.has(p.id))
-    .map((p): CandidateIntelligenceSubject => ({ productId: p.id, stage: p.stage }))
+    .map((p): CandidateIntelligenceSubject | null => {
+      const listing = listingByProduct.get(p.id)
+      // No channel row at all means there is no channel to gate against —
+      // skipped rather than defaulted to a guessed channel.
+      const channel = listing ? channelKeyById.get(listing.channel_id) : undefined
+      if (!channel) return null
+      return { productId: p.id, stage: p.stage, channel, supplierId: listing?.fulfilment_supplier_id ?? null }
+    })
+    .filter((s): s is CandidateIntelligenceSubject => s !== null)
 
   return { subjects, errors }
 }

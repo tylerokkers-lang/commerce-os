@@ -12,7 +12,7 @@ import type { JobHandlerResult, ConnectorLookup } from '../worker'
 import { withMarketplaceConnectorGate } from '@/lib/marketplaces/connectors/executionGate'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
 import { planStageChange } from '@/lib/products/transitions'
-import { assessCandidateLifecycleReview } from '../candidateLifecycleAutomation'
+import { assessCandidateLifecycleReview, type RecheckKind } from '../candidateLifecycleAutomation'
 
 export interface ProductProfitabilityRecheckPayload {
   productId: string
@@ -169,37 +169,54 @@ export async function handleProductComplianceRecheck(job: JobRecord, store: Auto
 
 export interface CandidateLifecycleReviewPayload {
   productId: string
-  stage: string
+  /** The channel whose persisted compliance/profitability verdicts gate this candidate. */
+  channel: string
+  /** The supplier recorded as fulfilling this product on this channel. `null`/absent leaves every supplier requirement UNKNOWN — never assumed. */
+  supplierId?: string | null
 }
 
 function isCandidateLifecycleReviewPayload(p: Record<string, unknown>): boolean {
-  return typeof p.productId === 'string' && typeof p.stage === 'string'
+  return typeof p.productId === 'string' && typeof p.channel === 'string'
+}
+
+/**
+ * Milestone: continuous candidate lifecycle. Injected because
+ * `products/lifecycleFactRefresh.ts` is `server-only` (it reaches Supabase
+ * and `next/headers` transitively) — the same reason
+ * `AdvertisingHandlerDeps.runSync` is injected rather than imported.
+ * Production supplies the real refresher in `scheduledJobBatch.ts`; tests
+ * supply a real in-memory one, never a mock of the decision itself.
+ */
+export interface LifecycleHandlerDeps {
+  refreshLifecycleFacts: (orgId: string, productId: string, channel: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 /**
  * CANDIDATE_LIFECYCLE_REVIEW: the job `candidateIntelligenceMonitor.ts`
- * enqueues. Re-reads current facts rather than trusting the enqueue-time
- * payload snapshot (the same "facts can change between decision and
- * execution" discipline this codebase already applies everywhere else),
- * then does exactly one of two things:
+ * enqueues, and the one place a candidate advances along the pre-launch
+ * lifecycle.
  *
- *   - Stale intelligence: records the decision and notifies. Never
- *     recomputes anything itself — recomputation stays the human-triggered
- *     `computeProductIntelligence` path it always was.
- *   - Fresh intelligence and still `discovered`: advances to `researching`
- *     via `planStageChange` — the one lifecycle transition with zero gate
- *     conditions (`lifecycle.ts`'s `checkGates` has no entry for
- *     `researching` as a target), so nothing is skipped by advancing it
- *     automatically. Every other pre-launch transition needs a real
- *     per-channel compliance/profitability-pass boolean this codebase does
- *     not yet expose as an independently queryable fact — deliberately not
- *     attempted here (see `candidateIntelligenceMonitor.ts`'s own comment).
+ * Every fact is re-read here, at execution time, rather than trusted from
+ * the enqueue-time payload — facts genuinely change between a monitor
+ * detecting something and a worker acting on it, and a transition decided
+ * on stale facts is exactly the failure this re-read prevents.
+ *
+ * The decision itself is `assessCandidateLifecycleReview` (pure), which
+ * assembles a three-state gate state and asks `lifecycle.ts`'s own
+ * `checkGates`/`nextStages` what may follow. This handler only carries out
+ * whatever that decided:
+ *
+ *   - advance permitted -> write the stage change, audit, notify
+ *   - blocked by UNKNOWN facts -> enqueue the real recheck that could
+ *     resolve them, so the next cycle retries with a real answer
+ *   - blocked by a genuine FAIL -> record the reason, notify, never retry
+ *     in a loop
  *
  * `actionType: 'alert_owner'` — no dedicated action type exists for a
- * lifecycle-bookkeeping decision (same precedent as the stale-facts branch
- * of `handleProductProfitabilityRecheck` above, which reuses `product_pause`
- * for an equally uncategorised case). Still fully policy-gated: the global
- * kill switch (`settings.automationPaused`) and the unconfigured-business-
+ * lifecycle-bookkeeping decision (the same precedent as the stale-facts
+ * branch of `handleProductProfitabilityRecheck` above, which reuses
+ * `product_pause` for an equally uncategorised case). Still fully
+ * policy-gated: the global kill switch and the unconfigured-business-
  * settings fail-closed rule both apply exactly as they do to every other
  * automated action, even though this one is non-monetary and never touches
  * a marketplace or a supplier.
@@ -211,22 +228,36 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
   const payload = job.payload as unknown as CandidateLifecycleReviewPayload
   const settings = await store.getAutomationSettings(job.orgId)
 
-  const [intel, product] = await Promise.all([
+  const [intel, product, verdicts] = await Promise.all([
     facts.loadProductIntelligenceFacts(job.orgId, payload.productId),
     facts.loadProductFacts(job.orgId, payload.productId),
+    facts.loadLifecycleVerdictFacts(job.orgId, payload.productId, payload.channel),
   ])
 
-  if (intel.recommendation.freshness === 'unavailable') {
-    // Never scored at all (or scored since the event fired and then
-    // deleted, which cannot happen) — nothing this job can safely do.
-    return { succeeded: true }
-  }
+  // The supplier whose economics and approval status gate this candidate is
+  // whichever supplier the channel listing records as fulfilling it. When
+  // there is none, the supplier requirements stay UNKNOWN — never assumed.
+  const supplierId = payload.supplierId ?? null
+  const supplier = supplierId ? await facts.loadSupplierFactsForProduct(job.orgId, supplierId, payload.productId) : null
+  const supplierStatusFact = payload.channel === 'amazon_uk' ? supplier?.amazonStatus : supplier?.shopifyStatus
 
   const assessment = assessCandidateLifecycleReview(
-    { recommendation: intel.recommendation.value, recommendationFreshness: intel.recommendation.freshness, stage: product.stage.value },
+    {
+      stage: product.stage.value,
+      intelligenceRecommendation: intel.recommendation.value,
+      intelligenceFreshness: intel.recommendation.freshness,
+      supplierChannelStatus: supplierStatusFact?.value ?? null,
+      supplierStatusFreshness: supplierStatusFact?.freshness ?? 'unavailable',
+      supplierOfferFreshness: supplier?.unitCost.freshness ?? 'unavailable',
+      complianceVerdict: verdicts.compliance.value,
+      complianceFreshness: verdicts.compliance.freshness,
+      profitabilityVerdict: verdicts.profitability.value,
+      profitabilityFreshness: verdicts.profitability.freshness,
+      businessSettingsConfigured: settings.businessSettingsConfigured,
+    },
     settings,
   )
-  const { isStale, readyToAdvance, policy } = assessment
+  const { advance, gateState, rechecks, policy } = assessment
 
   const created = await store.createAutomationAction({
     orgId: job.orgId,
@@ -235,46 +266,181 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
     entityType: 'product',
     entityId: payload.productId,
     reason: policy.reason,
-    inputFacts: { recommendation: intel.recommendation.value, recommendationFreshness: intel.recommendation.freshness, stage: product.stage.value },
-    decision: { isStale, readyToAdvance },
+    inputFacts: {
+      channel: payload.channel,
+      stage: product.stage.value,
+      recommendation: intel.recommendation.value,
+      complianceVerdict: verdicts.compliance.value,
+      complianceFreshness: verdicts.compliance.freshness,
+      profitabilityVerdict: verdicts.profitability.value,
+      profitabilityFreshness: verdicts.profitability.freshness,
+    },
+    decision: {
+      wouldAdvanceTo: advance.to,
+      unknownRequirements: gateState.unknownKeys,
+      failedRequirements: gateState.failedKeys,
+    },
     policy,
     automationLevel: settings.automationLevel,
     jobId: job.id,
   })
   if (created.alreadyExisted) return { succeeded: true }
 
+  // Blocked by policy (kill switch, unconfigured business settings, or a
+  // domain gate that genuinely refused). Recorded, never executed.
   if (policy.outcome !== 'allow_automatic') {
     await store.completeAutomationAction(created.id, { succeeded: false, error: 'Blocked by automation policy.', orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+
+    // An UNKNOWN fact is work to do, not a verdict. Schedule the real
+    // recheck that could resolve it so the next cycle can retry — but only
+    // when the kill switch itself is not what blocked us, since scheduling
+    // work while automation is paused would defeat the pause.
+    if (advance.blockedOnlyByUnknowns && !isKillSwitchBlock(policy)) {
+      await enqueueRechecks(job, store, payload, rechecks)
+    } else if (gateState.failedKeys.length > 0) {
+      await store.notify({
+        orgId: job.orgId, severity: 'warning', category: 'discovery',
+        title: `Candidate blocked: ${payload.productId}`,
+        body: advance.reason,
+        entityType: 'product', entityId: payload.productId,
+        // Keyed on what actually failed, not on the run — a candidate
+        // blocked for the same reason every cycle notifies once, not daily.
+        dedupeKey: `candidate-blocked:${job.orgId}:${payload.productId}:${payload.channel}:${gateState.failedKeys.join(',')}`,
+      })
+    }
     return { succeeded: true }
   }
 
-  if (readyToAdvance) {
-    const plan = planStageChange({
-      orgId: job.orgId,
-      productId: payload.productId,
-      from: 'discovered',
-      to: 'researching',
-      reason: `Automatic: a real opportunity score is on file (recommendation: ${intel.recommendation.value}).`,
-      actorType: 'system',
+  if (!advance.to) {
+    await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+    if (advance.blockedOnlyByUnknowns) await enqueueRechecks(job, store, payload, rechecks)
+    return { succeeded: true }
+  }
+
+  const plan = planStageChange({
+    orgId: job.orgId,
+    productId: payload.productId,
+    from: product.stage.value as never,
+    to: advance.to,
+    reason: `Automatic: ${advance.reason}`,
+    actorType: 'system',
+    // The same gate state the decision was made on, re-checked inside
+    // `planStageChange` itself — so a transition can never be written
+    // without the lifecycle's own prerequisites being satisfied, even if
+    // this handler had a bug.
+    gates: gateState.lifecycleGates,
+    evidence: { channel: payload.channel, requirements: gateState.requirements.map((r) => ({ key: r.key, verdict: r.verdict })) },
+  })
+  if (!plan.ok) {
+    // The product moved on its own between the event firing and this job
+    // running (a human changed its stage, or another worker advanced it) —
+    // a safe no-op, never an error.
+    await store.completeAutomationAction(created.id, { succeeded: true, error: plan.error, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+    return { succeeded: true }
+  }
+
+  const applied = await store.applyProductStageChange(plan.value)
+  await store.completeAutomationAction(created.id, { succeeded: applied.succeeded, error: applied.error, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+  if (applied.succeeded) {
+    await store.notify({
+      orgId: job.orgId, severity: 'info', category: 'discovery',
+      title: `${payload.productId} advanced to ${advance.to}`,
+      body: advance.reason,
+      entityType: 'product', entityId: payload.productId,
+      dedupeKey: `action:${created.id}`,
     })
-    if (!plan.ok) {
-      // The product moved on its own between the event firing and this job
-      // running (e.g. a human already changed its stage) — not an error,
-      // just nothing left to do.
-      await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
-      return { succeeded: true }
+  }
+  return { succeeded: true }
+}
+
+/** True when the policy refusal came from the kill switch rather than a domain gate. */
+function isKillSwitchBlock(policy: { requirements: readonly { key: string; satisfied: boolean }[] }): boolean {
+  return policy.requirements.some((r) => (r.key === 'automation_not_paused' || r.key === 'automation_state_known') && !r.satisfied)
+}
+
+/**
+ * Schedules the real work that could turn an UNKNOWN fact into a real one.
+ * Deterministically keyed on the product/channel/kind, never on the job or
+ * a timestamp, so a candidate blocked on the same unknown across many
+ * monitoring cycles produces exactly one outstanding recheck rather than
+ * one per cycle.
+ */
+async function enqueueRechecks(
+  job: JobRecord,
+  store: AutomationStore,
+  payload: CandidateLifecycleReviewPayload,
+  rechecks: readonly RecheckKind[],
+): Promise<void> {
+  for (const kind of rechecks) {
+    if (kind === 'lifecycle_facts') {
+      await store.enqueueJob({
+        orgId: job.orgId,
+        jobType: 'candidate_facts_refresh',
+        payload: { productId: payload.productId, channel: payload.channel },
+        idempotencyKey: `candidate-facts-refresh:${payload.productId}:${payload.channel}`,
+        correlationId: job.correlationId,
+      })
+    } else {
+      // Nothing in this system can recompute product intelligence on its
+      // own — it is a human-triggered engine (import, or the "recalculate"
+      // action). So this is honestly a notification, not a job.
+      await store.notify({
+        orgId: job.orgId, severity: 'warning', category: 'discovery',
+        title: `Candidate intelligence needs recalculating: ${payload.productId}`,
+        body: 'The opportunity score is missing or outside its freshness window, and nothing recomputes it automatically. Recalculate it from the product page to let this candidate progress.',
+        entityType: 'product', entityId: payload.productId,
+        dedupeKey: `candidate-intelligence-stale:${job.orgId}:${payload.productId}`,
+      })
     }
-    const applied = await store.applyProductStageChange(plan.value)
-    await store.completeAutomationAction(created.id, { succeeded: applied.succeeded, error: applied.error, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
-    if (applied.succeeded) {
-      await store.notify({ orgId: job.orgId, severity: 'info', category: 'discovery', title: `${payload.productId} moved to Researching`, body: `Automatically advanced after a real opportunity score was computed (recommendation: ${intel.recommendation.value}).`, entityType: 'product', entityId: payload.productId, dedupeKey: `action:${created.id}` })
-    }
+  }
+}
+
+/**
+ * CANDIDATE_FACTS_REFRESH: runs the real compliance and profitability
+ * assessment for one (product, channel) and persists both verdicts. The
+ * assessment itself is `refreshCandidateLifecycleFacts`
+ * (`products/lifecycleFactRefresh.ts`), injected because it is
+ * `server-only`; this handler adds only the job plumbing around it.
+ *
+ * Deliberately does NOT re-enqueue a lifecycle review on success: the next
+ * monitoring cycle picks the candidate up again and re-evaluates it with
+ * the now-fresh facts. Chaining the two here would create a job that
+ * schedules a job that schedules a job, with no monitor in between to
+ * decide whether it is still worth doing.
+ */
+export async function handleCandidateFactsRefresh(
+  job: JobRecord,
+  store: AutomationStore,
+  _facts: FactsLoader,
+  _connectors?: unknown,
+  _marketDeps?: unknown,
+  _advertisingDeps?: unknown,
+  lifecycleDeps?: LifecycleHandlerDeps,
+): Promise<JobHandlerResult> {
+  const payload = job.payload as unknown as { productId?: string; channel?: string }
+  if (typeof payload.productId !== 'string' || typeof payload.channel !== 'string') {
+    return { succeeded: false, error: 'Malformed payload for candidate_facts_refresh.', retryable: false }
+  }
+  if (!lifecycleDeps?.refreshLifecycleFacts) {
+    return { succeeded: false, error: 'No lifecycle fact refresher is wired into this worker.', retryable: false }
+  }
+
+  const settings = await store.getAutomationSettings(job.orgId)
+  // Reading facts is not an automated *action* on the business — it makes
+  // no external call, spends nothing and changes no marketplace state — but
+  // it must still stop when the owner has paused automation, since the
+  // whole point of a pause is that the system stops acting on its own.
+  if (settings.automationPaused || !settings.automationStateKnown) {
     return { succeeded: true }
   }
 
-  // Stale, not ready to advance: record and notify, never recompute.
-  await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
-  await store.notify({ orgId: job.orgId, severity: 'warning', category: 'discovery', title: `Candidate intelligence is stale: ${payload.productId}`, body: policy.reason, entityType: 'product', entityId: payload.productId, dedupeKey: `action:${created.id}` })
+  const result = await lifecycleDeps.refreshLifecycleFacts(job.orgId, payload.productId, payload.channel)
+  if (!result.ok) {
+    // A failed refresh writes nothing at all (see `lifecycleFactRefresh.ts`)
+    // — a previously valid verdict is never overwritten by a failure — and
+    // is retryable, since the cause is usually transient.
+    return { succeeded: false, error: result.error ?? 'The lifecycle fact refresh failed.', retryable: true }
+  }
   return { succeeded: true }
 }
 
