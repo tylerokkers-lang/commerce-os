@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { fromMajor } from '@/lib/core/money'
 import { assessPriceChange } from '@/lib/automation/priceAutomation'
 import { evaluateSupplierSwitchAutomation } from '@/lib/automation/supplierSwitching'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
 import type { AutomationLevel } from '@/lib/automation/types'
 

@@ -4,7 +4,7 @@ import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import type { SupplierAvailabilityCheckPayload } from '@/lib/automation/handlers/supplierHandlers'
 import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
 
 const factsLoader = createInMemoryFactsLoader()

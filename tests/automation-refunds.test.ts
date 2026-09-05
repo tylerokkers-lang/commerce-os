@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fromMajor } from '@/lib/core/money'
 import { evaluateRefundAutomation } from '@/lib/automation/refundAutomation'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 
 describe('refund automation', () => {
   it('approves automatically at autonomous, within every limit', () => {

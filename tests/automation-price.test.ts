@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fromMajor } from '@/lib/core/money'
 import { assessPriceChange } from '@/lib/automation/priceAutomation'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 
 const BASE_COST_INPUTS = { sellingPrice: fromMajor(30), productCost: fromMajor(9), supplierShipping: fromMajor(2), vatRatePct: 20 }
 

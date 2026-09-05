@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fromMajor } from '@/lib/core/money'
 import { evaluateOrderAutomation } from '@/lib/automation/orderAutomation'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import type { OrderPipelineInput } from '@/lib/orders/pipeline'
 
 const BASE_INPUT: OrderPipelineInput = {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateAutomationPolicy } from '@/lib/automation/policyEngine'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import type { AutomationSettings } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 
 const PASS_REQUIREMENT = { key: 'domain', label: 'Domain check', satisfied: true, detail: 'ok' }
 
@@ -143,5 +143,117 @@ describe('the central automation policy engine', () => {
       riskLevel: 'low',
     })
     expect(result.outcome).toBe('block')
+  })
+
+  // Milestone: automation control plane — the kill switch's fail-closed guarantee.
+  describe('fail-closed: unknown automation state', () => {
+    it('blocks an otherwise fully-permitted action when automation state is unknown, even though the domain says auto_permitted', async () => {
+      const { UNKNOWN_STATE_AUTOMATION_SETTINGS } = await import('@/lib/automation/settingsTypes')
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: UNKNOWN_STATE_AUTOMATION_SETTINGS,
+        domainOutcome: 'auto_permitted',
+        domainReason: 'Everything passed.',
+        domainRequirements: [PASS_REQUIREMENT],
+        riskLevel: 'low',
+      })
+      expect(result.outcome).toBe('block')
+      expect(result.requirements.find((r) => r.key === 'automation_state_known')?.satisfied).toBe(false)
+    })
+
+    it('still reports a domain-blocked verdict as block (not a different reason) when state is also unknown — the two are not conflated', async () => {
+      const { UNKNOWN_STATE_AUTOMATION_SETTINGS } = await import('@/lib/automation/settingsTypes')
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: UNKNOWN_STATE_AUTOMATION_SETTINGS,
+        domainOutcome: 'blocked',
+        domainReason: 'Compliance failed.',
+        domainRequirements: [{ key: 'compliance', label: 'Compliance', satisfied: false, detail: 'Blocked category.' }],
+        riskLevel: 'low',
+      })
+      expect(result.outcome).toBe('block')
+      // The unknown-state check still appears in the audit trail even though it wasn't the deciding factor.
+      expect(result.requirements.find((r) => r.key === 'automation_state_known')?.satisfied).toBe(false)
+    })
+
+    it('a known, configured, unpaused state is never itself blocked by the state-known check', () => {
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: DEMO_AUTOMATION_SETTINGS,
+        domainOutcome: 'auto_permitted',
+        domainReason: 'ok',
+        domainRequirements: [PASS_REQUIREMENT],
+        riskLevel: 'low',
+      })
+      expect(result.requirements.find((r) => r.key === 'automation_state_known')?.satisfied).toBe(true)
+    })
+  })
+
+  describe('an action whose own risk level is unknown', () => {
+    it('is never auto-executed, even when every other check passes — routed to approval instead', () => {
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: DEMO_AUTOMATION_SETTINGS,
+        domainOutcome: 'auto_permitted',
+        domainReason: 'Everything passed.',
+        domainRequirements: [PASS_REQUIREMENT],
+        riskLevel: 'unknown',
+      })
+      expect(result.outcome).toBe('require_approval')
+      expect(result.riskLevel).toBe('unknown')
+    })
+
+    it('a blocked domain verdict still wins over an unknown risk level (blocked is more severe than requires-approval)', () => {
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: DEMO_AUTOMATION_SETTINGS,
+        domainOutcome: 'blocked',
+        domainReason: 'Compliance failed.',
+        domainRequirements: [{ key: 'compliance', label: 'Compliance', satisfied: false, detail: 'Blocked category.' }],
+        riskLevel: 'unknown',
+      })
+      expect(result.outcome).toBe('block')
+    })
+  })
+
+  describe('business settings not configured', () => {
+    it('downgrades an otherwise auto-permitted action to require_approval when required business settings are missing', async () => {
+      const { DEMO_AUTOMATION_SETTINGS: RAW_UNCONFIGURED } = await import('@/lib/automation/settingsTypes')
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: RAW_UNCONFIGURED,
+        domainOutcome: 'auto_permitted',
+        domainReason: 'Everything passed.',
+        domainRequirements: [PASS_REQUIREMENT],
+        riskLevel: 'low',
+      })
+      expect(result.outcome).toBe('require_approval')
+      expect(result.requirements.find((r) => r.key === 'business_settings_configured')?.satisfied).toBe(false)
+    })
+
+    it('never overrides a domain block just because settings happen to be configured', () => {
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: DEMO_AUTOMATION_SETTINGS, // the CONFIGURED fixture aliased at the top of this file
+        domainOutcome: 'blocked',
+        domainReason: 'Compliance failed.',
+        domainRequirements: [{ key: 'compliance', label: 'Compliance', satisfied: false, detail: 'Blocked category.' }],
+        riskLevel: 'low',
+      })
+      expect(result.outcome).toBe('block')
+    })
+
+    it('a fully configured business is never blocked or downgraded by the business_settings_configured check itself', () => {
+      const result = evaluateAutomationPolicy({
+        actionType: 'switch_supplier',
+        settings: DEMO_AUTOMATION_SETTINGS, // the CONFIGURED fixture aliased at the top of this file
+        domainOutcome: 'auto_permitted',
+        domainReason: 'ok',
+        domainRequirements: [PASS_REQUIREMENT],
+        riskLevel: 'low',
+      })
+      expect(result.outcome).toBe('allow_automatic')
+      expect(result.requirements.find((r) => r.key === 'business_settings_configured')?.satisfied).toBe(true)
+    })
   })
 })

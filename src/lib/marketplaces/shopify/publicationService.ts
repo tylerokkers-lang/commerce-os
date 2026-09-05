@@ -11,13 +11,16 @@ import { getProductMedia, getApprovedMediaForPublication } from '@/lib/products/
 import { getShippingSuitability } from '@/lib/suppliers/shippingQuotes'
 import type { ShippingSuitabilityStatus } from '@/lib/suppliers/shippingPolicy'
 import { getMarketplaceConnector } from '../connectors/registry'
-import type { CreateListingImage, CreateListingVariant, MarketplaceConnector } from '../connectors/types'
+import type { CreateListingImage, CreateListingInput, CreateListingVariant, MarketplaceConnector } from '../connectors/types'
 import { planListingTransition, type ListingState } from '../listingLifecycle'
 import { decideChannelFulfilmentAction } from '../publicationGate'
 import { assessShopifyEligibility, type ShopifyEligibilityResult } from './eligibility'
 import { buildShopifyProductPayload } from './payloadBuilder'
 import { checkPriceOverride, type PriceOverrideResult } from './priceOverride'
 import type { TablesUpdate } from '@/lib/supabase/database.types'
+import { classifyActionRisk } from '@/lib/automation/riskClassification'
+import { buildDryRunResult, type DryRunResult } from '@/lib/automation/dryRun'
+import type { PolicyRequirement, PolicyResult } from '@/lib/automation/types'
 
 /** This business's primary sales destination today — Shopify UK-first, per Phase 8/9's own design. Never hard-coded anywhere else; every other call site reads it from here. */
 const PRIMARY_DESTINATION_COUNTRY = 'GB'
@@ -253,6 +256,110 @@ export async function assembleShopifyPublicationPreview(orgId: string, productId
   })
 }
 
+/**
+ * Milestone: automation control plane. The eligibility-check-and-payload-
+ * build half of `createDraft`, extracted unchanged so `dryRunCreateShopifyDraft`
+ * below can produce the exact same payload a real `createDraft` call would
+ * send — without this becoming two independently-maintained copies of the
+ * same variant/media/payload assembly. Behaviourally identical to what
+ * `createDraft` always did inline; this is a pure relocation; the eligibility
+ * gate itself still lives in each caller (`createDraft` errors on
+ * ineligibility, the dry run instead reports it as a blocking reason).
+ */
+async function prepareShopifyDraftPayload(orgId: string, productId: string, selectedPriceMinor: number): Promise<Result<{ preview: ShopifyPublicationPreview; payload: CreateListingInput }, string>> {
+  const previewResult = await assembleShopifyPublicationPreview(orgId, productId)
+  if (!previewResult.ok) return previewResult
+  const preview = previewResult.value
+
+  const supabase = await createServerSupabase()
+  const { data: variantRows } = await supabase.from('product_variants').select('sku, options').eq('org_id', orgId).eq('product_id', productId).eq('is_active', true)
+  const variants: readonly CreateListingVariant[] = (variantRows ?? []).map((v) => ({
+    sku: v.sku,
+    priceMinor: selectedPriceMinor, // Per-variant pricing isn't tracked on product_variants — every variant shares the product's selected price. Documented limitation, see HANDOVER.md.
+    options: Object.entries((v.options as Record<string, string>) ?? {}).map(([name, value]) => ({ name, value })),
+    weightGrams: null,
+  }))
+  const approvedMedia = await getApprovedMediaForPublication(orgId, productId)
+  const images: readonly CreateListingImage[] = approvedMedia.map((m) => ({ url: m.media_url, altText: preview.product.title }))
+
+  const idempotencyKey = `draft-${productId}`
+
+  const payload = buildShopifyProductPayload({
+    productId,
+    idempotencyKey,
+    title: preview.product.title,
+    descriptionHtml: preview.product.description ?? '',
+    productType: preview.product.category,
+    vendor: null,
+    tags: [],
+    productSku: preview.product.sku,
+    currency: preview.pricing.currency,
+    selectedPriceMinor,
+    compareAtPriceMinor: null,
+    weightGrams: null,
+    images,
+    variants,
+    seoTitle: null,
+    seoDescription: null,
+  })
+
+  return ok({ preview, payload })
+}
+
+/**
+ * Milestone: automation control plane. Dry-run capability (design
+ * requirement §4): reports exactly what `createDraft` would do — eligible or
+ * not, the precise payload that would be sent, every requirement checked,
+ * and why — without creating a Shopify listing, writing `channel_products`,
+ * or recording an audit entry. Safe to call as often as needed (e.g. from a
+ * "preview" button) with zero side effects.
+ */
+export async function dryRunCreateShopifyDraft(orgId: string, productId: string, selectedPriceMinor: number): Promise<Result<DryRunResult<CreateListingInput>, string>> {
+  const { channelId, listing: existingListing } = await loadChannelProductRow(orgId, productId)
+  if (!channelId) return err('Shopify channel is not set up for this organisation.')
+
+  const prepared = await prepareShopifyDraftPayload(orgId, productId, selectedPriceMinor)
+  if (!prepared.ok) return prepared
+  const { preview, payload } = prepared.value
+
+  const alreadyPublished = Boolean(existingListing?.external_id)
+  const writeAccessConfigured = getShopifyConnector().descriptor.capabilities.createListings
+
+  const requirements: PolicyRequirement[] = [
+    ...preview.eligibility.requirements,
+    {
+      key: 'not_already_published',
+      label: 'Not already published',
+      satisfied: !alreadyPublished,
+      detail: alreadyPublished ? `Already published to Shopify as ${existingListing?.external_id}.` : 'No existing Shopify listing on file for this product.',
+    },
+    {
+      key: 'write_access_configured',
+      label: 'Shopify write access configured',
+      satisfied: writeAccessConfigured,
+      detail: writeAccessConfigured ? 'This connector can create listings.' : 'Shopify write access is not configured — the createListings capability is false.',
+    },
+  ]
+
+  const blocked = alreadyPublished || !preview.eligibility.eligible || !writeAccessConfigured
+  const policy: PolicyResult = {
+    outcome: blocked ? 'block' : 'allow_automatic',
+    requirements,
+    reason: alreadyPublished
+      ? `Already published as ${existingListing?.external_id}.`
+      : !preview.eligibility.eligible
+        ? `Not eligible for Shopify publication: ${preview.eligibility.blockingReasons.join(' ')}`
+        : !writeAccessConfigured
+          ? 'Shopify write access is not configured.'
+          : 'Eligible for Shopify draft creation.',
+    // No percentage/amount magnitude applies to "create a listing" — honestly
+    // unknown rather than assumed low, per `riskClassification.ts`.
+    riskLevel: classifyActionRisk({ actionType: 'publish_product' }),
+  }
+
+  return ok(buildDryRunResult(policy, payload))
+}
+
 interface Actor {
   userId: string
   label: string | null
@@ -298,8 +405,6 @@ async function recordListingTransition(
  * flagged as follow-up work, not built this phase.
  */
 export async function createDraft(orgId: string, productId: string, selectedPriceMinor: number, actor: Actor): Promise<Result<{ externalId: string; listingUrl: string | null; alreadyExisted: boolean }, string>> {
-  const supabase = await createServerSupabase()
-
   const { channelId, listing: existingListing } = await loadChannelProductRow(orgId, productId)
   if (!channelId) return err('Shopify channel is not set up for this organisation.')
 
@@ -307,44 +412,13 @@ export async function createDraft(orgId: string, productId: string, selectedPric
     return ok({ externalId: existingListing.external_id, listingUrl: existingListing.listing_url, alreadyExisted: true })
   }
 
-  const previewResult = await assembleShopifyPublicationPreview(orgId, productId)
-  if (!previewResult.ok) return previewResult
-  const preview = previewResult.value
+  const prepared = await prepareShopifyDraftPayload(orgId, productId, selectedPriceMinor)
+  if (!prepared.ok) return prepared
+  const { preview, payload } = prepared.value
 
   if (!preview.eligibility.eligible) {
     return err(`Not eligible for Shopify publication: ${preview.eligibility.blockingReasons.join(' ')}`)
   }
-
-  const { data: variantRows } = await supabase.from('product_variants').select('sku, options').eq('org_id', orgId).eq('product_id', productId).eq('is_active', true)
-  const variants: readonly CreateListingVariant[] = (variantRows ?? []).map((v) => ({
-    sku: v.sku,
-    priceMinor: selectedPriceMinor, // Per-variant pricing isn't tracked on product_variants — every variant shares the product's selected price. Documented limitation, see HANDOVER.md.
-    options: Object.entries((v.options as Record<string, string>) ?? {}).map(([name, value]) => ({ name, value })),
-    weightGrams: null,
-  }))
-  const approvedMedia = await getApprovedMediaForPublication(orgId, productId)
-  const images: readonly CreateListingImage[] = approvedMedia.map((m) => ({ url: m.media_url, altText: preview.product.title }))
-
-  const idempotencyKey = `draft-${productId}`
-
-  const payload = buildShopifyProductPayload({
-    productId,
-    idempotencyKey,
-    title: preview.product.title,
-    descriptionHtml: preview.product.description ?? '',
-    productType: preview.product.category,
-    vendor: null,
-    tags: [],
-    productSku: preview.product.sku,
-    currency: preview.pricing.currency,
-    selectedPriceMinor,
-    compareAtPriceMinor: null,
-    weightGrams: null,
-    images,
-    variants,
-    seoTitle: null,
-    seoDescription: null,
-  })
 
   // The capability gate — never call a marketplace write method when its
   // capability is declared false, exactly matching every other write in
@@ -388,6 +462,23 @@ export async function createDraft(orgId: string, productId: string, selectedPric
     return err(`Shopify draft creation failed: ${result.error.detail}`)
   }
 
+  // VERIFY — Milestone: automation control plane. `createListing`'s own
+  // "accepted" response was never proof the listing genuinely exists on
+  // Shopify's side; `priceExecution.ts`'s SUBMIT->VERIFY->RECONCILE pipeline
+  // already applies this discipline to price writes, and this closes the
+  // matching gap for listing creation. `not_applicable` (not `'failed'`)
+  // when the connector cannot read a listing back at all — an honest
+  // "cannot confirm," never presented as a rejection of the write itself.
+  let verificationStatus: 'verified' | 'failed' | 'uncertain' | 'not_applicable' = 'not_applicable'
+  if (result.value.externalId && getShopifyConnector().descriptor.capabilities.verifyWrites) {
+    const verifyResult = await getShopifyConnector().verifyListingState(result.value.externalId)
+    if (verifyResult.ok) {
+      verificationStatus = verifyResult.value.priceMinor === selectedPriceMinor ? 'verified' : 'failed'
+    } else {
+      verificationStatus = 'uncertain'
+    }
+  }
+
   const writeResult = await writeChannelProductRow(orgId, channelId, productId, existingListing?.id ?? null, {
     external_id: result.value.externalId,
     external_sku: preview.product.sku,
@@ -402,7 +493,7 @@ export async function createDraft(orgId: string, productId: string, selectedPric
   })
 
   if (writeResult.ok) {
-    await recordListingTransition(orgId, writeResult.value.id, preview.currentListing?.workflowState ?? null, 'pending_approval', 'Shopify draft created.', actor, { payload: payload as never })
+    await recordListingTransition(orgId, writeResult.value.id, preview.currentListing?.workflowState ?? null, 'pending_approval', 'Shopify draft created.', actor, { payload: payload as never, verificationStatus })
   }
 
   await recordAudit({
@@ -414,7 +505,8 @@ export async function createDraft(orgId: string, productId: string, selectedPric
     actorUserId: actor.userId,
     actorLabel: actor.label,
     newValue: { externalId: result.value.externalId, selectedPriceMinor, selectedSupplierId: preview.supplier?.supplierId ?? null },
-    reason: 'Shopify draft created from the controlled publication workflow.',
+    reason: `Shopify draft created from the controlled publication workflow.${verificationStatus !== 'not_applicable' ? ` Verification: ${verificationStatus}.` : ''}`,
+    metadata: { verificationStatus },
   })
 
   return ok({ externalId: result.value.externalId!, listingUrl: result.value.adminUrl, alreadyExisted: false })

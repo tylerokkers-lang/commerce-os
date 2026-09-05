@@ -96,6 +96,20 @@ export interface AutomationSettings {
    * decision, while this is `false`.
    */
   businessSettingsConfigured: boolean
+  /**
+   * Milestone: automation control plane. `true` whenever this object
+   * reflects a genuine, successfully-read state — a real `business_settings`
+   * row, OR the demo constant below (demo is a deliberately sandboxed,
+   * known state, not an unknown one; nothing in demo mode ever reaches a
+   * real external write regardless of this flag). `false` only for the one
+   * case that must never be read as "not paused": a live organisation whose
+   * `business_settings` row could not be confirmed to exist. The kill switch
+   * (`policyEngine.ts`) fails closed on this — an action never reaches
+   * `allow_automatic` while this is `false`, no matter what the domain
+   * engine or `automationPaused` itself say, because "unknown" must never be
+   * read as "known to be safe."
+   */
+  automationStateKnown: boolean
   /** Existing since 0001 (`business_settings.vat_registered`), never read outside invoicing until now. */
   vatRegistered: boolean
   /**
@@ -185,6 +199,8 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   // session), and callers making a genuine recommendation/eligibility
   // decision must check this before trusting the numbers above.
   businessSettingsConfigured: false,
+  // Demo is a deliberately known, sandboxed state — see the field's own doc comment.
+  automationStateKnown: true,
   vatRegistered: false,
   vatRatePct: null,
   packagingCostMinor: null,
@@ -194,6 +210,25 @@ export const DEMO_AUTOMATION_SETTINGS: AutomationSettings = {
   chargebackRatePct: null,
   chargebackFeeMinor: null,
   importDutyPct: null,
+}
+
+/**
+ * Milestone: automation control plane. Returned only for a LIVE
+ * organisation whose `business_settings` row could not be confirmed to
+ * exist (`settings.ts`'s `!data` branch) — never for a demo session, which
+ * has its own, separately-known constant above. Deliberately not just
+ * `{ ...DEMO_AUTOMATION_SETTINGS, automationStateKnown: false }` inline at
+ * each call site: `automationPaused: true` here is a second, independent
+ * layer of the same fail-closed guarantee `policyEngine.ts`'s explicit
+ * `automationStateKnown` check already provides, so the kill switch reads
+ * as "paused" even if a future caller reads `automationPaused` directly
+ * without going through the policy engine at all.
+ */
+export const UNKNOWN_STATE_AUTOMATION_SETTINGS: AutomationSettings = {
+  ...DEMO_AUTOMATION_SETTINGS,
+  automationPaused: true,
+  automationPausedReason: 'Automation state is unknown for this organisation — no business settings row was found. Autonomous actions are refused until business settings are saved.',
+  automationStateKnown: false,
 }
 
 /** Whether the kill switch (global or category-specific) currently blocks an action. */

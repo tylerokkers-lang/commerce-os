@@ -3,7 +3,7 @@ import { fromMajor } from '@/lib/core/money'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { executePriceChange } from '@/lib/automation/priceExecution'
 import { executeSupplierSwitch } from '@/lib/automation/supplierSwitchExecution'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import { shopifyDemoConnector } from '@/lib/marketplaces/connectors/shopifyDemo'
 import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
 

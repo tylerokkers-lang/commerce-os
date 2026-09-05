@@ -106,16 +106,19 @@ describe('getAutomationSettingsForOrg', () => {
     expect(settings.importDutyPct).toBe(0)
   })
 
-  it('no row at all falls back to DEMO_AUTOMATION_SETTINGS, never a partially-assembled object', async () => {
+  it('no row at all falls back to UNKNOWN_STATE_AUTOMATION_SETTINGS, never a partially-assembled object — and fails closed, not to DEMO_AUTOMATION_SETTINGS\'s unpaused default', async () => {
     const { stub } = buildSelectStub(null)
     createServiceSupabaseMock.mockReturnValue(stub)
 
     const { getAutomationSettingsForOrg } = await import('@/lib/automation/settings')
-    const { DEMO_AUTOMATION_SETTINGS } = await import('@/lib/automation/settingsTypes')
+    const { UNKNOWN_STATE_AUTOMATION_SETTINGS } = await import('@/lib/automation/settingsTypes')
     const settings = await getAutomationSettingsForOrg('org-unconfigured')
 
-    expect(settings).toEqual(DEMO_AUTOMATION_SETTINGS)
+    expect(settings).toEqual(UNKNOWN_STATE_AUTOMATION_SETTINGS)
     expect(settings.businessSettingsConfigured).toBe(false)
+    // Milestone: automation control plane — the kill switch's fail-closed guarantee.
+    expect(settings.automationStateKnown).toBe(false)
+    expect(settings.automationPaused).toBe(true)
   })
 
   it('the read is scoped to the exact org requested, never a different or global row', async () => {

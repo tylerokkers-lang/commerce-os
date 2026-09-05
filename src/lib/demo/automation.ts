@@ -61,6 +61,7 @@ const RUNNING_SETTINGS: AutomationSettings = {
   // configured its settings and is running autonomously — genuinely
   // "configured" for this fixture's own narrative, not a real org.
   businessSettingsConfigured: true,
+  automationStateKnown: true,
   vatRegistered: true,
   vatRatePct: 20,
   // Same "this demo scenario's premise is a fully configured business"

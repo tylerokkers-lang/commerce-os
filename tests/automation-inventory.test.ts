@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assessStockLevel, decideStockShortfallAction, decideResumeAfterRestock } from '@/lib/automation/inventoryAutomation'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 
 describe('stock level assessment', () => {
   it('classifies zero or negative available units as out of stock', () => {

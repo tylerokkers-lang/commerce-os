@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evaluatePublicationAutomation } from '@/lib/automation/publicationAutomation'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import { assessCompliance, type ComplianceContext } from '@/lib/compliance/rules'
 import type { PublicationGateInput } from '@/lib/marketplaces/publicationGate'
 

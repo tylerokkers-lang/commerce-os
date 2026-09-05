@@ -2,7 +2,7 @@ import 'server-only'
 
 import { createServerSupabase, createServiceSupabase } from '@/lib/supabase/server'
 import type { SessionContext } from '@/lib/security/session'
-import { DEMO_AUTOMATION_SETTINGS, type AutomationSettings } from './settingsTypes'
+import { DEMO_AUTOMATION_SETTINGS, UNKNOWN_STATE_AUTOMATION_SETTINGS, type AutomationSettings } from './settingsTypes'
 import type { AutomationCategory } from './types'
 
 export type { AutomationSettings } from './settingsTypes'
@@ -96,6 +96,7 @@ function mapSettingsRow(data: SettingsRow): AutomationSettings {
     // A row was found and mapped, so every field above is a real,
     // operator-saved value — never a silent placeholder.
     businessSettingsConfigured: true,
+    automationStateKnown: true,
     vatRegistered: data.vat_registered,
     vatRatePct: data.vat_rate_pct === null ? null : Number(data.vat_rate_pct),
     packagingCostMinor: data.packaging_cost_minor,
@@ -116,7 +117,7 @@ export async function getAutomationSettings(session: SessionContext): Promise<Au
   const { data, error } = await supabase.from('business_settings').select(SETTINGS_COLUMNS).eq('org_id', session.orgId).maybeSingle()
 
   if (error) throw new Error(`Could not load automation settings: ${error.message}`)
-  if (!data) return DEMO_AUTOMATION_SETTINGS
+  if (!data) return UNKNOWN_STATE_AUTOMATION_SETTINGS
 
   return mapSettingsRow(data)
 }
@@ -132,7 +133,7 @@ export async function getAutomationSettingsForOrg(orgId: string): Promise<Automa
   const { data, error } = await supabase.from('business_settings').select(SETTINGS_COLUMNS).eq('org_id', orgId).maybeSingle()
 
   if (error) throw new Error(`Could not load automation settings: ${error.message}`)
-  if (!data) return DEMO_AUTOMATION_SETTINGS
+  if (!data) return UNKNOWN_STATE_AUTOMATION_SETTINGS
 
   return mapSettingsRow(data)
 }
