@@ -1,5 +1,6 @@
 import { planRefund, type RefundDecision, type RefundRequest } from '@/lib/orders/refunds'
 import { evaluateAutomationPolicy, type DomainOutcome } from './policyEngine'
+import { classifyActionRisk } from './riskClassification'
 import type { AutomationSettings } from './settingsTypes'
 import type { AutomationLevel, PolicyResult } from './types'
 
@@ -68,7 +69,17 @@ function finishRefundAutomation(input: RefundAutomationInput, decision: RefundDe
         limitMinor: input.settings.maxDailyAutoRefundMinor,
       },
     ],
-    riskLevel: decision.isFullRefund ? 'medium' : 'low',
+    // Milestone: autonomous decision & capability layer. Was
+    // `isFullRefund ? 'medium' : 'low'` — a real inconsistency: a large
+    // *partial* refund (e.g. 95% of a big order) was classified lower risk
+    // than a *full* refund of a trivial amount, purely because of the
+    // boolean, never the actual sum at risk. Migrated to the shared
+    // classifier against the same single-refund ceiling
+    // (`maxAutoRefundMinor`) the domain engine's own `planRefund` already
+    // enforces. Never changes whether the refund executes — `financialChecks`
+    // above independently forces `require_approval` once the daily ceiling
+    // is exceeded, and `planRefund` itself gates the single-refund ceiling.
+    riskLevel: classifyActionRisk({ actionType: 'process_refund', magnitude: { kind: 'amount', amountMinor: input.request.requestedAmount.minor, limitMinor: input.settings.maxAutoRefundMinor } }),
   })
 
   return { decision, policy }

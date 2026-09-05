@@ -1,4 +1,5 @@
 import { evaluateAutomationPolicy, type DomainOutcome } from './policyEngine'
+import { classifyActionRisk } from './riskClassification'
 import type { AutomationSettings } from './settingsTypes'
 import type { PolicyRequirement, PolicyResult } from './types'
 import type { AdvertisingPlatform, CampaignClassification } from '@/lib/analytics/advertisingAnalytics'
@@ -201,7 +202,18 @@ export function assessCampaignActionPolicy(request: CampaignActionRequest, setti
     percentageChecks: pctChange !== null
       ? [{ label: 'Maximum automatic ad budget change', actualPct: pctChange, limitPct: settings.maxAutoAdIncreasePct }]
       : [],
-    riskLevel: pctChange !== null && Math.abs(pctChange) > settings.maxAutoAdIncreasePct ? 'medium' : 'low',
+    // Milestone: autonomous decision & capability layer. Migrated to the
+    // shared classifier. `pause_campaign` has no budget magnitude at all —
+    // previously defaulted to `'low'` by the old ternary's false branch;
+    // now honestly `'unknown'`. This changes nothing about execution:
+    // `domainOutcome` above can never be `'auto_permitted'` for any
+    // campaign action, by explicit design (see the module comment) — an
+    // `'unknown'`-risk action is *also* never auto-permitted
+    // (`policyEngine.ts`), so both old and new code already agreed on the
+    // one outcome that matters, `require_approval`/`block`, for every input.
+    riskLevel: pctChange !== null
+      ? classifyActionRisk({ actionType: ACTION_TYPE_TO_AUTOMATION[request.actionType], magnitude: { kind: 'percentage', actualPct: pctChange, limitPct: settings.maxAutoAdIncreasePct } })
+      : classifyActionRisk({ actionType: ACTION_TYPE_TO_AUTOMATION[request.actionType] }),
   })
 
   return { pctChange, policy }

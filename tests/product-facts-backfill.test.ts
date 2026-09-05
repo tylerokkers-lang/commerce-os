@@ -244,7 +244,7 @@ describe('backfillProductFactsFromResearch', () => {
 
     expect(result.recoveredUrlLive).toBe(true)
     expect(result.resolvedSearchLink).toBe(false)
-    expect(updates.supplier_products).toEqual([{ connector_key: 'cjdropshipping', connector_product_ref: 'ref-1', source_url: 'https://cjdropshipping.com/product/refetched.html', source_url_type: 'product' }])
+    expect(updates.supplier_products).toEqual([{ connector_key: 'cjdropshipping', connector_product_ref: 'ref-1', source_url: 'https://cjdropshipping.com/product/refetched.html', source_url_type: 'product', last_verified_at: expect.any(String) }])
   })
 
   it('falls back to the connector\'s official search route (type "search") when no real product URL is found and the connector supports it — the real, confirmed CJ case', async () => {
@@ -267,7 +267,7 @@ describe('backfillProductFactsFromResearch', () => {
 
     expect(result.recoveredUrlLive).toBe(false)
     expect(result.resolvedSearchLink).toBe(true)
-    expect(updates.supplier_products).toEqual([{ connector_key: 'cjdropshipping', connector_product_ref: 'ref-1', source_url: 'https://m.cjdropshipping.com/search?keyWord=CJYD1', source_url_type: 'search' }])
+    expect(updates.supplier_products).toEqual([{ connector_key: 'cjdropshipping', connector_product_ref: 'ref-1', source_url: 'https://m.cjdropshipping.com/search?keyWord=CJYD1', source_url_type: 'search', last_verified_at: expect.any(String) }])
   })
 
   it('a connector that does not support resolvesProductSourceLink is never asked for a search link — leaves source_url null, never fabricated', async () => {
@@ -292,7 +292,7 @@ describe('backfillProductFactsFromResearch', () => {
     expect(result.recoveredUrlLive).toBe(false)
     expect(result.resolvedSearchLink).toBe(false)
     expect(getProductSourceLinkSpy).not.toHaveBeenCalled()
-    expect(updates.supplier_products).toEqual([{ connector_key: 'cjdropshipping', connector_product_ref: 'ref-1' }])
+    expect(updates.supplier_products).toEqual([{ connector_key: 'cjdropshipping', connector_product_ref: 'ref-1', last_verified_at: expect.any(String) }])
   })
 
   it('a connector call that throws is swallowed — the backfill still completes rather than failing entirely', async () => {

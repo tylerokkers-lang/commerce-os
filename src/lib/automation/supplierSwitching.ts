@@ -1,5 +1,6 @@
 import { evaluateSupplierRedundancy, type RedundancyDecision, type RedundancyRequest } from '@/lib/suppliers/redundancy'
 import { evaluateAutomationPolicy, type DomainOutcome } from './policyEngine'
+import { classifyActionRisk } from './riskClassification'
 import type { AutomationSettings } from './settingsTypes'
 import type { PolicyResult } from './types'
 
@@ -36,17 +37,18 @@ export function evaluateSupplierSwitchAutomation(
     redundancy.outcome === 'switch_automatically' ? 'auto_permitted' : 'pending_approval'
 
   const percentageChecks = []
+  let costIncreasePct: number | null = null
   if (redundancy.recommended) {
     const newCostMinor =
       redundancy.recommended.candidate.signals.unitCost.minor +
       redundancy.recommended.candidate.signals.shippingCost.minor
-    const actualPct =
+    costIncreasePct =
       input.previousUnitCostPlusShippingMinor > 0
         ? ((newCostMinor - input.previousUnitCostPlusShippingMinor) / input.previousUnitCostPlusShippingMinor) * 100
         : 0
     percentageChecks.push({
       label: 'Maximum automatic supplier-switch cost increase',
-      actualPct,
+      actualPct: costIncreasePct,
       limitPct: input.settings.maxAutoSupplierSwitchCostIncreasePct,
     })
   }
@@ -65,7 +67,20 @@ export function evaluateSupplierSwitchAutomation(
       },
     ],
     percentageChecks,
-    riskLevel: redundancy.outcome === 'switch_automatically' ? 'low' : 'medium',
+    // Milestone: autonomous decision & capability layer. Was
+    // `outcome === 'switch_automatically' ? 'low' : 'medium'` — circular:
+    // risk was derived from the very verdict it should help inform, never
+    // from the actual cost-increase magnitude the percentage check above
+    // already computes. Migrated to the shared classifier against that
+    // same real magnitude; `'unknown'` (never a guessed default) when no
+    // candidate was found to size at all. Never changes whether a switch
+    // executes — `percentageChecks` above already independently forces
+    // `require_approval` once the configured cost-increase ceiling is
+    // exceeded, and a non-`switch_automatically` outcome already routes to
+    // approval via `domainOutcome` regardless of risk label.
+    riskLevel: costIncreasePct !== null
+      ? classifyActionRisk({ actionType: 'switch_supplier', magnitude: { kind: 'percentage', actualPct: costIncreasePct, limitPct: input.settings.maxAutoSupplierSwitchCostIncreasePct } })
+      : classifyActionRisk({ actionType: 'switch_supplier' }),
   })
 
   return { redundancy, policy }

@@ -858,6 +858,59 @@ already-`published` listing. Restricting it to pre-publish states, or routing
 it through `priceExecution.ts`'s real pipeline once a listing is live, is
 flagged as follow-up work.
 
+## The ten-stage conceptual product lifecycle
+
+Milestone: autonomous decision & capability layer, Part 3. A conceptual
+lifecycle — discovered → researching → evaluating → eligible → testing →
+published → monitoring → optimising → paused → retired — was proposed for
+Commerce OS to manage a product through. None of it needed a new enum: every
+stage is already representable by composing the four systems above, and
+forcing a fifth, flatter enum would have re-introduced exactly the ambiguity
+those four exist to prevent (a single column trying to answer more than one
+question at once).
+
+| Conceptual stage | Represented by | Note |
+|---|---|---|
+| Discovered | `product_stage = 'discovered'` | Exact match. |
+| Researching | `product_stage = 'researching'` | Exact match. |
+| Evaluating | `product_stage ∈ {'supplier_review', 'compliance_review'}` | The existing model is *more* granular than the concept, not less — "evaluating" is genuinely two distinct, ordered gates. |
+| Eligible | `product_stage = 'approved'` | Cleared every gate; not yet listed anywhere. |
+| Testing | `product_stage = 'testing'` | Exact match — and distinct from `product_decision = 'test'` (operator permission, a different axis; see "The four status systems" above). A product can be at stage `testing` under decision `add`, or stage `approved` under decision `test` — the two never collapse into each other. |
+| **Published** | **Not a `product_stage` value at all** — it is `channel_products.workflow_state = 'published'` (per channel), the execution-state system. | This is the one genuine trap the conceptual list sets: a product at stage `testing` ("live on at least one channel, on a limited budget" — `products/lifecycle.ts`'s own words) is *already* correctly, simultaneously `workflow_state = 'published'` on that channel. Treating "published" as a product-level lifecycle stage would either duplicate `workflow_state` or, worse, invite exactly the bug the previous phase fixed: an internal stage saying "published" without a verified external write behind it. |
+| Monitoring | Not a state — a standing process (`src/lib/monitoring/monitors/*.ts`) that runs against every non-terminal product regardless of stage, not a position a product occupies. | No column needed; "is this product being monitored" is answered by "is it non-terminal," not by a flag. |
+| Optimising | `product_stage ∈ {'proven', 'scaling'}` | The existing progression already models this arc; `mature`/`declining` continue it. |
+| Paused | `product_stage = 'paused'` (business-level: stop evaluating/spending on this product) **and, independently**, `channel_products.workflow_state = 'paused'` (channel-level: this one listing is off) | Two different, deliberately non-identical "paused" facts — a product can be business-paused with every channel listing already ended, or a single channel can be paused while the product itself continues at `testing`/`proven`. `handleProductPause`/`handleProductResume` (previous phase) only ever write the channel-level fact, through a verified connector call — never the business-level `product_stage`, which stays an explicit, separate operator/pipeline decision. |
+| Retired | `product_stage ∈ {'removed', 'rejected'}` | `rejected` (never traded) vs `removed` (traded, then withdrawn) — the existing terminal states already distinguish *why* a product stopped, which a single flat "retired" would lose. |
+
+## Automation levels
+
+Milestone: autonomous decision & capability layer, Part 8. `docs/PRINCIPLES.md`
+§5 already defines four levels on the `automation_level` enum (`manual`,
+`assisted`, `supervised`, `autonomous`) applied per action type. A six-rung
+conceptual ladder (observe / recommend / approval / low-risk auto /
+controlled marketplace auto / full autonomy) was proposed on top of that.
+The four existing levels plus the connector capability flags already
+introduced for other reasons (`writeListings`, `createListings`,
+`verifyWrites` — all `false` on every real marketplace connector today)
+turn out to already express all six rungs; no new enum value, column, or
+flag was added.
+
+| Conceptual level | How it's actually reached today |
+|---|---|
+| 0 — Observe | The baseline, not a setting: monitors (`src/lib/monitoring/monitors/*.ts`) always read facts regardless of `automation_level` — there is no way to turn fact-reading off per action type, only execution. |
+| 1 — Recommend | `automation_level = 'manual'`. Every domain engine (`priceAutomation.ts`'s `levelPermitsAutoApply`, and the equivalent checks in the other six) routes to a recommendation only — no `automation_actions` row proposing real execution. |
+| 2 — Approval | `automation_level = 'assisted'` (or the domain's own structural floor — advertising campaign actions sit *here* regardless of level, by explicit, permanent design; see `advertisingAutomation.ts`'s module comment). The action is proposed for real, through the same `ai_decisions` approval workflow every level-2-and-above action uses, and only executes on an owner's explicit approval. |
+| 3 — Low-risk auto | `automation_level ∈ {'supervised', 'autonomous'}` **and** `policyEngine.ts`'s other checks all pass (kill switch open, business settings configured, financial/percentage limits satisfied, risk not `'unknown'`). Reachable today for actions that don't require a marketplace capability at all — e.g. the internal pause/resume reconciliation once a connector *does* support the write. |
+| 4 — Controlled marketplace auto | Everything in level 3, **plus** the specific connector's `writeListings`/`createListings`/`verifyWrites` capability flags being `true` for the specific write in question. **Not reachable today for any real connector** — Shopify, Amazon, and eBay all declare these `false` (or, for Amazon, `true` behind an honestly-stubbed method — see the marketplace capability matrix). This is the actual, current, load-bearing boundary this phase does not cross. |
+| 5 — Full operating autonomy | Every action type at `autonomous` with no structural approval floor anywhere. **Not fully reachable even in principle without further code changes** — advertising campaign actions, for one concrete example, have no code path to `auto_permitted` at all today, by deliberate design, independent of settings. |
+
+Levels 0-3 are exercised by real code today (gated by settings, not by
+missing capability). Level 4 is one flipped capability flag per connector
+away, deliberately not flipped in this phase. Level 5 requires further,
+deliberate code changes in at least the advertising domain before it is
+even structurally possible — it is not merely "not enabled," it does not
+yet exist as a reachable code path.
+
 ## Data access
 
 Every read goes through a repository that branches on `session.isDemo` and

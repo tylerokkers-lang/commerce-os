@@ -1,5 +1,6 @@
 import { runOrderPipeline, type OrderPipelineInput, type OrderPipelineResult } from '@/lib/orders/pipeline'
 import { evaluateAutomationPolicy, type DomainOutcome } from './policyEngine'
+import { classifyActionRisk } from './riskClassification'
 import type { AutomationSettings } from './settingsTypes'
 import type { PolicyResult } from './types'
 
@@ -58,7 +59,14 @@ export function evaluateOrderAutomation(
         limitMinor: settings.maxDailyAutoSupplierSpendMinor,
       },
     ],
-    riskLevel: 'medium',
+    // Milestone: autonomous decision & capability layer. Was hardcoded
+    // `'medium'` regardless of size — a real inconsistency this migration
+    // fixes: a genuine size-based classification against the same limit
+    // the financial check above already enforces, so a small order and a
+    // near-ceiling order are no longer labelled identically. Never changes
+    // whether the order executes — `financialChecks` already independently
+    // forces `require_approval` once either ceiling is exceeded.
+    riskLevel: classifyActionRisk({ actionType: 'submit_supplier_order', magnitude: { kind: 'amount', amountMinor: estimatedOrderCostMinor, limitMinor: settings.maxAutoPurchaseMinor } }),
   })
 
   return { pipeline, policy }

@@ -3,6 +3,7 @@ import 'server-only'
 import { err, ok, type Result } from '@/lib/core/result'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { recordAudit } from '@/lib/audit'
+import { createNotification } from '@/lib/notifications/create'
 import { getChannelReadiness } from '../channelReadiness'
 import { getProductIntelligence } from '@/lib/products/intelligence/repository'
 import { getSupplierOffersForProduct } from '@/lib/suppliers/discovery/repository'
@@ -642,6 +643,13 @@ export async function publishLive(orgId: string, productId: string, actor: Actor
       actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
       result: 'failure', error: detail, reason: `Live publication failed.`,
     })
+    await createNotification({
+      orgId, severity: 'critical', category: 'catalogue',
+      title: `Publication failed for ${freshPreview.value.product.title}`,
+      body: `Shopify rejected the live-publication request: ${detail}`,
+      entityType: 'channel_product', entityId: productId,
+      dedupeKey: `publication-failed:${orgId}:${idempotencyKey}`,
+    })
     return err(`Live publication failed: ${detail}`)
   }
 
@@ -671,6 +679,13 @@ export async function publishLive(orgId: string, productId: string, actor: Actor
       actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
       result: 'failure', error: 'Unverified after submission.', reason: 'Live publication submitted but could not be confirmed against Shopify — Commerce OS has NOT marked this live.',
     })
+    await createNotification({
+      orgId, severity: 'critical', category: 'catalogue',
+      title: `Publication verification failed for ${freshPreview.value.product.title}`,
+      body: 'Submitted to Shopify, but its own reported state could not be confirmed to match. Commerce OS has NOT marked this listing live.',
+      entityType: 'channel_product', entityId: productId,
+      dedupeKey: `publication-failed:${orgId}:${idempotencyKey}`,
+    })
     return err('Publication was submitted, but the marketplace could not be confirmed to reflect it — treated as unverified, not as succeeded. Commerce OS has not marked this listing live.')
   }
 
@@ -680,6 +695,13 @@ export async function publishLive(orgId: string, productId: string, actor: Actor
     orgId, action: 'LISTING_PUBLISHED', entityType: 'channel_product', entityId: productId,
     actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
     reason: 'Product published live on Shopify by explicit owner action, verified against the marketplace.',
+  })
+  await createNotification({
+    orgId, severity: 'success', category: 'catalogue',
+    title: `${freshPreview.value.product.title} is now published`,
+    body: 'Verified live on Shopify.',
+    entityType: 'channel_product', entityId: productId,
+    dedupeKey: `publication-published:${orgId}:${idempotencyKey}`,
   })
 
   return ok(true)

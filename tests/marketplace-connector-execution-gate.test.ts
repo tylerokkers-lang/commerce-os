@@ -10,6 +10,9 @@ const createServiceSupabaseMock = vi.fn(() => ({
 }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceSupabase: () => createServiceSupabaseMock() }))
 
+const createNotificationMock = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/notifications/create', () => ({ createNotification: (input: unknown) => createNotificationMock(input) }))
+
 function makeConnector(key: string, isConfigured = true) {
   return { isConfigured: () => isConfigured, descriptor: { key, label: key, channel: 'shopify' } } as never
 }
@@ -85,5 +88,32 @@ describe('withMarketplaceConnectorGate', () => {
 
     expect(result.ok).toBe(false)
     expect(rpcMock).toHaveBeenCalledWith('record_marketplace_connector_outcome', expect.objectContaining({ p_succeeded: false, p_consecutive_failures: 2 }))
+  })
+
+  it('a failure that first crosses the circuit-open threshold sends exactly one critical notification', async () => {
+    selectResult = { data: { is_enabled: true, last_success_at: null, last_failure_at: null, last_error: null, next_retry_at: null, consecutive_failures: 2 }, error: null }
+    const { withMarketplaceConnectorGate } = await import('@/lib/marketplaces/connectors/executionGate')
+    await withMarketplaceConnectorGate('org-1', makeConnector('shopify'), async () => ({ ok: false, error: 'boom' }))
+
+    expect(createNotificationMock).toHaveBeenCalledTimes(1)
+    expect(createNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org-1',
+      severity: 'critical',
+      category: 'marketplace',
+      entityType: 'channel',
+      entityId: 'shopify',
+      dedupeKey: 'connector-circuit-open:org-1:shopify',
+    }))
+  })
+
+  it('a failure below the threshold, and a failure past it (already open), never re-notifies', async () => {
+    selectResult = { data: { is_enabled: true, last_success_at: null, last_failure_at: null, last_error: null, next_retry_at: null, consecutive_failures: 1 }, error: null }
+    const { withMarketplaceConnectorGate } = await import('@/lib/marketplaces/connectors/executionGate')
+    await withMarketplaceConnectorGate('org-1', makeConnector('shopify'), async () => ({ ok: false, error: 'boom' }))
+    expect(createNotificationMock).not.toHaveBeenCalled()
+
+    selectResult = { data: { is_enabled: true, last_success_at: null, last_failure_at: null, last_error: null, next_retry_at: null, consecutive_failures: 4 }, error: null }
+    await withMarketplaceConnectorGate('org-1', makeConnector('shopify'), async () => ({ ok: false, error: 'boom' }))
+    expect(createNotificationMock).not.toHaveBeenCalled()
   })
 })

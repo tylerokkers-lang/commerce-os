@@ -10,6 +10,9 @@ const createServiceSupabaseMock = vi.fn(() => ({
 }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceSupabase: () => createServiceSupabaseMock() }))
 
+const createNotificationMock = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/notifications/create', () => ({ createNotification: (input: unknown) => createNotificationMock(input) }))
+
 /**
  * Milestone: execution reliability & unified write path. Tests the real
  * gating decision end to end (load state -> `canConnectorRunNow` -> call ->
@@ -103,5 +106,32 @@ describe('withSupplierConnectorGate', () => {
     const result = await withSupplierConnectorGate('org-1', 'sup-1', makeConnector(), async () => ({ ok: true, value: 'real answer' }))
 
     expect(result).toEqual({ ok: true, value: 'real answer' })
+  })
+
+  it('a failure that first crosses the circuit-open threshold sends exactly one critical notification', async () => {
+    selectResult = { data: { is_enabled: true, last_success_at: null, last_failure_at: null, last_error: null, next_allowed_at: null, consecutive_failures: 2 }, error: null }
+    const { withSupplierConnectorGate } = await import('@/lib/suppliers/connectors/executionGate')
+    await withSupplierConnectorGate('org-1', 'sup-1', makeConnector(), async () => ({ ok: false, error: 'API timeout' }))
+
+    expect(createNotificationMock).toHaveBeenCalledTimes(1)
+    expect(createNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org-1',
+      severity: 'critical',
+      category: 'supplier',
+      entityType: 'supplier_connector',
+      entityId: 'sup-1:cjdropshipping',
+      dedupeKey: 'connector-circuit-open:org-1:sup-1:cjdropshipping',
+    }))
+  })
+
+  it('a failure below the threshold, and a failure past it (already open), never re-notifies', async () => {
+    selectResult = { data: { is_enabled: true, last_success_at: null, last_failure_at: null, last_error: null, next_allowed_at: null, consecutive_failures: 1 }, error: null }
+    const { withSupplierConnectorGate } = await import('@/lib/suppliers/connectors/executionGate')
+    await withSupplierConnectorGate('org-1', 'sup-1', makeConnector(), async () => ({ ok: false, error: 'API timeout' }))
+    expect(createNotificationMock).not.toHaveBeenCalled()
+
+    selectResult = { data: { is_enabled: true, last_success_at: null, last_failure_at: null, last_error: null, next_allowed_at: null, consecutive_failures: 4 }, error: null }
+    await withSupplierConnectorGate('org-1', 'sup-1', makeConnector(), async () => ({ ok: false, error: 'API timeout' }))
+    expect(createNotificationMock).not.toHaveBeenCalled()
   })
 })

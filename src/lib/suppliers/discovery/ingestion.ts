@@ -370,6 +370,17 @@ export async function importCandidate(
     source_url_type: candidate.raw_signals?.sourceUrlType ?? null,
     connector_key: candidate.raw_signals?.connectorKey ?? null,
     connector_product_ref: candidate.raw_signals?.connectorProductRef ?? null,
+    // Milestone: autonomous decision & capability layer, Part 6 (supplier
+    // intelligence provenance). `last_verified_at` existed on this table
+    // since Milestone 3 but no real code path ever set it — every real
+    // supplier fact for an imported CJ product read as freshness
+    // `'unknown'` forever (`factsTypes.ts`'s `factFrom`), never `'fresh'`,
+    // regardless of how recently it was genuinely captured. Set only when
+    // this offer's cost/stock came from a real connector read
+    // (`connectorKey` present) — a manually-entered candidate has no
+    // connector confirmation behind its numbers, so it stays honestly
+    // unverified rather than backdated to "just checked."
+    last_verified_at: candidate.raw_signals?.connectorKey ? new Date().toISOString() : null,
   })
 
   if (offerError) return err(`Product was created but the supplier offer could not be saved: ${offerError.message}`)

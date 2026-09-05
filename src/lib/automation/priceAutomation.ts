@@ -1,6 +1,7 @@
 import { calculateProfitability, type CostInputs, type Profitability } from '@/lib/profitability'
 import { formatMoney } from '@/lib/core/money'
 import { evaluateAutomationPolicy, type DomainOutcome } from './policyEngine'
+import { classifyActionRisk } from './riskClassification'
 import type { AutomationSettings } from './settingsTypes'
 import type { AutomationLevel, PolicyResult } from './types'
 
@@ -96,7 +97,17 @@ export function assessPriceChangePolicy(input: PriceChangePolicyInput, settings:
       { label: 'Maximum price change per action', actualPct: pctChange, limitPct: settings.maxAutoPriceChangePct },
       { label: 'Maximum price movement per day', actualPct: cumulativePct, limitPct: settings.maxPriceMovementPerDayPct },
     ],
-    riskLevel: Math.abs(pctChange) > settings.maxAutoPriceChangePct ? 'medium' : 'low',
+    // Milestone: autonomous decision & capability layer. Migrated to the
+    // shared classifier (`riskClassification.ts`) — identical output to the
+    // old inline ternary for every change within double the configured
+    // limit (both agree: at-or-under -> low, over-but-not-double ->
+    // medium), and now honestly reports `'high'` for a change more than
+    // double the limit, which the old ternary silently flattened to
+    // `'medium'`. This never changes whether the change executes — an
+    // over-limit change was already forced to `require_approval` by the
+    // `percentageChecks` entry below regardless of its risk label; only the
+    // audit-trail label for an extreme, already-blocked case is more honest.
+    riskLevel: classifyActionRisk({ actionType: 'update_price', magnitude: { kind: 'percentage', actualPct: pctChange, limitPct: settings.maxAutoPriceChangePct } }),
   })
 
   return { before, after, pctChange, policy }

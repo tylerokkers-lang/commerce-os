@@ -1,6 +1,8 @@
 import { assessPriceChange, type PriceChangeRequest } from './priceAutomation'
+import { evaluateSupplierSwitchAutomation, type SupplierSwitchAutomationInput } from './supplierSwitching'
+import { evaluateRefundAutomation, type RefundAutomationInput } from './refundAutomation'
 import type { AutomationSettings } from './settingsTypes'
-import type { PolicyResult } from './types'
+import type { AutomationLevel, PolicyResult } from './types'
 
 /**
  * Generic dry-run capability (Milestone: automation control plane).
@@ -60,6 +62,40 @@ export interface PriceChangeDryRunPayload {
 export function dryRunPriceChange(request: PriceChangeRequest, settings: AutomationSettings, externalId?: string): DryRunResult<PriceChangeDryRunPayload> {
   const assessment = assessPriceChange(request, settings)
   return buildResult(assessment.policy, { externalId, newPriceMinor: request.newSellingPrice.minor })
+}
+
+export interface SupplierSwitchDryRunPayload {
+  recommendedSupplierId: string | null
+  recommendedSupplierName: string | null
+  reason: string
+}
+
+/**
+ * Dry-runs a supplier switch exactly as the real domain engine would decide
+ * it — never itself switches anything, and per Part 5's explicit
+ * requirement, no caller of this function should ever wire its
+ * `wouldExecuteAutomatically: true` case to an actual switch without the
+ * identity/cost/shipping/delivery/equivalence verification this milestone
+ * does not yet build.
+ */
+export function dryRunSupplierSwitch(input: SupplierSwitchAutomationInput): DryRunResult<SupplierSwitchDryRunPayload> {
+  const assessment = evaluateSupplierSwitchAutomation(input)
+  const recommended = assessment.redundancy.recommended ?? null
+  return buildResult(assessment.policy, {
+    recommendedSupplierId: recommended?.candidate.id ?? null,
+    recommendedSupplierName: recommended?.candidate.name ?? null,
+    reason: assessment.redundancy.reason,
+  })
+}
+
+export interface RefundDryRunPayload {
+  orderId: string
+  requestedAmountMinor: number
+}
+
+export function dryRunRefund(input: RefundAutomationInput, automationLevel: AutomationLevel): DryRunResult<RefundDryRunPayload> {
+  const assessment = evaluateRefundAutomation(input, automationLevel)
+  return buildResult(assessment.policy, { orderId: input.request.orderId, requestedAmountMinor: input.request.requestedAmount.minor })
 }
 
 export { buildResult as buildDryRunResult, describeExpectedResult }

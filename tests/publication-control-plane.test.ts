@@ -118,4 +118,37 @@ describe('publicationService.ts: automation control-plane additions', () => {
     expect(verifyIndex).toBeGreaterThan(-1)
     expect(successWriteIndex).toBeGreaterThan(verifyIndex)
   })
+
+  /**
+   * Milestone: autonomous decision & capability layer, Part 12. Before this,
+   * `publishLive` only ever called `recordAudit` — no notification existed
+   * for "product published" or "publication failed" anywhere in the codebase,
+   * despite both being on the brief's explicit notification list. Static
+   * source-text assertions, same technique as the rest of this file, since
+   * this module cannot be imported into Vitest.
+   */
+  it('publishLive notifies on success (published) and on both failure paths (submit rejected, unverified) — never only auditing silently', () => {
+    const publishMatch = source.match(/export async function publishLive[\s\S]*?\n}\n/)![0]
+
+    // Submit-rejected failure path.
+    const submitFailIndex = publishMatch.indexOf("reason: `Live publication failed.`")
+    const submitNotifyIndex = publishMatch.indexOf('Publication failed for')
+    expect(submitFailIndex).toBeGreaterThan(-1)
+    expect(submitNotifyIndex).toBeGreaterThan(submitFailIndex)
+
+    // Unverified-after-submission failure path.
+    const unverifiedFailIndex = publishMatch.indexOf("error: 'Unverified after submission.'")
+    const unverifiedNotifyIndex = publishMatch.indexOf('Publication verification failed for')
+    expect(unverifiedFailIndex).toBeGreaterThan(-1)
+    expect(unverifiedNotifyIndex).toBeGreaterThan(unverifiedFailIndex)
+
+    // Success path — only reachable after verified === true.
+    const successAuditIndex = publishMatch.indexOf("action: 'LISTING_PUBLISHED'")
+    const successNotifyIndex = publishMatch.indexOf('is now published')
+    expect(successAuditIndex).toBeGreaterThan(-1)
+    expect(successNotifyIndex).toBeGreaterThan(successAuditIndex)
+
+    expect(publishMatch).toMatch(/severity: 'critical', category: 'catalogue'/)
+    expect(publishMatch).toMatch(/severity: 'success', category: 'catalogue'/)
+  })
 })

@@ -3,6 +3,7 @@ import 'server-only'
 import { err, type Result } from '@/lib/core/result'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import { canRunNow, computeOutcomeUpdate, type CircuitBreakerState } from '@/lib/automation/circuitBreaker'
+import { createNotification } from '@/lib/notifications/create'
 import type { MarketplaceConnector } from './types'
 
 /**
@@ -58,7 +59,10 @@ async function loadState(orgId: string, channelKey: string): Promise<CircuitBrea
   }
 }
 
-async function recordOutcome(orgId: string, channelKey: string, priorConsecutiveFailures: number, succeeded: boolean, error: string | null): Promise<void> {
+/** Matches `deriveMarketplaceStatus`'s existing `consecutiveFailures > 0 -> degraded` convention, escalated to a real notification at the same threshold the supplier gate uses. */
+const CIRCUIT_OPEN_THRESHOLD = 3
+
+async function recordOutcome(orgId: string, channelKey: string, connectorLabel: string, priorConsecutiveFailures: number, succeeded: boolean, error: string | null): Promise<void> {
   const update = computeOutcomeUpdate(succeeded, new Date(), error, priorConsecutiveFailures)
   try {
     const supabase = createServiceSupabase() as unknown as {
@@ -75,6 +79,21 @@ async function recordOutcome(orgId: string, channelKey: string, priorConsecutive
     if (rpcError) console.error('[circuit-breaker] failed to record marketplace connector outcome', { channelKey, error: rpcError.message })
   } catch (recordError) {
     console.error('[circuit-breaker] failed to record marketplace connector outcome', { channelKey, error: recordError })
+  }
+
+  // Milestone: autonomous decision & capability layer, Part 12. Notify
+  // exactly once, at the moment the streak first crosses the threshold.
+  if (!succeeded && update.consecutiveFailures === CIRCUIT_OPEN_THRESHOLD) {
+    await createNotification({
+      orgId,
+      severity: 'critical',
+      category: 'marketplace',
+      title: `${connectorLabel} is failing repeatedly`,
+      body: `${update.consecutiveFailures} consecutive failures — calls are now paused until ${update.nextAllowedAt}. Last error: ${error ?? 'unknown'}.`,
+      entityType: 'channel',
+      entityId: channelKey,
+      dedupeKey: `connector-circuit-open:${orgId}:${channelKey}`,
+    })
   }
 }
 
@@ -102,6 +121,6 @@ export async function withMarketplaceConnectorGate<T, E>(
   if (!gate.ok) return err(gate.error)
 
   const result = await fn()
-  await recordOutcome(orgId, channelKey, state.consecutiveFailures, result.ok, result.ok ? null : String((result as { error: E }).error))
+  await recordOutcome(orgId, channelKey, connector.descriptor.label, state.consecutiveFailures, result.ok, result.ok ? null : String((result as { error: E }).error))
   return result
 }

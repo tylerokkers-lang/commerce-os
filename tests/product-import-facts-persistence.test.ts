@@ -67,6 +67,13 @@ describe('importCandidate: real discovery-time facts are persisted, never droppe
     expect(source).toMatch(/connector_product_ref:\s*candidate\.raw_signals\?\.connectorProductRef\s*\?\?\s*null/)
   })
 
+  it('last_verified_at is set only when this offer genuinely came from a real connector read, never backdated for a manually-entered candidate', () => {
+    // Milestone: autonomous decision & capability layer, Part 6 — supplier
+    // intelligence provenance. The column existed since Milestone 3 but no
+    // real code path ever set it before this.
+    expect(source).toMatch(/last_verified_at:\s*candidate\.raw_signals\?\.connectorKey\s*\?\s*new Date\(\)\.toISOString\(\)\s*:\s*null/)
+  })
+
   it('the original supplier title is preserved verbatim into products.supplier_title, separate from the generated clean title', () => {
     expect(source).toMatch(/supplier_title:\s*candidate\.candidate_title/)
   })

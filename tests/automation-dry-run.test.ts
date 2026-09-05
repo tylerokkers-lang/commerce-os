@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { dryRunPriceChange } from '@/lib/automation/dryRun'
+import { dryRunPriceChange, dryRunSupplierSwitch, dryRunRefund } from '@/lib/automation/dryRun'
 import { fromMajor } from '@/lib/core/money'
 import type { PriceChangeRequest } from '@/lib/automation/priceAutomation'
+import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
 import { CONFIGURED_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 
 /**
@@ -75,5 +76,75 @@ describe('dryRunPriceChange', () => {
     expect(result.wouldExecuteAutomatically).toBe(false)
     expect(result.policy.outcome).toBe('block')
     expect(result.policy.requirements.find((r) => r.key === 'automation_state_known')?.satisfied).toBe(false)
+  })
+})
+
+/** Milestone: autonomous decision & capability layer, Part 13 — dry-run extended to two more domains, zero external writes either way. */
+describe('dryRunSupplierSwitch', () => {
+  function goodSignals(overrides = {}) {
+    return {
+      unitCost: fromMajor(9), shippingCost: fromMajor(2), deliveryDaysMin: 2, deliveryDaysMax: 4,
+      ordersPlaced: 100, ordersLate: 2, ordersDefective: 1, qualityRating: 4.6, communicationRating: 4.5,
+      handlesReturns: true, returnsWindowDays: 45, acceptsFaultyReturns: true, providesTracking: true,
+      supportsBlindShipping: true, supportsCustomInvoice: true, supportsCustomPackaging: true,
+      supportsOwnBranding: true, documentCount: 2, ...overrides,
+    }
+  }
+  const baseRequest: Omit<RedundancyRequest, 'automationLevel' | 'alternatives'> = {
+    productTitle: 'Widget', channels: ['shopify'], reason: { key: 'out_of_stock', detail: 'zero stock' },
+    thresholds: { minGrossMarginPct: 25, minNetMarginPct: 10 },
+    previousChannelStatus: { shopify: 'approved', amazon_uk: 'not_assessed', ebay: 'not_assessed' },
+    economics: { sellingPrice: fromMajor(35), returnRatePct: 4, vatRatePct: 20, vatInclusive: true },
+    profileInput: { category: 'kitchen', shopifyAdSpendPerUnit: fromMajor(1.5) },
+  }
+
+  it('reports the recommended alternative and whether it would switch automatically, with zero side effects', () => {
+    const result = dryRunSupplierSwitch({
+      request: { ...baseRequest, automationLevel: 'autonomous', alternatives: [{ id: 'sup-good', name: 'Good Alt', signals: goodSignals() }] },
+      previousUnitCostPlusShippingMinor: fromMajor(11).minor,
+      settings: CONFIGURED_AUTOMATION_SETTINGS,
+    })
+    expect(result.payload?.recommendedSupplierId).toBe('sup-good')
+    expect(typeof result.wouldExecuteAutomatically).toBe('boolean')
+  })
+
+  it('reports a null recommendation, never a fabricated one, when no alternative exists', () => {
+    const result = dryRunSupplierSwitch({
+      request: { ...baseRequest, automationLevel: 'autonomous', alternatives: [] },
+      previousUnitCostPlusShippingMinor: fromMajor(11).minor,
+      settings: CONFIGURED_AUTOMATION_SETTINGS,
+    })
+    expect(result.payload?.recommendedSupplierId).toBeNull()
+    expect(result.wouldExecuteAutomatically).toBe(false)
+  })
+})
+
+describe('dryRunRefund', () => {
+  it('reports the exact refund payload and whether it would auto-approve, with zero external writes', () => {
+    const result = dryRunRefund(
+      {
+        request: { orderId: 'ord-1', orderTotal: fromMajor(30), alreadyRefunded: fromMajor(0), requestedAmount: fromMajor(10), reason: 'customer_changed_mind' },
+        settings: CONFIGURED_AUTOMATION_SETTINGS,
+        refundsAlreadyIssuedTodayMinor: 0,
+        refundsAlreadyIssuedOnOrder: 0,
+      },
+      'autonomous',
+    )
+    expect(result.payload).toEqual({ orderId: 'ord-1', requestedAmountMinor: 1000 })
+    expect(result.wouldExecuteAutomatically).toBe(true)
+  })
+
+  it('reports blocked with a null payload when the refund exceeds the order balance', () => {
+    const result = dryRunRefund(
+      {
+        request: { orderId: 'ord-1', orderTotal: fromMajor(30), alreadyRefunded: fromMajor(25), requestedAmount: fromMajor(10), reason: 'customer_changed_mind' },
+        settings: CONFIGURED_AUTOMATION_SETTINGS,
+        refundsAlreadyIssuedTodayMinor: 0,
+        refundsAlreadyIssuedOnOrder: 0,
+      },
+      'autonomous',
+    )
+    expect(result.eligible).toBe(false)
+    expect(result.payload).toBeNull()
   })
 })

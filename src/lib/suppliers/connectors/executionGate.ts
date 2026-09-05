@@ -3,8 +3,12 @@ import 'server-only'
 import { err, type Result } from '@/lib/core/result'
 import { createServiceSupabase } from '@/lib/supabase/server'
 import { computeOutcomeUpdate } from '@/lib/automation/circuitBreaker'
+import { createNotification } from '@/lib/notifications/create'
 import { canConnectorRunNow, type ConnectorRuntimeState } from './registry'
 import type { SupplierConnector } from './types'
+
+/** Matches `deriveConnectorStatus`'s existing `consecutiveFailures >= 3` "failing" threshold — never a second, independently-tuned number. */
+const CIRCUIT_OPEN_THRESHOLD = 3
 
 /**
  * Real circuit-breaker enforcement for supplier connectors (Milestone:
@@ -97,6 +101,23 @@ async function recordOutcome(
     // Never let bookkeeping failure mask the real call's own result — the
     // caller already has the real outcome; this is best-effort telemetry.
     console.error('[circuit-breaker] failed to record supplier connector outcome', { connectorKey: connector.descriptor.key, error: recordError })
+  }
+
+  // Milestone: autonomous decision & capability layer, Part 12. Notify
+  // exactly once, at the moment the streak first crosses the threshold —
+  // never on every subsequent failure while still open, and never on a
+  // transient single failure below it.
+  if (!succeeded && update.consecutiveFailures === CIRCUIT_OPEN_THRESHOLD) {
+    await createNotification({
+      orgId,
+      severity: 'critical',
+      category: 'supplier',
+      title: `${connector.descriptor.label} is failing repeatedly`,
+      body: `${update.consecutiveFailures} consecutive failures — calls are now paused until ${update.nextAllowedAt}. Last error: ${error ?? 'unknown'}.`,
+      entityType: 'supplier_connector',
+      entityId: `${supplierId}:${connector.descriptor.key}`,
+      dedupeKey: `connector-circuit-open:${orgId}:${supplierId}:${connector.descriptor.key}`,
+    })
   }
 }
 
