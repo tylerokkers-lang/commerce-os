@@ -12,8 +12,10 @@ import type { ComplianceMonitorSubject } from './monitors/complianceMonitor'
 import type { ProfitabilityMonitorSubject } from './monitors/profitabilityMonitor'
 import type { PerformanceMonitorSubject, PerformanceWindow } from './monitors/performanceMonitor'
 import type { FxPairSubject } from './monitors/fxMonitor'
+import type { CandidateIntelligenceSubject } from './monitors/candidateIntelligenceMonitor'
 import { MARKET_CATALOG } from '@/lib/markets/catalog'
 import type { ChannelKey } from '@/lib/core/domain'
+import { PRE_LAUNCH_STAGES } from '@/lib/products/lifecycle'
 
 /**
  * Live production subject discovery (Milestone 8.5 §1–2), completing the
@@ -299,6 +301,38 @@ async function discoverFxPairs(orgId: string): Promise<SubjectDiscoveryResult<Fx
   return { subjects: [...quoteCurrencies].map((quote) => ({ base, quote })), errors: [] }
 }
 
+/**
+ * Pre-launch candidates worth checking for stale/refreshable intelligence
+ * (Milestone: autonomous decision & capability layer). Scoped to products
+ * with at least one real `supplier_products` row on file — the one
+ * signal, per the read-only audit, that a product was genuinely imported
+ * through `importCandidate` (`suppliers/discovery/ingestion.ts`) rather
+ * than a bare `products` row with nothing behind it yet. `removed`/
+ * `rejected` are excluded via `PRE_LAUNCH_STAGES` itself.
+ */
+async function discoverCandidateIntelligence(orgId: string): Promise<SubjectDiscoveryResult<CandidateIntelligenceSubject>> {
+  const supabase = createServiceSupabase()
+  const errors: string[] = []
+
+  const products = await paginate<{ id: string; stage: ProductStage }>((from, to) =>
+    supabase.from('products').select('id, stage').eq('org_id', orgId).in('stage', PRE_LAUNCH_STAGES).range(from, to),
+  )
+  if (products.error) errors.push(`products: ${products.error}`)
+  if (products.rows.length === 0) return { subjects: [], errors }
+
+  const offers = await paginate<{ product_id: string }>((from, to) =>
+    supabase.from('supplier_products').select('product_id').eq('org_id', orgId).in('product_id', products.rows.map((p) => p.id)).range(from, to),
+  )
+  if (offers.error) errors.push(`supplier_products: ${offers.error}`)
+  const importedProductIds = new Set(offers.rows.map((o) => o.product_id))
+
+  const subjects = products.rows
+    .filter((p) => importedProductIds.has(p.id))
+    .map((p): CandidateIntelligenceSubject => ({ productId: p.id, stage: p.stage }))
+
+  return { subjects, errors }
+}
+
 export const getLiveSubjects: SubjectProvider = async (orgId, monitorKey) => {
   try {
     switch (monitorKey) {
@@ -317,6 +351,7 @@ export const getLiveSubjects: SubjectProvider = async (orgId, monitorKey) => {
       // handler are all real and fully tested; only "which products to
       // evaluate against which markets today" is undiscovered live.
       case 'market_expansion': return { subjects: [], errors: [] }
+      case 'candidate_intelligence': return await discoverCandidateIntelligence(orgId)
       default: return { subjects: [], errors: [] }
     }
   } catch (error) {

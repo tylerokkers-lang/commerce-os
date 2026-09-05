@@ -6,6 +6,7 @@ import { profitabilityMonitor } from './monitors/profitabilityMonitor'
 import { performanceMonitor } from './monitors/performanceMonitor'
 import { fxMonitor } from './monitors/fxMonitor'
 import { marketMonitor } from './monitors/marketMonitor'
+import { candidateIntelligenceMonitor } from './monitors/candidateIntelligenceMonitor'
 import type { Monitor, MonitorContext, MonitorRunOutcome } from './eventTypes'
 
 /**
@@ -25,6 +26,7 @@ export const MONITORS: Record<string, Monitor<never>> = {
   [performanceMonitor.descriptor.key]: performanceMonitor as Monitor<never>,
   [fxMonitor.descriptor.key]: fxMonitor as Monitor<never>,
   [marketMonitor.descriptor.key]: marketMonitor as Monitor<never>,
+  [candidateIntelligenceMonitor.descriptor.key]: candidateIntelligenceMonitor as Monitor<never>,
 }
 
 export async function runMonitor(key: string, ctx: MonitorContext, subjects: readonly unknown[]): Promise<MonitorRunOutcome> {
@@ -92,4 +94,6 @@ export const EVENT_TO_JOB_MAPPING: Record<string, string | null> = {
   MARKET_COMPLIANCE_RECHECK_REQUIRED: 'market_recheck',
   MARKET_SUPPLIER_CAPABILITY_CHANGED: 'market_recheck',
   MARKET_BECAME_VIABLE: 'market_recheck',
+  // Milestone: autonomous decision & capability layer.
+  CANDIDATE_LIFECYCLE_REVIEW_DUE: 'candidate_lifecycle_review',
 }

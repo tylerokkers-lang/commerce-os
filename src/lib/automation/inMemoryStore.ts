@@ -24,6 +24,7 @@ import {
 import type { AutomationActionType } from './types'
 import type { AutomationSettings } from './settingsTypes'
 import type { Enums } from '@/lib/supabase/database.types'
+import type { StageChangePlan } from '@/lib/products/transitions'
 
 /**
  * A fully-behaved in-memory `AutomationStore`, used only by
@@ -65,6 +66,7 @@ export function createInMemoryAutomationStore(options?: {
   const channelProductInfo = new Map<string, InMemoryChannelProductInfo>(Object.entries(options?.channelProductInfoById ?? {}))
   const advertisingCampaignReconciliations = new Map<string, Partial<AdvertisingCampaignReconciliation>>()
   const maintenanceRuns: MaintenanceRunRecord[] = []
+  const productStageChanges: StageChangePlan[] = []
 
   function isAbandoned(job: JobRecord, nowMs: number): boolean {
     return job.status === 'running' && job.lockedAt !== null && nowMs - Date.parse(job.lockedAt) > lockTimeoutMs
@@ -80,6 +82,7 @@ export function createInMemoryAutomationStore(options?: {
       channelProductReconciliations: Record<string, Partial<ChannelProductReconciliation>>
       advertisingCampaignReconciliations: Record<string, Partial<AdvertisingCampaignReconciliation>>
       maintenanceRuns: MaintenanceRunRecord[]
+      productStageChanges: StageChangePlan[]
     }
     setAutomationSettings: (orgId: string, settings: AutomationSettings) => void
   } = {
@@ -333,6 +336,12 @@ export function createInMemoryAutomationStore(options?: {
       return channelProductInfo.get(channelProductId) ?? null
     },
 
+    async applyProductStageChange(plan: StageChangePlan): Promise<{ succeeded: boolean; error?: string }> {
+      productStageChanges.push(plan)
+      auditLog.push({ ...plan.auditEntry, occurredAt: new Date().toISOString() })
+      return { succeeded: true }
+    },
+
     async reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void> {
       const current = channelProductReconciliations.get(input.channelProductId) ?? {}
       const merged = { ...current, ...input }
@@ -467,6 +476,7 @@ export function createInMemoryAutomationStore(options?: {
         channelProductReconciliations: Object.fromEntries(channelProductReconciliations),
         advertisingCampaignReconciliations: Object.fromEntries(advertisingCampaignReconciliations),
         maintenanceRuns: [...maintenanceRuns],
+        productStageChanges: [...productStageChanges],
       }
     },
   }

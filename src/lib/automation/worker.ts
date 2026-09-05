@@ -6,6 +6,7 @@ import {
   handleProductPause,
   handleProductResume,
   handleProductPriceReview,
+  handleCandidateLifecycleReview,
 } from './handlers/productHandlers'
 import {
   handleMarketplaceListingSync,
@@ -95,6 +96,7 @@ export const HANDLERS: Record<string, JobHandler> = {
   advertising_sync: handleAdvertisingSync,
   advertising_campaign_action: handleAdvertisingCampaignAction,
   advertising_campaign_review: handleAdvertisingCampaignReview,
+  candidate_lifecycle_review: handleCandidateLifecycleReview,
 }
 
 export interface WorkerBatchResult {

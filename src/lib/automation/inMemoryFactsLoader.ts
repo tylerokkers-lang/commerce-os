@@ -1,4 +1,4 @@
-import { factFrom, FRESHNESS_WINDOW_HOURS, type ChannelProductFacts, type FactsLoader, type ProductFacts, type SupplierFacts, type SupplierOperationalFacts } from './factsTypes'
+import { factFrom, FRESHNESS_WINDOW_HOURS, type ChannelProductFacts, type FactsLoader, type ProductFacts, type ProductIntelligenceFacts, type SupplierFacts, type SupplierOperationalFacts } from './factsTypes'
 import type { Money } from '@/lib/core/money'
 
 /**
@@ -51,18 +51,26 @@ export interface SeedSupplierOperations {
   asOf: string | null
 }
 
+export interface SeedProductIntelligence {
+  recommendation: string
+  recommendationReason: string
+  computedAt: string | null
+}
+
 export function createInMemoryFactsLoader(seed?: {
   products?: Record<string, SeedProduct>
   suppliers?: Record<string, SeedSupplier>
   offers?: Record<string, SeedSupplierOffer> // key: `${supplierId}:${productId}`
   channelProducts?: Record<string, SeedChannelProduct>
   supplierOperations?: Record<string, SeedSupplierOperations> // key: supplierId
+  productIntelligence?: Record<string, SeedProductIntelligence> // key: productId
 }): FactsLoader {
   const products = seed?.products ?? {}
   const suppliers = seed?.suppliers ?? {}
   const offers = seed?.offers ?? {}
   const channelProducts = seed?.channelProducts ?? {}
   const supplierOperations = seed?.supplierOperations ?? {}
+  const productIntelligence = seed?.productIntelligence ?? {}
 
   return {
     async loadProductFacts(_orgId: string, productId: string, now: Date = new Date()): Promise<ProductFacts> {
@@ -112,6 +120,15 @@ export function createInMemoryFactsLoader(seed?: {
         fulfilmentSuccessRatePct: factFrom(ops?.fulfilmentSuccessRatePct ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
         observedDeliveryDays: factFrom(ops?.observedDeliveryDays ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations * 7, now),
         connectorStatus: factFrom(ops?.connectorStatus ?? null, ops?.asOf ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+      }
+    },
+
+    async loadProductIntelligenceFacts(_orgId: string, productId: string, now: Date = new Date()): Promise<ProductIntelligenceFacts> {
+      const intel = productIntelligence[productId]
+      return {
+        productId,
+        recommendation: factFrom(intel?.recommendation ?? null, intel?.computedAt ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
+        recommendationReason: factFrom(intel?.recommendationReason ?? null, intel?.computedAt ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
       }
     },
   }

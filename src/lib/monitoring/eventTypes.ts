@@ -118,7 +118,7 @@ export function isMonitorDue(lastRunCompletedAt: string | null, intervalMinutes:
 export interface MonitorDescriptor {
   key: string
   label: string
-  category: 'supplier' | 'profitability' | 'compliance' | 'marketplace' | 'performance'
+  category: 'supplier' | 'profitability' | 'compliance' | 'marketplace' | 'performance' | 'discovery'
   /** The starting-point interval; overridable per org via `config_values` (`monitor_schedule:<key>`), never hardcoded as immutable. */
   defaultIntervalMinutes: number
 }

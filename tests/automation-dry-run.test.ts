@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dryRunPriceChange, dryRunSupplierSwitch, dryRunRefund } from '@/lib/automation/dryRun'
+import { dryRunPriceChange, dryRunSupplierSwitch, dryRunRefund, dryRunCandidateLifecycleReview } from '@/lib/automation/dryRun'
 import { fromMajor } from '@/lib/core/money'
 import type { PriceChangeRequest } from '@/lib/automation/priceAutomation'
 import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
@@ -146,5 +146,33 @@ describe('dryRunRefund', () => {
     )
     expect(result.eligible).toBe(false)
     expect(result.payload).toBeNull()
+  })
+})
+
+/** Milestone: autonomous decision & capability layer, Part 13 — dry-run extended to candidate lifecycle review, zero external writes and zero live-data reads. */
+describe('dryRunCandidateLifecycleReview', () => {
+  it('reports the one safe advance (discovered -> researching) when a fresh score is on file and settings are configured', () => {
+    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'strong_candidate', recommendationFreshness: 'fresh', stage: 'discovered' }, CONFIGURED_AUTOMATION_SETTINGS)
+    expect(result.wouldExecuteAutomatically).toBe(true)
+    expect(result.payload).toEqual({ productId: 'prod-1', isStale: false, readyToAdvance: true, wouldMoveTo: 'researching' })
+  })
+
+  it('reports no action due for a fresh score past the discovered stage', () => {
+    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'strong_candidate', recommendationFreshness: 'fresh', stage: 'researching' }, CONFIGURED_AUTOMATION_SETTINGS)
+    expect(result.payload?.readyToAdvance).toBe(false)
+    expect(result.payload?.wouldMoveTo).toBeNull()
+  })
+
+  it('reports stale intelligence, never a fabricated advance, when the last score is outside the freshness window', () => {
+    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'candidate', recommendationFreshness: 'stale', stage: 'discovered' }, CONFIGURED_AUTOMATION_SETTINGS)
+    expect(result.payload?.isStale).toBe(true)
+    expect(result.payload?.readyToAdvance).toBe(false)
+  })
+
+  it('never executes automatically when business settings are unconfigured, matching the real Informax org today', async () => {
+    const { DEMO_AUTOMATION_SETTINGS } = await import('@/lib/automation/settingsTypes')
+    const result = dryRunCandidateLifecycleReview('prod-1', { recommendation: 'strong_candidate', recommendationFreshness: 'fresh', stage: 'discovered' }, DEMO_AUTOMATION_SETTINGS)
+    expect(result.wouldExecuteAutomatically).toBe(false)
+    expect(result.policy.outcome).toBe('require_approval')
   })
 })

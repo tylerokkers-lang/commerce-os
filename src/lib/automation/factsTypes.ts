@@ -40,6 +40,13 @@ export const FRESHNESS_WINDOW_HOURS = {
   channelListing: 6,
   productCatalogue: 24 * 30,
   supplierOperations: 48, // Connector syncs run on a longer cadence than stock/price checks; two days is a reasonable ceiling before "no news" becomes "no data".
+  // Milestone: autonomous decision & capability layer — a pre-launch
+  // candidate's score/recommendation is only ever recomputed today by a
+  // human importing it or clicking "recalculate" (`products/actions.ts`),
+  // so two weeks is a deliberately generous ceiling before "no news" here
+  // becomes "no data" — shorter than that would flag every candidate as
+  // stale on day one of this monitor existing.
+  candidateIntelligence: 24 * 14,
 } as const
 
 export interface ProductFacts {
@@ -91,11 +98,27 @@ export interface SupplierOperationalFacts {
   connectorStatus: Fact<string | null>
 }
 
+/**
+ * A pre-launch candidate's last-computed product intelligence (Milestone:
+ * autonomous decision & capability layer). Deliberately just the
+ * deterministic verdict already produced by `recommendProduct()`
+ * (`products/intelligence/recommendation.ts`) — never a new scoring rule —
+ * carried with its own freshness so "never computed" (`unavailable`),
+ * "computed too long ago" (`stale`) and "computed recently" (`fresh`) are
+ * never conflated, per this file's own fact-first discipline.
+ */
+export interface ProductIntelligenceFacts {
+  productId: string
+  recommendation: Fact<string>
+  recommendationReason: Fact<string>
+}
+
 export interface FactsLoader {
   loadProductFacts(orgId: string, productId: string): Promise<ProductFacts>
   loadSupplierFactsForProduct(orgId: string, supplierId: string, productId: string): Promise<SupplierFacts>
   loadChannelProductFacts(orgId: string, channelProductId: string): Promise<ChannelProductFacts>
   loadSupplierOperationalFacts(orgId: string, supplierId: string): Promise<SupplierOperationalFacts>
+  loadProductIntelligenceFacts(orgId: string, productId: string): Promise<ProductIntelligenceFacts>
 }
 
 /** True only when every given fact is fresh — the automation engine's gate before acting on a batch of facts together. */

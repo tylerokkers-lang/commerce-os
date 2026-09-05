@@ -2,6 +2,7 @@ import type { Enums } from '@/lib/supabase/database.types'
 import type { AutomationActionType, AutomationJobStatus, AutomationActionStatus, AutomationLevel, PolicyResult } from './types'
 import type { AutomationSettings } from './settingsTypes'
 import type { ChannelKey } from '@/lib/core/domain'
+import type { StageChangePlan } from '@/lib/products/transitions'
 
 /**
  * The `AutomationStore` abstraction (Milestone 6 verification pass).
@@ -334,4 +335,15 @@ export interface AutomationStore {
   completeMaintenanceRun(runId: string, outcome: CompleteMaintenanceRunInput): Promise<void>
   /** Most recent runs for `jobKey`, newest first — the input to the health/staleness reader (`maintenanceHealth.ts`). */
   getRecentMaintenanceRuns(jobKey: string, limit: number): Promise<readonly MaintenanceRunRecord[]>
+  /**
+   * Milestone: autonomous decision & capability layer. Applies an
+   * already-validated `StageChangePlan` (`products/transitions.ts`) —
+   * writes `products.stage`, the append-only `product_stage_transitions`
+   * history row, and the paired audit entry. The only caller today is
+   * `handleCandidateLifecycleReview`, and only for the one ungated
+   * transition (`discovered` -> `researching`) that has no supplier/
+   * compliance/profitability gate to satisfy — see that handler's own
+   * comment for why nothing further is auto-advanced yet.
+   */
+  applyProductStageChange(plan: StageChangePlan): Promise<{ succeeded: boolean; error?: string }>
 }

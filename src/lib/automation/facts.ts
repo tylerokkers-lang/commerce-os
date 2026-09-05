@@ -9,11 +9,12 @@ import {
   type ChannelProductFacts,
   type FactsLoader,
   type ProductFacts,
+  type ProductIntelligenceFacts,
   type SupplierFacts,
   type SupplierOperationalFacts,
 } from './factsTypes'
 
-export type { Fact, Freshness, ProductFacts, SupplierFacts, ChannelProductFacts, SupplierOperationalFacts, FactsLoader } from './factsTypes'
+export type { Fact, Freshness, ProductFacts, SupplierFacts, ChannelProductFacts, SupplierOperationalFacts, ProductIntelligenceFacts, FactsLoader } from './factsTypes'
 export { allFactsFresh, describeFactState, FRESHNESS_WINDOW_HOURS } from './factsTypes'
 
 /**
@@ -167,6 +168,29 @@ export function getSupabaseFactsLoader(): FactsLoader {
         fulfilmentSuccessRatePct: factFrom(offer?.fulfilment_success_rate_pct ?? null, offer?.stock_checked_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
         observedDeliveryDays: factFrom(observedDeliveryDaysValue, observedDeliveryDaysAsOf, FRESHNESS_WINDOW_HOURS.supplierOperations * 7, now), // Delivery outcomes change slowly; a wider window than a connector sync.
         connectorStatus: factFrom(connector?.status ?? null, connector?.last_success_at ?? connector?.last_failure_at ?? null, FRESHNESS_WINDOW_HOURS.supplierOperations, now),
+      }
+    },
+
+    /**
+     * The last-persisted `product_intelligence` row for one product — never
+     * recomputed here (that stays a human-triggered import/"recalculate"
+     * action, `products/intelligence/assemble.ts`'s own documented scope).
+     * `computed_at` is the freshness anchor: a product never scored at all
+     * reads as `unavailable`, never as a guessed pass or fail.
+     */
+    async loadProductIntelligenceFacts(orgId: string, productId: string, now: Date = new Date()): Promise<ProductIntelligenceFacts> {
+      const supabase = createServiceSupabase()
+      const { data } = await supabase
+        .from('product_intelligence')
+        .select('recommendation, recommendation_reason, computed_at')
+        .eq('org_id', orgId)
+        .eq('product_id', productId)
+        .maybeSingle()
+
+      return {
+        productId,
+        recommendation: factFrom(data?.recommendation ?? null, data?.computed_at ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
+        recommendationReason: factFrom(data?.recommendation_reason ?? null, data?.computed_at ?? null, FRESHNESS_WINDOW_HOURS.candidateIntelligence, now),
       }
     },
   }

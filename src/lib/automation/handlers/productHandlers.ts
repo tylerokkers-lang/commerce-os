@@ -11,6 +11,8 @@ import type { FactsLoader } from '../factsTypes'
 import type { JobHandlerResult, ConnectorLookup } from '../worker'
 import { withMarketplaceConnectorGate } from '@/lib/marketplaces/connectors/executionGate'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
+import { planStageChange } from '@/lib/products/transitions'
+import { assessCandidateLifecycleReview } from '../candidateLifecycleAutomation'
 
 export interface ProductProfitabilityRecheckPayload {
   productId: string
@@ -162,6 +164,117 @@ export async function handleProductComplianceRecheck(job: JobRecord, store: Auto
     }
   }
 
+  return { succeeded: true }
+}
+
+export interface CandidateLifecycleReviewPayload {
+  productId: string
+  stage: string
+}
+
+function isCandidateLifecycleReviewPayload(p: Record<string, unknown>): boolean {
+  return typeof p.productId === 'string' && typeof p.stage === 'string'
+}
+
+/**
+ * CANDIDATE_LIFECYCLE_REVIEW: the job `candidateIntelligenceMonitor.ts`
+ * enqueues. Re-reads current facts rather than trusting the enqueue-time
+ * payload snapshot (the same "facts can change between decision and
+ * execution" discipline this codebase already applies everywhere else),
+ * then does exactly one of two things:
+ *
+ *   - Stale intelligence: records the decision and notifies. Never
+ *     recomputes anything itself — recomputation stays the human-triggered
+ *     `computeProductIntelligence` path it always was.
+ *   - Fresh intelligence and still `discovered`: advances to `researching`
+ *     via `planStageChange` — the one lifecycle transition with zero gate
+ *     conditions (`lifecycle.ts`'s `checkGates` has no entry for
+ *     `researching` as a target), so nothing is skipped by advancing it
+ *     automatically. Every other pre-launch transition needs a real
+ *     per-channel compliance/profitability-pass boolean this codebase does
+ *     not yet expose as an independently queryable fact — deliberately not
+ *     attempted here (see `candidateIntelligenceMonitor.ts`'s own comment).
+ *
+ * `actionType: 'alert_owner'` — no dedicated action type exists for a
+ * lifecycle-bookkeeping decision (same precedent as the stale-facts branch
+ * of `handleProductProfitabilityRecheck` above, which reuses `product_pause`
+ * for an equally uncategorised case). Still fully policy-gated: the global
+ * kill switch (`settings.automationPaused`) and the unconfigured-business-
+ * settings fail-closed rule both apply exactly as they do to every other
+ * automated action, even though this one is non-monetary and never touches
+ * a marketplace or a supplier.
+ */
+export async function handleCandidateLifecycleReview(job: JobRecord, store: AutomationStore, facts: FactsLoader): Promise<JobHandlerResult> {
+  if (!isCandidateLifecycleReviewPayload(job.payload)) {
+    return { succeeded: false, error: 'Malformed payload for candidate_lifecycle_review.', retryable: false }
+  }
+  const payload = job.payload as unknown as CandidateLifecycleReviewPayload
+  const settings = await store.getAutomationSettings(job.orgId)
+
+  const [intel, product] = await Promise.all([
+    facts.loadProductIntelligenceFacts(job.orgId, payload.productId),
+    facts.loadProductFacts(job.orgId, payload.productId),
+  ])
+
+  if (intel.recommendation.freshness === 'unavailable') {
+    // Never scored at all (or scored since the event fired and then
+    // deleted, which cannot happen) — nothing this job can safely do.
+    return { succeeded: true }
+  }
+
+  const assessment = assessCandidateLifecycleReview(
+    { recommendation: intel.recommendation.value, recommendationFreshness: intel.recommendation.freshness, stage: product.stage.value },
+    settings,
+  )
+  const { isStale, readyToAdvance, policy } = assessment
+
+  const created = await store.createAutomationAction({
+    orgId: job.orgId,
+    idempotencyKey: `job:${job.id}`,
+    actionType: 'alert_owner',
+    entityType: 'product',
+    entityId: payload.productId,
+    reason: policy.reason,
+    inputFacts: { recommendation: intel.recommendation.value, recommendationFreshness: intel.recommendation.freshness, stage: product.stage.value },
+    decision: { isStale, readyToAdvance },
+    policy,
+    automationLevel: settings.automationLevel,
+    jobId: job.id,
+  })
+  if (created.alreadyExisted) return { succeeded: true }
+
+  if (policy.outcome !== 'allow_automatic') {
+    await store.completeAutomationAction(created.id, { succeeded: false, error: 'Blocked by automation policy.', orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+    return { succeeded: true }
+  }
+
+  if (readyToAdvance) {
+    const plan = planStageChange({
+      orgId: job.orgId,
+      productId: payload.productId,
+      from: 'discovered',
+      to: 'researching',
+      reason: `Automatic: a real opportunity score is on file (recommendation: ${intel.recommendation.value}).`,
+      actorType: 'system',
+    })
+    if (!plan.ok) {
+      // The product moved on its own between the event firing and this job
+      // running (e.g. a human already changed its stage) — not an error,
+      // just nothing left to do.
+      await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+      return { succeeded: true }
+    }
+    const applied = await store.applyProductStageChange(plan.value)
+    await store.completeAutomationAction(created.id, { succeeded: applied.succeeded, error: applied.error, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+    if (applied.succeeded) {
+      await store.notify({ orgId: job.orgId, severity: 'info', category: 'discovery', title: `${payload.productId} moved to Researching`, body: `Automatically advanced after a real opportunity score was computed (recommendation: ${intel.recommendation.value}).`, entityType: 'product', entityId: payload.productId, dedupeKey: `action:${created.id}` })
+    }
+    return { succeeded: true }
+  }
+
+  // Stale, not ready to advance: record and notify, never recompute.
+  await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
+  await store.notify({ orgId: job.orgId, severity: 'warning', category: 'discovery', title: `Candidate intelligence is stale: ${payload.productId}`, body: policy.reason, entityType: 'product', entityId: payload.productId, dedupeKey: `action:${created.id}` })
   return { succeeded: true }
 }
 

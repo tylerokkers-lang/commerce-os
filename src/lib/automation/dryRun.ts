@@ -1,6 +1,7 @@
 import { assessPriceChange, type PriceChangeRequest } from './priceAutomation'
 import { evaluateSupplierSwitchAutomation, type SupplierSwitchAutomationInput } from './supplierSwitching'
 import { evaluateRefundAutomation, type RefundAutomationInput } from './refundAutomation'
+import { assessCandidateLifecycleReview, type CandidateLifecycleReviewInput } from './candidateLifecycleAutomation'
 import type { AutomationSettings } from './settingsTypes'
 import type { AutomationLevel, PolicyResult } from './types'
 
@@ -96,6 +97,30 @@ export interface RefundDryRunPayload {
 export function dryRunRefund(input: RefundAutomationInput, automationLevel: AutomationLevel): DryRunResult<RefundDryRunPayload> {
   const assessment = evaluateRefundAutomation(input, automationLevel)
   return buildResult(assessment.policy, { orderId: input.request.orderId, requestedAmountMinor: input.request.requestedAmount.minor })
+}
+
+export interface CandidateLifecycleReviewDryRunPayload {
+  productId: string
+  isStale: boolean
+  readyToAdvance: boolean
+  wouldMoveTo: string | null
+}
+
+/**
+ * Dry-runs a candidate's lifecycle review exactly as
+ * `handleCandidateLifecycleReview` (`handlers/productHandlers.ts`) would
+ * decide it — never itself reads live facts, writes `products.stage`, or
+ * notifies anyone; `productId` is threaded through purely for the payload
+ * shape, not looked up.
+ */
+export function dryRunCandidateLifecycleReview(productId: string, input: CandidateLifecycleReviewInput, settings: AutomationSettings): DryRunResult<CandidateLifecycleReviewDryRunPayload> {
+  const assessment = assessCandidateLifecycleReview(input, settings)
+  return buildResult(assessment.policy, {
+    productId,
+    isStale: assessment.isStale,
+    readyToAdvance: assessment.readyToAdvance,
+    wouldMoveTo: assessment.readyToAdvance ? 'researching' : null,
+  })
 }
 
 export { buildResult as buildDryRunResult, describeExpectedResult }

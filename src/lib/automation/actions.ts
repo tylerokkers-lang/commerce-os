@@ -5,6 +5,7 @@ import { createServiceSupabase } from '@/lib/supabase/server'
 import type { Enums } from '@/lib/supabase/database.types'
 import { RUNAWAY_MAX_ACTIONS_PER_WINDOW, RUNAWAY_WINDOW_MINUTES, type ActionRecord, type AdvertisingCampaignReconciliation, type ChannelProductReconciliation, type CompleteActionOutcome, type CreateActionInput, type RecoveryOutcomeInput } from './store'
 import type { AutomationActionType } from './types'
+import type { StageChangePlan } from '@/lib/products/transitions'
 
 /**
  * The typed automation action record (brief §4), Supabase-backed.
@@ -213,6 +214,36 @@ export async function reconcileChannelProduct(input: ChannelProductReconciliatio
     reason: 'Reconciled local record with the marketplace\'s verified state after an automated write.',
     newValue: patch,
   })
+}
+
+/**
+ * Milestone: autonomous decision & capability layer. The one write path for
+ * an *automated* `products.stage` change — mirrors
+ * `opportunities/actions.ts`'s `changeProductStage` (the human-triggered
+ * path) exactly: the same two tables, the same order, the same
+ * `recordAudit` call — except `actorType: 'system'` and no session. Takes
+ * an already-validated `StageChangePlan` (`products/transitions.ts`'s
+ * `planStageChange`) rather than raw from/to strings, so the state-machine
+ * and gate checks can never be skipped by a caller in a hurry.
+ */
+export async function applyProductStageChange(plan: StageChangePlan): Promise<{ succeeded: boolean; error?: string }> {
+  const supabase = createServiceSupabase()
+
+  const { error: updateError } = await supabase
+    .from('products')
+    .update(plan.productUpdate)
+    .eq('id', plan.transitionRow.product_id)
+    .eq('org_id', plan.transitionRow.org_id)
+  if (updateError) return { succeeded: false, error: `Could not change stage: ${updateError.message}` }
+
+  const { error: historyError } = await supabase.from('product_stage_transitions').insert(plan.transitionRow)
+  if (historyError) {
+    await recordAudit({ ...plan.auditEntry, result: 'failure', error: `Stage changed but the transition history could not be written: ${historyError.message}` })
+    return { succeeded: false, error: `Stage changed, but the history record failed: ${historyError.message}` }
+  }
+
+  await recordAudit(plan.auditEntry)
+  return { succeeded: true }
 }
 
 export interface ChannelProductConnectorInfo {
