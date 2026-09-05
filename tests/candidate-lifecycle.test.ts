@@ -10,7 +10,7 @@ import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import { dryRunCandidateLifecycleReview, describeMarketplaceExecution } from '@/lib/automation/dryRun'
 import { assembleCandidateGateState, planCandidateAdvance } from '@/lib/products/candidateGateState'
-import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { DEMO_AUTOMATION_SETTINGS, UNKNOWN_STATE_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import { CONFIGURED_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import { fromMajor } from '@/lib/core/money'
 import type { LifecycleHandlerDeps } from '@/lib/automation/handlers/productHandlers'
@@ -438,6 +438,96 @@ describe('candidate lifecycle idempotency', () => {
 
     const blocked = s.getState().notifications.filter((n) => n.title.startsWith('Candidate blocked'))
     expect(blocked.length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The real production fact pattern
+// ---------------------------------------------------------------------------
+
+/**
+ * The five real CJ candidates, exactly as production holds them (verified
+ * read-only against the live database): stage `discovered`; intelligence
+ * computed ~1 day ago so genuinely fresh, but with `recommendation:
+ * 'unconfigured'` because no `business_settings` row exists; supplier
+ * `shopify_status: 'review_required'` assessed 2 days ago; supplier offer
+ * with `last_verified_at: null`; no compliance or profitability record; no
+ * listing price.
+ *
+ * With no settings row, `getAutomationSettingsForOrg` returns
+ * `UNKNOWN_STATE_AUTOMATION_SETTINGS`, so this is also the kill-switch
+ * fail-closed path. This pins what the scheduler will actually do to real
+ * products on its next run, rather than reasoning about it.
+ */
+describe('the real production fact pattern (business_settings empty)', () => {
+  function productionFacts() {
+    return createInMemoryFactsLoader({
+      products: { [PRODUCT]: { title: 'CJ candidate', category: null, stage: 'discovered', updatedAt: FRESH } },
+      suppliers: { [SUPPLIER]: { shopifyStatus: 'review_required', amazonStatus: 'not_assessed', lastAssessedAt: new Date(NOW.getTime() - 1000 * 60 * 60 * 48).toISOString() } },
+      offers: { [`${SUPPLIER}:${PRODUCT}`]: { unitCost: fromMajor(5), shippingCost: fromMajor(2), stockQty: null, inStock: true, lastVerifiedAt: null } },
+      productIntelligence: { [PRODUCT]: { recommendation: 'unconfigured', recommendationReason: 'No business settings saved.', computedAt: new Date(NOW.getTime() - 1000 * 60 * 60 * 24).toISOString() } },
+      // No compliance or profitability rows at all — never assessed.
+    })
+  }
+
+  it('refuses to advance, records a blocked action, and schedules no work', async () => {
+    const s = store(UNKNOWN_STATE_AUTOMATION_SETTINGS)
+    await enqueueReview(s)
+    const batch = await runReview(s, productionFacts())
+
+    expect(batch.succeeded).toBe(1) // A refusal is a handled outcome, not a job failure.
+    const state = s.getState()
+    expect(state.productStageChanges).toEqual([])
+    expect(state.actions).toHaveLength(1)
+    expect(state.actions[0].policyResult.outcome).toBe('block')
+    expect(state.jobs.filter((j) => j.jobType.startsWith('candidate_')).length).toBe(1) // The review itself only.
+  })
+
+  it('emits no per-candidate notification, because the cause is one org-wide configuration gap, not five product findings', async () => {
+    const s = store(UNKNOWN_STATE_AUTOMATION_SETTINGS)
+    await enqueueReview(s)
+    await runReview(s, productionFacts())
+
+    expect(s.getState().notifications).toEqual([])
+  })
+
+  it('reports each gate honestly: UNKNOWN where unknown, FAIL only where an engine genuinely said so', () => {
+    const state = assembleCandidateGateState({
+      stage: 'discovered',
+      intelligenceRecommendation: 'unconfigured',
+      intelligenceFreshness: 'fresh',
+      supplierChannelStatus: 'review_required',
+      supplierStatusFreshness: 'fresh',
+      supplierOfferFreshness: 'unavailable',
+      complianceVerdict: null,
+      complianceFreshness: 'unavailable',
+      profitabilityVerdict: null,
+      profitabilityFreshness: 'unavailable',
+      businessSettingsConfigured: false,
+    })
+    const verdict = (key: string) => state.requirements.find((r) => r.key === key)?.verdict
+
+    expect(verdict('intelligence_fresh')).toBe('pass') // Genuinely fresh, even though its content is "unconfigured".
+    expect(verdict('meets_minimum_score')).toBe('unknown') // `unconfigured` never reached the score rung.
+    expect(verdict('supplier_facts_fresh')).toBe('unknown') // last_verified_at is null.
+    expect(verdict('supplier_approved')).toBe('fail') // `review_required` is a real, current, non-approved status.
+    expect(verdict('compliance_pass')).toBe('unknown')
+    expect(verdict('profitability_pass')).toBe('unknown')
+    expect(verdict('business_settings_configured')).toBe('unknown')
+  })
+
+  it('a per-candidate failure DOES notify once settings exist, and the body states the real reason', async () => {
+    const s = store(CONFIGURED_AUTOMATION_SETTINGS)
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'supplier_review', supplierStatus: 'blocked' }))
+
+    const blocked = s.getState().notifications.filter((n) => n.title.startsWith('Candidate blocked'))
+    expect(blocked).toHaveLength(1)
+    // Never the lifecycle plan's own wording: for an ungated step that
+    // reads "every gate is satisfied", which as the body of a "blocked"
+    // notification would contradict its own title.
+    expect(blocked[0].body).not.toMatch(/is satisfied by current, fresh facts/)
+    expect(blocked[0].body).toBe(s.getState().actions[0].policyResult.reason)
   })
 })
 

@@ -137,6 +137,48 @@ describe('marketplace connector capability honesty', () => {
     })
   })
 
+  /**
+   * The publication rules, encoded so they cannot drift: `approved` may
+   * never become `testing` without a genuinely created and verified
+   * listing, and no Shopify write may be attempted without the
+   * `write_products` scope (which the connected app does not hold —
+   * verified against Shopify's own token response, not assumed).
+   */
+  describe('publication remains structurally locked', () => {
+    it('automation stops at "approved" — no autonomous path reaches "testing"', async () => {
+      const { AUTONOMOUS_STAGE_PATH } = await import('@/lib/products/candidateGateState')
+      expect(Object.keys(AUTONOMOUS_STAGE_PATH)).toEqual(['discovered', 'researching', 'supplier_review', 'compliance_review'])
+      expect(Object.values(AUTONOMOUS_STAGE_PATH)).not.toContain('testing')
+      // `approved` is absent as a KEY, so nothing can advance out of it.
+      expect(AUTONOMOUS_STAGE_PATH.approved).toBeUndefined()
+    })
+
+    it('every Shopify listing write is refused at the connector, independently of any capability gate', async () => {
+      const { shopifyConnector } = await import('@/lib/marketplaces/connectors/shopify')
+      // Even if a caller ignored `capabilities.writeListings`, these refuse.
+      for (const result of [
+        await shopifyConnector.updateListingPrice(),
+        await shopifyConnector.updateInventory(),
+        await shopifyConnector.setListingStatus(),
+      ]) {
+        expect(result.ok).toBe(false)
+        if (!result.ok) expect(result.error.reason).toBe('not_supported')
+      }
+    })
+
+    it('Shopify listing creation cannot be reached: the capability is false, so no caller may invoke it', async () => {
+      const { shopifyConnector } = await import('@/lib/marketplaces/connectors/shopify')
+      expect(shopifyConnector.descriptor.capabilities.createListings).toBe(false)
+
+      // And nothing in the codebase calls createListing without first
+      // checking that flag — the one caller is `publicationService.ts`.
+      const service = readFileSync('src/lib/marketplaces/shopify/publicationService.ts', 'utf8')
+      const createIndex = service.indexOf('.createListing(')
+      expect(createIndex).toBeGreaterThan(-1)
+      expect(service.slice(0, createIndex)).toContain('capabilities.createListings')
+    })
+  })
+
   it('no real connector can create marketplace listings, so no candidate can be published autonomously', () => {
     for (const connector of REAL_CONNECTORS) {
       const flags = declaredCapabilities(readFileSync(connector.path, 'utf8'))

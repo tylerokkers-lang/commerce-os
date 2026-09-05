@@ -300,15 +300,21 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
 
     // An UNKNOWN fact is work to do, not a verdict. Schedule the real
     // recheck that could resolve it so the next cycle can retry — but only
-    // when the kill switch itself is not what blocked us, since scheduling
-    // work while automation is paused would defeat the pause.
-    if (advance.blockedOnlyByUnknowns && shouldScheduleRechecks(policy, settings)) {
+    // when the refusal is about this candidate rather than about the whole
+    // organisation's state (see `isGloballyBlocked`).
+    if (advance.blockedOnlyByUnknowns && !isGloballyBlocked(policy, settings)) {
       await enqueueRechecks(job, store, payload, rechecks, anchors)
-    } else if (gateState.failedKeys.length > 0) {
+    } else if (gateState.failedKeys.length > 0 && !isGloballyBlocked(policy, settings)) {
       await store.notify({
         orgId: job.orgId, severity: 'warning', category: 'discovery',
         title: `Candidate blocked: ${payload.productId}`,
-        body: advance.reason,
+        // The policy result, never the domain plan. `advance.reason`
+        // describes what the LIFECYCLE would have done — for an ungated
+        // step it literally reads "every gate is satisfied", which as the
+        // body of a "blocked" notification is flatly self-contradictory.
+        // `policy.reason` is the only string that always states why this
+        // did not proceed.
+        body: policy.reason,
         entityType: 'product', entityId: payload.productId,
         // Keyed on what actually failed, not on the run — a candidate
         // blocked for the same reason every cycle notifies once, not daily.
@@ -320,7 +326,7 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
 
   if (!advance.to) {
     await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
-    if (advance.blockedOnlyByUnknowns && shouldScheduleRechecks(policy, settings)) await enqueueRechecks(job, store, payload, rechecks, anchors)
+    if (advance.blockedOnlyByUnknowns && !isGloballyBlocked(policy, settings)) await enqueueRechecks(job, store, payload, rechecks, anchors)
     return { succeeded: true }
   }
 
@@ -361,23 +367,34 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
 }
 
 /**
- * Whether scheduling a recheck could actually change anything.
+ * Whether the refusal is about the whole organisation rather than about
+ * this particular candidate.
  *
- * Two cases where it cannot, and where scheduling anyway would mean doing
- * real work every cycle forever for a guaranteed-identical answer:
+ * Three such cases, and none of them is a fact about the product:
  *
  *   - The kill switch is on. Queueing work while paused defeats the pause.
+ *   - Automation state is unknown (no `business_settings` row at all), which
+ *     the policy engine treats as fail-closed.
  *   - Business settings are unconfigured. Every threshold behind every
  *     verdict is then a placeholder, `recommendProduct` returns
  *     `unconfigured` by construction, and recomputing would produce exactly
  *     the same non-answer. The blocker there is configuration, not staleness.
+ *
+ * Used for two decisions, both for the same reason. It suppresses rechecks,
+ * because the work could not change the answer. And it suppresses the
+ * per-candidate "blocked" notification, because a global condition is not a
+ * per-product finding: with five candidates that would otherwise mean five
+ * notifications all misattributing one configuration gap to five products,
+ * every cycle. The condition is already visible where it belongs — on the
+ * automation dashboard, and in every `automation_actions` row's own policy
+ * result.
  */
-function shouldScheduleRechecks(
+function isGloballyBlocked(
   policy: { requirements: readonly { key: string; satisfied: boolean }[] },
   settings: { businessSettingsConfigured: boolean },
 ): boolean {
   const killSwitched = policy.requirements.some((r) => (r.key === 'automation_not_paused' || r.key === 'automation_state_known') && !r.satisfied)
-  return !killSwitched && settings.businessSettingsConfigured
+  return killSwitched || !settings.businessSettingsConfigured
 }
 
 /**
