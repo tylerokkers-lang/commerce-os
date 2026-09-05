@@ -8,7 +8,7 @@ import { createInMemoryEventStore } from '@/lib/monitoring/inMemoryEventStore'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
 import { runWorkerBatch } from '@/lib/automation/worker'
-import { dryRunCandidateLifecycleReview } from '@/lib/automation/dryRun'
+import { dryRunCandidateLifecycleReview, describeMarketplaceExecution } from '@/lib/automation/dryRun'
 import { assembleCandidateGateState, planCandidateAdvance } from '@/lib/products/candidateGateState'
 import { DEMO_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
 import { CONFIGURED_AUTOMATION_SETTINGS } from './helpers/automationSettings'
@@ -202,13 +202,58 @@ describe('candidate lifecycle transitions', () => {
     expect(changes[0].transitionRow.to_stage).toBe('approved')
   })
 
-  it('2. stale intelligence blocks the transition and asks for a recalculation instead', async () => {
+  it('2. stale intelligence blocks the transition and enqueues a real recompute (not just a notification)', async () => {
     const s = store()
     await enqueueReview(s)
     await runReview(s, facts({ stage: 'researching', intelligenceComputedAt: LONG_AGO }))
 
     expect(s.getState().productStageChanges.length).toBe(0)
-    expect(s.getState().notifications.some((n) => n.title.includes('needs recalculating'))).toBe(true)
+    const refreshJobs = s.getState().jobs.filter((j) => j.jobType === 'candidate_intelligence_refresh')
+    expect(refreshJobs.length).toBe(1)
+    expect(refreshJobs[0].payload).toMatchObject({ productId: PRODUCT })
+  })
+
+  it('2b. the recompute job is keyed on the stale score it supersedes, so it repeats across cycles without duplicating', async () => {
+    const s = store()
+    const stale = facts({ stage: 'researching', intelligenceComputedAt: LONG_AGO })
+
+    // Two cycles over the same unchanged stale fact: one job, not two.
+    await enqueueReview(s, 'event:c1')
+    await runReview(s, stale)
+    await enqueueReview(s, 'event:c2')
+    await runReview(s, stale)
+    expect(s.getState().jobs.filter((j) => j.jobType === 'candidate_intelligence_refresh').length).toBe(1)
+
+    // A genuinely newer (but still stale) score is a new fact, so it earns
+    // a new refresh — proving the loop cannot silently stop after one run.
+    const newerButStillStale = facts({ stage: 'researching', intelligenceComputedAt: new Date(NOW.getTime() - 1000 * 60 * 60 * 24 * 30).toISOString() })
+    await enqueueReview(s, 'event:c3')
+    await runReview(s, newerButStillStale)
+    expect(s.getState().jobs.filter((j) => j.jobType === 'candidate_intelligence_refresh').length).toBe(2)
+  })
+
+  it('2c. a recompute is not scheduled at all while business settings are unconfigured — the answer could not change', async () => {
+    const s = store(DEMO_AUTOMATION_SETTINGS)
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'researching', intelligenceComputedAt: LONG_AGO }))
+
+    expect(s.getState().jobs.filter((j) => j.jobType.startsWith('candidate_')).length).toBe(1) // Only the review itself.
+  })
+
+  it('2d. the intelligence refresh runs the real engine, and a failure never fabricates a score', async () => {
+    const s = store()
+    await s.enqueueJob({ orgId: ORG, jobType: 'candidate_intelligence_refresh', payload: { productId: PRODUCT } })
+
+    const calls: string[] = []
+    const deps: LifecycleHandlerDeps = {
+      async refreshLifecycleFacts() { return { ok: true } },
+      async refreshProductIntelligence(_orgId, productId) { calls.push(productId); return { ok: false, error: 'Scoring engine unavailable.' } },
+    }
+    const batch = await runReview(s, facts({ intelligenceComputedAt: LONG_AGO }), deps)
+
+    expect(calls).toEqual([PRODUCT])
+    expect(batch.succeeded).toBe(0) // Retryable failure, never a silent success.
+    expect(s.getState().productStageChanges.length).toBe(0)
   })
 
   it('3. stale supplier facts block the transition into compliance_review', async () => {
@@ -393,6 +438,64 @@ describe('candidate lifecycle idempotency', () => {
 
     const blocked = s.getState().notifications.filter((n) => n.title.startsWith('Candidate blocked'))
     expect(blocked.length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Marketplace capability and supplier availability
+// ---------------------------------------------------------------------------
+
+describe('marketplace capability and supplier availability', () => {
+  it('an approved product with no marketplace capability cannot be published, and says exactly why', () => {
+    // The real Shopify connector today: configured, but createListings is
+    // false (the write_products OAuth scope was never granted).
+    const shopifyToday = describeMarketplaceExecution({ channel: 'shopify', isConfigured: true, createListings: false, verifyWrites: false })
+    expect(shopifyToday.possible).toBe(false)
+    expect(shopifyToday.reason).toMatch(/cannot create listings/i)
+
+    // A connector that could create but could not verify is still refused:
+    // an unverifiable write is never recorded as a published state.
+    const unverifiable = describeMarketplaceExecution({ channel: 'shopify', isConfigured: true, createListings: true, verifyWrites: false })
+    expect(unverifiable.possible).toBe(false)
+    expect(unverifiable.reason).toMatch(/never confirmed/i)
+
+    expect(describeMarketplaceExecution(null).possible).toBe(false)
+    expect(describeMarketplaceExecution({ channel: 'shopify', isConfigured: false, createListings: true, verifyWrites: true }).possible).toBe(false)
+  })
+
+  it('the dry run reports marketplace execution as impossible without ever consulting a connector', () => {
+    const result = dryRunCandidateLifecycleReview(
+      PRODUCT,
+      { stage: 'approved', intelligenceRecommendation: 'strong_candidate', intelligenceFreshness: 'fresh', supplierChannelStatus: 'approved', supplierStatusFreshness: 'fresh', supplierOfferFreshness: 'fresh', complianceVerdict: 'pass', complianceFreshness: 'fresh', profitabilityVerdict: 'pass', profitabilityFreshness: 'fresh', businessSettingsConfigured: true },
+      CONFIGURED_AUTOMATION_SETTINGS,
+      { channel: 'shopify', isConfigured: true, createListings: false, verifyWrites: false },
+    )
+    expect(result.payload?.marketplaceExecution.possible).toBe(false)
+    // And the lifecycle itself stops at approved — no transition proposed.
+    expect(result.payload?.wouldMoveTo).toBeNull()
+  })
+
+  it('a supplier with no recorded status leaves the gate UNKNOWN, never assumed available', async () => {
+    const s = store()
+    // No supplierId on the payload at all: the supplier facts cannot be loaded.
+    await s.enqueueJob({ orgId: ORG, jobType: 'candidate_lifecycle_review', payload: { productId: PRODUCT, channel: CHANNEL, supplierId: null } })
+    await runReview(s, facts({ stage: 'supplier_review' }))
+
+    expect(s.getState().productStageChanges.length).toBe(0)
+    expect(s.getState().actions[0].decision).toMatchObject({ unknownRequirements: expect.arrayContaining(['supplier_approved']) })
+  })
+
+  it('a candidate job abandoned by a crashed worker is reclaimed and completed by the next one', async () => {
+    const s = createInMemoryAutomationStore({ settingsByOrg: { [ORG]: CONFIGURED_AUTOMATION_SETTINGS }, lockTimeoutMs: 10 })
+    await s.enqueueJob({ orgId: ORG, jobType: 'candidate_lifecycle_review', payload: { productId: PRODUCT, channel: CHANNEL, supplierId: SUPPLIER } })
+
+    const claimed = await s.claimNextJob('worker-that-crashes')
+    expect(claimed).not.toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 20)) // Let the lock go stale.
+
+    const batch = await runWorkerBatch(s, facts({ stage: 'compliance_review' }), () => undefined, 'worker-2', 10, undefined, undefined, recordingRefresher().deps)
+    expect(batch.claimed).toBe(1)
+    expect(s.getState().productStageChanges.length).toBe(1)
   })
 })
 

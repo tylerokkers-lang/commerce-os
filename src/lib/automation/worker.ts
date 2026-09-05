@@ -8,6 +8,7 @@ import {
   handleProductPriceReview,
   handleCandidateLifecycleReview,
   handleCandidateFactsRefresh,
+  handleCandidateIntelligenceRefresh,
   type LifecycleHandlerDeps,
 } from './handlers/productHandlers'
 import {
@@ -102,6 +103,7 @@ export const HANDLERS: Record<string, JobHandler> = {
   advertising_campaign_review: handleAdvertisingCampaignReview,
   candidate_lifecycle_review: handleCandidateLifecycleReview,
   candidate_facts_refresh: handleCandidateFactsRefresh,
+  candidate_intelligence_refresh: handleCandidateIntelligenceRefresh,
 }
 
 export interface WorkerBatchResult {

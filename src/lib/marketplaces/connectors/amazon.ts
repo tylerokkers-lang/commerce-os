@@ -39,16 +39,30 @@ const DESCRIPTOR: MarketplaceConnectorDescriptor = {
   label: 'Amazon UK',
   description: 'Our own Amazon seller account, via the official Selling Partner API.',
   channel: 'amazon_uk',
+  // Milestone: close the production autonomy gap — capability honesty
+  // audit. Four flags here previously contradicted this connector's own
+  // methods, and the flags lost. `MarketplaceCapabilities` documents
+  // `verifyWrites` as "can THIS CONNECTOR read back a value after writing
+  // it", and every consumer treats these as a hard gate immediately before
+  // calling the corresponding method (`priceExecution.ts`'s
+  // `writeListings` check, `recovery.ts`'s and `productHandlers.ts`'s
+  // `verifyWrites` checks). A previous comment here reinterpreted
+  // `writeListings: true` as "the *marketplace* supports writes" — a
+  // reading no caller shares, and one that made the reaper attempt a
+  // verification this connector cannot perform and then record the result
+  // as a failed verification rather than as "not verifiable at all".
+  // Corrected to describe this connector, which is what is actually being
+  // asked. Every one of these is a tightening; none enables anything.
   capabilities: {
-    readListings: true,
-    writeListings: true,
-    syncInventory: true,
-    ingestOrders: true,
-    updateFulfilment: true,
+    readListings: true, // `fetchListings` is genuinely implemented.
+    writeListings: false, // `updateListingPrice`/`updateInventory`/`setListingStatus` all return `not_supported` — see their own comment below.
+    syncInventory: false, // Both halves are stubs: `fetchInventory` and `updateInventory` return `not_supported`.
+    ingestOrders: true, // `fetchOrders` is genuinely implemented.
+    updateFulfilment: true, // `submitFulfilmentUpdate` is genuinely implemented (MFN shipment confirmation).
     processRefunds: false, // Refunds on Amazon are customer/Amazon-initiated, not seller-submitted via this API.
-    readFees: true,
+    readFees: false, // `fetchFees` returns `not_supported` — the Finances API is not implemented here.
     webhooks: true, // Amazon calls these "Notifications", delivered via SQS/EventBridge rather than a plain webhook URL.
-    verifyWrites: true,
+    verifyWrites: false, // `verifyListingState` is not implemented — see its own comment below.
     // Milestone: controlled Shopify publication (Phase 6) — out of scope
     // for that milestone, which is Shopify-specific. Amazon's own listing
     // creation (the Listings Items API, driven by per-product-type JSON
@@ -329,11 +343,12 @@ export class AmazonConnector implements MarketplaceConnector {
    * validate it against, is exactly the "fake live integration" this
    * project's principles forbid — so these three honestly report
    * `not_supported` rather than attempting a call that would almost
-   * certainly be wrong. This is a real gap, not a stub with matching
-   * capabilities: `descriptor.capabilities.writeListings` stays `true`
-   * because the *marketplace* supports writes; these three methods being
-   * `not_supported` is what actually tells a caller "not by this
-   * connector, not yet."
+   * certainly be wrong. This is a real gap, and the descriptor now says so:
+   * `capabilities.writeListings` is `false`, matching these three methods
+   * rather than contradicting them. (It previously said `true`, justified
+   * as "the *marketplace* supports writes" — but the flag's own type
+   * documentation and every caller mean "this connector can", so the flag
+   * was simply wrong.)
    */
   async updateListingPrice(): Promise<Result<WriteOutcome, WriteFailure>> {
     return err({ reason: 'not_supported', detail: 'Amazon price writes require the Listings Items API with a seller id and product-type-specific patch schema, not yet implemented in this connector.' })

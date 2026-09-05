@@ -14,6 +14,8 @@ import { runCampaignReview } from '@/lib/advertising/monitor'
 import type { AdvertisingHandlerDeps } from './handlers/advertisingHandlers'
 import type { LifecycleHandlerDeps } from './handlers/productHandlers'
 import { refreshCandidateLifecycleFacts } from '@/lib/products/lifecycleFactRefresh'
+import { computeProductIntelligence } from '@/lib/products/intelligence/assemble'
+import { createServiceSupabase } from '@/lib/supabase/server'
 import type { ChannelKey } from '@/lib/core/domain'
 
 /**
@@ -64,6 +66,15 @@ export async function runScheduledJobBatch(maxJobs = 25): Promise<WorkerBatchRes
     async refreshLifecycleFacts(orgId, productId, channel) {
       const result = await refreshCandidateLifecycleFacts(orgId, productId, channel as ChannelKey)
       return result.ok ? { ok: true } : { ok: false, error: result.error }
+    },
+    async refreshProductIntelligence(orgId, productId) {
+      // The service-role client: this runs from a cron request with no
+      // signed-in user, and every read inside the engine is explicitly
+      // org-scoped. `null` means the product itself could not be read —
+      // reported as a failure so the job retries, never as a success that
+      // would imply a score now exists.
+      const result = await computeProductIntelligence(orgId, productId, 'automated_recheck', { type: 'system', label: 'Candidate lifecycle monitor' }, createServiceSupabase())
+      return result ? { ok: true } : { ok: false, error: `Product ${productId} could not be scored — no product record was readable.` }
     },
   }
 

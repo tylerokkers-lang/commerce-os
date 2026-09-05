@@ -189,6 +189,8 @@ function isCandidateLifecycleReviewPayload(p: Record<string, unknown>): boolean 
  */
 export interface LifecycleHandlerDeps {
   refreshLifecycleFacts: (orgId: string, productId: string, channel: string) => Promise<{ ok: boolean; error?: string }>
+  /** Milestone: close the production autonomy gap — the existing `computeProductIntelligence` engine, injected for the same `server-only` reason. */
+  refreshProductIntelligence?: (orgId: string, productId: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 /**
@@ -258,6 +260,11 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
     settings,
   )
   const { advance, gateState, rechecks, policy } = assessment
+  const anchors = {
+    complianceAsOf: verdicts.compliance.asOf,
+    profitabilityAsOf: verdicts.profitability.asOf,
+    intelligenceAsOf: intel.recommendation.asOf,
+  }
 
   const created = await store.createAutomationAction({
     orgId: job.orgId,
@@ -295,8 +302,8 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
     // recheck that could resolve it so the next cycle can retry — but only
     // when the kill switch itself is not what blocked us, since scheduling
     // work while automation is paused would defeat the pause.
-    if (advance.blockedOnlyByUnknowns && !isKillSwitchBlock(policy)) {
-      await enqueueRechecks(job, store, payload, rechecks)
+    if (advance.blockedOnlyByUnknowns && shouldScheduleRechecks(policy, settings)) {
+      await enqueueRechecks(job, store, payload, rechecks, anchors)
     } else if (gateState.failedKeys.length > 0) {
       await store.notify({
         orgId: job.orgId, severity: 'warning', category: 'discovery',
@@ -313,7 +320,7 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
 
   if (!advance.to) {
     await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
-    if (advance.blockedOnlyByUnknowns) await enqueueRechecks(job, store, payload, rechecks)
+    if (advance.blockedOnlyByUnknowns && shouldScheduleRechecks(policy, settings)) await enqueueRechecks(job, store, payload, rechecks, anchors)
     return { succeeded: true }
   }
 
@@ -353,23 +360,46 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
   return { succeeded: true }
 }
 
-/** True when the policy refusal came from the kill switch rather than a domain gate. */
-function isKillSwitchBlock(policy: { requirements: readonly { key: string; satisfied: boolean }[] }): boolean {
-  return policy.requirements.some((r) => (r.key === 'automation_not_paused' || r.key === 'automation_state_known') && !r.satisfied)
+/**
+ * Whether scheduling a recheck could actually change anything.
+ *
+ * Two cases where it cannot, and where scheduling anyway would mean doing
+ * real work every cycle forever for a guaranteed-identical answer:
+ *
+ *   - The kill switch is on. Queueing work while paused defeats the pause.
+ *   - Business settings are unconfigured. Every threshold behind every
+ *     verdict is then a placeholder, `recommendProduct` returns
+ *     `unconfigured` by construction, and recomputing would produce exactly
+ *     the same non-answer. The blocker there is configuration, not staleness.
+ */
+function shouldScheduleRechecks(
+  policy: { requirements: readonly { key: string; satisfied: boolean }[] },
+  settings: { businessSettingsConfigured: boolean },
+): boolean {
+  const killSwitched = policy.requirements.some((r) => (r.key === 'automation_not_paused' || r.key === 'automation_state_known') && !r.satisfied)
+  return !killSwitched && settings.businessSettingsConfigured
 }
 
 /**
  * Schedules the real work that could turn an UNKNOWN fact into a real one.
- * Deterministically keyed on the product/channel/kind, never on the job or
- * a timestamp, so a candidate blocked on the same unknown across many
- * monitoring cycles produces exactly one outstanding recheck rather than
- * one per cycle.
+ *
+ * The idempotency key matters more than it looks. `enqueueJob` deduplicates
+ * against EVERY job ever recorded for a key, not just pending ones, so a
+ * key that is stable forever would let a recheck run exactly once in the
+ * lifetime of a product and never again — the loop would silently stop
+ * being continuous. Each key therefore includes the freshness anchor it is
+ * trying to supersede: while a fact stays stale and unchanged, every cycle
+ * produces the same key and dedupes to one outstanding job; the moment the
+ * fact is genuinely refreshed, its anchor moves and a future staleness is a
+ * genuinely new key. That is what makes this both non-repetitive and
+ * non-terminal.
  */
 async function enqueueRechecks(
   job: JobRecord,
   store: AutomationStore,
   payload: CandidateLifecycleReviewPayload,
   rechecks: readonly RecheckKind[],
+  anchors: { complianceAsOf: string | null; profitabilityAsOf: string | null; intelligenceAsOf: string | null },
 ): Promise<void> {
   for (const kind of rechecks) {
     if (kind === 'lifecycle_facts') {
@@ -377,22 +407,70 @@ async function enqueueRechecks(
         orgId: job.orgId,
         jobType: 'candidate_facts_refresh',
         payload: { productId: payload.productId, channel: payload.channel },
-        idempotencyKey: `candidate-facts-refresh:${payload.productId}:${payload.channel}`,
+        idempotencyKey: `candidate-facts-refresh:${payload.productId}:${payload.channel}:${anchors.complianceAsOf ?? 'never'}|${anchors.profitabilityAsOf ?? 'never'}`,
         correlationId: job.correlationId,
       })
     } else {
-      // Nothing in this system can recompute product intelligence on its
-      // own — it is a human-triggered engine (import, or the "recalculate"
-      // action). So this is honestly a notification, not a job.
-      await store.notify({
-        orgId: job.orgId, severity: 'warning', category: 'discovery',
-        title: `Candidate intelligence needs recalculating: ${payload.productId}`,
-        body: 'The opportunity score is missing or outside its freshness window, and nothing recomputes it automatically. Recalculate it from the product page to let this candidate progress.',
-        entityType: 'product', entityId: payload.productId,
-        dedupeKey: `candidate-intelligence-stale:${job.orgId}:${payload.productId}`,
+      await store.enqueueJob({
+        orgId: job.orgId,
+        jobType: 'candidate_intelligence_refresh',
+        payload: { productId: payload.productId },
+        idempotencyKey: `candidate-intelligence-refresh:${payload.productId}:${anchors.intelligenceAsOf ?? 'never'}`,
+        correlationId: job.correlationId,
       })
     }
   }
+}
+
+/**
+ * CANDIDATE_INTELLIGENCE_REFRESH: recomputes one product's opportunity/
+ * quality/risk scores and its recommendation through the existing
+ * `computeProductIntelligence` engine (`products/intelligence/assemble.ts`)
+ * — never a second scoring engine, and never a guessed score.
+ *
+ * This closes the last human-only link in the candidate loop. Until this
+ * existed, intelligence was recomputed only when someone imported a
+ * candidate or clicked "recalculate", so a candidate whose score went stale
+ * could never become fresh again on its own and would sit blocked forever.
+ *
+ * Makes no marketplace write of any kind. The engine does read Shopify's
+ * Storefront API when a product already has an `external_id`, which is a
+ * read; a pre-launch candidate has none, so in practice it touches nothing
+ * external at all.
+ */
+export async function handleCandidateIntelligenceRefresh(
+  job: JobRecord,
+  store: AutomationStore,
+  _facts: FactsLoader,
+  _connectors?: unknown,
+  _marketDeps?: unknown,
+  _advertisingDeps?: unknown,
+  lifecycleDeps?: LifecycleHandlerDeps,
+): Promise<JobHandlerResult> {
+  const payload = job.payload as unknown as { productId?: string }
+  if (typeof payload.productId !== 'string') {
+    return { succeeded: false, error: 'Malformed payload for candidate_intelligence_refresh.', retryable: false }
+  }
+  if (!lifecycleDeps?.refreshProductIntelligence) {
+    return { succeeded: false, error: 'No product-intelligence refresher is wired into this worker.', retryable: false }
+  }
+
+  const settings = await store.getAutomationSettings(job.orgId)
+  // Recomputing a score changes no external state and spends nothing, but a
+  // pause means the system stops acting on its own — including stopping the
+  // work it schedules for itself.
+  if (settings.automationPaused || !settings.automationStateKnown) {
+    return { succeeded: true }
+  }
+
+  const result = await lifecycleDeps.refreshProductIntelligence(job.orgId, payload.productId)
+  if (!result.ok) {
+    // A failed recompute writes nothing: the previously stored score stays
+    // exactly as it was, and the gate keeps reading UNKNOWN rather than
+    // inheriting a fabricated verdict.
+    return { succeeded: false, error: result.error ?? 'The product intelligence refresh failed.', retryable: true }
+  }
+  return { succeeded: true }
 }
 
 /**

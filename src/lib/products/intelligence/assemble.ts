@@ -4,7 +4,7 @@ import { createServerSupabase, createServiceSupabase } from '@/lib/supabase/serv
 import { recordAudit } from '@/lib/audit'
 import { calculateProfitability, assessProfitabilityGate } from '@/lib/profitability'
 import { buildChannelProfiles } from '@/lib/profitability/channels'
-import { getChannelReadiness } from '@/lib/marketplaces/channelReadiness'
+import { getChannelReadiness, type ReadinessClient } from '@/lib/marketplaces/channelReadiness'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { resolveBusinessConfiguration } from '@/lib/automation/settingsTypes'
 import { scoreSupplier, type SupplierSignals } from '@/lib/suppliers/scoring'
@@ -71,8 +71,18 @@ export async function computeProductIntelligence(
   productId: string,
   trigger: string,
   actor: { type: 'user' | 'system'; userId?: string; label?: string },
+  /**
+   * Milestone: close the production autonomy gap. Injected so a background
+   * job with no session can run this engine — the reads below are all
+   * explicitly `.eq('org_id', orgId)` scoped (five of them, verified), and
+   * every write already goes through the service-role client, so passing
+   * the service client changes what this can reach but never what it is
+   * allowed to touch. Defaults to the session client, leaving both existing
+   * human-triggered callers byte-for-byte unchanged.
+   */
+  client?: ReadinessClient,
 ): Promise<ProductIntelligenceResult | null> {
-  const supabase = await createServerSupabase()
+  const supabase = client ?? (await createServerSupabase())
 
   const { data: product } = await supabase
     .from('products')
@@ -182,7 +192,7 @@ export async function computeProductIntelligence(
     : null
 
   // --- Compliance (reused wholesale from the already-built channel readiness assembler) ---
-  const readiness = await getChannelReadiness(orgId, productId, 'shopify', product.stage, product.decision)
+  const readiness = await getChannelReadiness(orgId, productId, 'shopify', product.stage, product.decision, client)
   const complianceVerdict: ComplianceRiskInput | null = readiness.compliance?.verdict ?? null
 
   // --- Shopify's own fee/fulfilment profile ---

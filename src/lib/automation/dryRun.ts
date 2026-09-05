@@ -99,8 +99,44 @@ export function dryRunRefund(input: RefundAutomationInput, automationLevel: Auto
   return buildResult(assessment.policy, { orderId: input.request.orderId, requestedAmountMinor: input.request.requestedAmount.minor })
 }
 
+/**
+ * Whether the next step *after* `approved` — creating a real listing —
+ * could happen at all right now (Milestone: close the production autonomy
+ * gap, Part 15). Pure: the caller supplies the connector's own declared
+ * capabilities and credential state, so this can be answered in a dry run
+ * without touching a connector.
+ *
+ * Deliberately reports capability, not intent. Even a fully-capable
+ * connector would still have to pass policy, the circuit breaker,
+ * idempotency and verification before anything was published; this only
+ * answers "is the door even unlocked".
+ */
+export interface MarketplaceExecutionCapability {
+  channel: string
+  isConfigured: boolean
+  createListings: boolean
+  verifyWrites: boolean
+}
+
+export interface MarketplaceExecutionAssessment {
+  possible: boolean
+  reason: string
+}
+
+export function describeMarketplaceExecution(capability: MarketplaceExecutionCapability | null): MarketplaceExecutionAssessment {
+  if (!capability) return { possible: false, reason: 'No marketplace connector is configured for this candidate’s channel.' }
+  if (!capability.isConfigured) return { possible: false, reason: `${capability.channel}: credentials are not configured, so no call can be made.` }
+  if (!capability.createListings) return { possible: false, reason: `${capability.channel}: the connector cannot create listings (createListings is false), so nothing can be published.` }
+  // A write that cannot be read back can never be confirmed, and this
+  // codebase never records an external state it has not verified.
+  if (!capability.verifyWrites) return { possible: false, reason: `${capability.channel}: the connector cannot verify writes, so a listing could be submitted but never confirmed — which this system treats as unpublished.` }
+  return { possible: true, reason: `${capability.channel}: configured, able to create a listing and to verify it afterwards.` }
+}
+
 export interface CandidateLifecycleReviewDryRunPayload {
   productId: string
+  /** Whether publishing this candidate could happen at all once it reaches `approved`. */
+  marketplaceExecution: MarketplaceExecutionAssessment
   /** The stage the candidate is at right now. */
   currentStage: string | null
   /** The stage it would move to, or `null` when nothing would move. */
@@ -122,7 +158,12 @@ export interface CandidateLifecycleReviewDryRunPayload {
  * notifies anyone; `productId` is threaded through purely for the payload
  * shape, not looked up.
  */
-export function dryRunCandidateLifecycleReview(productId: string, input: CandidateLifecycleReviewInput, settings: AutomationSettings): DryRunResult<CandidateLifecycleReviewDryRunPayload> {
+export function dryRunCandidateLifecycleReview(
+  productId: string,
+  input: CandidateLifecycleReviewInput,
+  settings: AutomationSettings,
+  marketplaceCapability: MarketplaceExecutionCapability | null = null,
+): DryRunResult<CandidateLifecycleReviewDryRunPayload> {
   const assessment = assessCandidateLifecycleReview(input, settings)
   const base = buildResult(assessment.policy, null)
 
@@ -138,6 +179,7 @@ export function dryRunCandidateLifecycleReview(productId: string, input: Candida
     ...base,
     payload: {
       productId,
+      marketplaceExecution: describeMarketplaceExecution(marketplaceCapability),
       currentStage: assessment.gateState.stage,
       wouldMoveTo: assessment.policy.outcome === 'allow_automatic' ? assessment.advance.to : null,
       requirements: assessment.gateState.requirements.map((r) => ({ key: r.key, verdict: r.verdict, detail: r.detail })),
