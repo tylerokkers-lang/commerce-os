@@ -31,6 +31,19 @@ export async function GET() {
     status: 'ok',
     mode: isDemoMode() ? 'demo' : 'live',
     checkedAt: new Date().toISOString(),
+    // Milestone: production autonomy proof. Which build is actually
+    // running, so "deployed" can be verified rather than assumed from a
+    // successful `git push`. Previous milestones could only ever say
+    // "pushed, deployment identity unverified" — there was no read-only
+    // way to tell whether production contained a given commit.
+    //
+    // `VERCEL_GIT_COMMIT_SHA` is injected by Vercel at build time; no
+    // credential and no configuration is required. `null` locally, and on
+    // any host that does not set it — never a fabricated or hardcoded
+    // value. A commit SHA is not a secret (the repository's own history
+    // already contains it), and this endpoint deliberately continues to
+    // report only whether integrations are configured, never their values.
+    commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
     supabase: { reachable: supabaseReachable },
     integrations: integrationStatus().map((i) => ({
       key: i.key,
