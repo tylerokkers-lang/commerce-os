@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { DemoBanner } from '@/components/dashboard/DemoBanner'
 import { Sidebar } from '@/components/dashboard/Sidebar'
 import { countUnread, getNotifications } from '@/lib/notifications/repository'
@@ -43,7 +44,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[15rem_1fr]">
       <aside className="hidden border-r border-border bg-surface lg:block lg:h-screen lg:sticky lg:top-0">
-        <Sidebar orgName={session.orgName} unreadCount={approvals.length} />
+        <Sidebar orgName={session.orgName} pendingApprovalsCount={approvals.length} unreadNotificationCount={unread} />
       </aside>
 
       <div className="flex min-w-0 flex-col">
@@ -62,7 +63,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
               <span aria-hidden>·</span>
               <span>Role: {session.role}</span>
               <span aria-hidden>·</span>
-              <span>{unread} unread notification{unread === 1 ? '' : 's'}</span>
+              <Link href="/notifications" className="text-accent hover:underline">{unread} unread notification{unread === 1 ? '' : 's'}</Link>
               {!session.isDemo ? (
                 <>
                   <span aria-hidden>·</span>

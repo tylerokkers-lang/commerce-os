@@ -5,6 +5,7 @@ import { createServerSupabase } from '@/lib/supabase/server'
 import { recordAudit } from '@/lib/audit'
 import { getAutomationSettingsForOrg } from '@/lib/automation/settings'
 import { getConnector } from './connectors/registry'
+import { withSupplierConnectorGate } from './connectors/executionGate'
 import { assessShippingSuitability, type ShippingPolicyResult } from './shippingPolicy'
 import type { SupplierShippingQuote } from './connectors/types'
 
@@ -47,7 +48,14 @@ export async function fetchAndAssessShipping(input: FetchShippingQuotesInput): P
   }
   if (!connector.isConfigured()) return err(`${connector.descriptor.label} is not configured.`)
 
-  const detailResult = await connector.readProductDetail(input.connectorProductRef, { destinationCountry: input.destinationCountry })
+  // Milestone: execution reliability. Gated by the real circuit breaker
+  // when a supplier row is known (the common case) — a repeatedly-failing
+  // connector stops being hit rather than retried on every request. Falls
+  // back to the direct call, unchanged from before this milestone, only
+  // when no supplier is on file yet (nothing stable to track state against).
+  const detailResult = input.supplierId
+    ? await withSupplierConnectorGate(input.orgId, input.supplierId, connector, () => connector.readProductDetail(input.connectorProductRef, { destinationCountry: input.destinationCountry }))
+    : await connector.readProductDetail(input.connectorProductRef, { destinationCountry: input.destinationCountry })
   if (!detailResult.ok) return detailResult
 
   const settings = await getAutomationSettingsForOrg(input.orgId)

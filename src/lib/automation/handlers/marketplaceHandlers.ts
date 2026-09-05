@@ -1,5 +1,7 @@
 import { reconcileInventory, reconcileListings, summariseDiscrepancies, type OurInventoryRecord, type OurListingRecord } from '@/lib/marketplaces/reconciliation'
 import { assessDeliveryHealth, type ShipmentRecord } from '@/lib/fulfilment/tracking'
+import { evaluateAutomationPolicy } from '../policyEngine'
+import { withMarketplaceConnectorGate } from '@/lib/marketplaces/connectors/executionGate'
 import type { AutomationStore, JobRecord } from '../store'
 import type { FactsLoader } from '../factsTypes'
 import type { JobHandlerResult, ConnectorLookup } from '../worker'
@@ -30,9 +32,10 @@ export async function handleMarketplaceListingSync(job: JobRecord, store: Automa
   const connector = connectors(payload.connectorKey)
   if (!connector) return { succeeded: false, error: `No connector registered for "${payload.connectorKey}".`, retryable: false }
 
-  const fetched = await connector.fetchListings({ limit: 250 })
+  const fetched = await withMarketplaceConnectorGate(job.orgId, connector, () => connector.fetchListings({ limit: 250 }))
   if (!fetched.ok) {
-    return { succeeded: false, error: fetched.error, retryable: true } // A transient connector failure; safe to retry with backoff.
+    const detail = typeof fetched.error === 'string' ? fetched.error : String(fetched.error)
+    return { succeeded: false, error: detail, retryable: true } // A transient connector failure; safe to retry with backoff.
   }
 
   const discrepancies = reconcileListings(payload.ours, fetched.value.records)
@@ -83,26 +86,54 @@ export async function handleFulfilmentUpdate(job: JobRecord, store: AutomationSt
   if (!connector) return { succeeded: false, error: `No connector registered for "${payload.connectorKey}".`, retryable: false }
 
   const settings = await store.getAutomationSettings(job.orgId)
+  // Milestone: execution reliability & unified write path. This used to
+  // hand-write `{ outcome: 'allow_automatic', ... }` directly — a real
+  // partial bypass of the policy engine: the kill switch's `'fulfilment'`
+  // category pause (`ACTION_CATEGORY.update_fulfilment`) and the
+  // fail-closed unknown-automation-state check were never actually
+  // consulted for this action type. Routed through `evaluateAutomationPolicy`
+  // now, exactly like every other action, even though the domain verdict
+  // itself is unchanged (tracking submission is still inherently low-risk
+  // and always domain-permitted).
+  const policy = evaluateAutomationPolicy({
+    actionType: 'update_fulfilment',
+    settings,
+    domainOutcome: 'auto_permitted',
+    domainReason: `Submitting tracking ${payload.trackingNumber} (${payload.carrier}) for order ${payload.externalOrderId}.`,
+    domainRequirements: [],
+    riskLevel: 'low',
+  })
+
   const created = await store.createAutomationAction({
     orgId: job.orgId,
     idempotencyKey: `job:${job.id}`,
     actionType: 'update_fulfilment',
     entityType: 'order',
     entityId: payload.entityId,
-    reason: `Submitting tracking ${payload.trackingNumber} (${payload.carrier}) for order ${payload.externalOrderId}.`,
+    reason: policy.reason,
     inputFacts: { externalOrderId: payload.externalOrderId, carrier: payload.carrier, trackingNumber: payload.trackingNumber },
     decision: {},
-    policy: { outcome: 'allow_automatic', requirements: [], reason: 'Tracking submission does not carry a financial or listing risk requiring approval.', riskLevel: 'low' },
+    policy,
     automationLevel: settings.automationLevel,
     jobId: job.id,
   })
   if (created.alreadyExisted) return { succeeded: true }
 
-  const result = await connector.submitFulfilmentUpdate({ externalOrderId: payload.externalOrderId, carrier: payload.carrier, trackingNumber: payload.trackingNumber, idempotencyKey: `job:${job.id}` })
+  if (created.status !== 'executing') {
+    // Blocked (kill switch / unknown automation state) or somehow routed to
+    // approval — either way, never submit to the marketplace.
+    await store.notify({ orgId: job.orgId, severity: 'warning', category: 'fulfilment', title: `Tracking submission held for order ${payload.externalOrderId}`, body: policy.reason, dedupeKey: `action:${created.id}` })
+    return { succeeded: true }
+  }
+
+  const result = await withMarketplaceConnectorGate(job.orgId, connector, () =>
+    connector.submitFulfilmentUpdate({ externalOrderId: payload.externalOrderId, carrier: payload.carrier, trackingNumber: payload.trackingNumber, idempotencyKey: `job:${job.id}` }),
+  )
 
   if (!result.ok) {
-    await store.completeAutomationAction(created.id, { succeeded: false, error: result.error, orgId: job.orgId, entityType: 'order', entityId: payload.entityId, verificationStatus: 'failed' })
-    await store.notify({ orgId: job.orgId, severity: 'warning', category: 'fulfilment', title: `Tracking submission failed for order ${payload.externalOrderId}`, body: result.error, dedupeKey: `action:${created.id}` })
+    const detail = typeof result.error === 'string' ? result.error : String(result.error)
+    await store.completeAutomationAction(created.id, { succeeded: false, error: detail, orgId: job.orgId, entityType: 'order', entityId: payload.entityId, verificationStatus: 'failed' })
+    await store.notify({ orgId: job.orgId, severity: 'warning', category: 'fulfilment', title: `Tracking submission failed for order ${payload.externalOrderId}`, body: detail, dedupeKey: `action:${created.id}` })
     return { succeeded: true } // The job ran to completion and correctly recorded a failed submission — not a job-engine failure.
   }
 
@@ -175,8 +206,8 @@ export async function handleMarketplaceReconciliation(job: JobRecord, store: Aut
   const connector = connectors(payload.connectorKey)
   if (!connector) return { succeeded: false, error: `No connector registered for "${payload.connectorKey}".`, retryable: false }
 
-  const fetched = await connector.fetchInventory({ limit: 250 })
-  if (!fetched.ok) return { succeeded: false, error: fetched.error, retryable: true }
+  const fetched = await withMarketplaceConnectorGate(job.orgId, connector, () => connector.fetchInventory({ limit: 250 }))
+  if (!fetched.ok) return { succeeded: false, error: typeof fetched.error === 'string' ? fetched.error : String(fetched.error), retryable: true }
 
   const discrepancies = reconcileInventory(payload.ourInventory, fetched.value.records)
   const settings = await store.getAutomationSettings(job.orgId)

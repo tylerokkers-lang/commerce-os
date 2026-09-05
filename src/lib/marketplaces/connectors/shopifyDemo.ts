@@ -132,7 +132,7 @@ export class ShopifyDemoConnector implements MarketplaceConnector {
       ...listing,
       priceMinor: ShopifyDemoConnector.writtenPrices.get(externalId) ?? listing.priceMinor,
       stockQty: ShopifyDemoConnector.writtenStock.has(externalId) ? ShopifyDemoConnector.writtenStock.get(externalId)! : listing.stockQty,
-      status: writtenStatus === 'paused' ? 'draft' : writtenStatus === 'active' ? 'active' : listing.status,
+      status: writtenStatus === 'paused' ? 'paused' : writtenStatus === 'active' ? 'active' : listing.status,
       reportedAt: new Date().toISOString(),
     })
   }

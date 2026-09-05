@@ -2,6 +2,7 @@ import 'server-only'
 
 import { createServerSupabase } from '@/lib/supabase/server'
 import { getConnector } from '@/lib/suppliers/connectors/registry'
+import { withSupplierConnectorGate } from '@/lib/suppliers/connectors/executionGate'
 import { generateCleanProductName } from '@/lib/products/naming'
 
 /**
@@ -142,13 +143,16 @@ export async function backfillProductFactsFromResearch(orgId: string, productId:
         try {
           const connector = getConnector(connectorKey)
           if (connector?.isConfigured()) {
-            const detail = await connector.readProductDetail(connectorProductRef)
+            // Milestone: execution reliability — real circuit-breaker
+            // enforcement, gated on the supplier this candidate belongs to
+            // (`candidate.supplier_id`, always present inside this block).
+            const detail = await withSupplierConnectorGate(orgId, candidate.supplier_id!, connector, () => connector.readProductDetail(connectorProductRef))
             if (detail.ok && detail.value.productUrl) {
               sourceUrl = detail.value.productUrl
               sourceUrlType = 'product'
               recoveredUrlLive = true
             } else if (connector.descriptor.capabilities.resolvesProductSourceLink) {
-              const link = await connector.getProductSourceLink({ productRef: connectorProductRef, supplierSku: offer.supplier_sku })
+              const link = await withSupplierConnectorGate(orgId, candidate.supplier_id!, connector, () => connector.getProductSourceLink({ productRef: connectorProductRef, supplierSku: offer.supplier_sku }))
               if (link.ok) {
                 sourceUrl = link.value.url
                 sourceUrlType = link.value.type

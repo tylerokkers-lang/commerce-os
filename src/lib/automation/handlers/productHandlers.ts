@@ -1,13 +1,15 @@
 import { evaluateProductMonitoring } from '../monitoring'
 import { evaluatePublicationAutomation } from '../publicationAutomation'
 import { executePriceChange, type PriceExecutionInput } from '../priceExecution'
+import { evaluateAutomationPolicy } from '../policyEngine'
 import { calculateProfitability } from '@/lib/profitability'
 import { assessCompliance, type ComplianceContext } from '@/lib/compliance/rules'
 import { assessAmazonCapability, assessShopifyCapability } from '@/lib/suppliers/scoring'
 import { money } from '@/lib/core/money'
 import type { AutomationStore, JobRecord } from '../store'
 import type { FactsLoader } from '../factsTypes'
-import type { JobHandlerResult } from '../worker'
+import type { JobHandlerResult, ConnectorLookup } from '../worker'
+import { withMarketplaceConnectorGate } from '@/lib/marketplaces/connectors/executionGate'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
 
 export interface ProductProfitabilityRecheckPayload {
@@ -249,8 +251,120 @@ function isPausePayload(p: Record<string, unknown>): boolean {
   return typeof p.channelProductId === 'string' && typeof p.reason === 'string'
 }
 
-/** PRODUCT_PAUSE: a real, verified local write (channel_products.status = 'paused'), never a bare recommendation. */
-export async function handleProductPause(job: JobRecord, store: AutomationStore): Promise<JobHandlerResult> {
+/**
+ * Shared SUBMIT -> VERIFY -> RECONCILE tail for `handleProductPause`/
+ * `handleProductResume` (Milestone: execution reliability & unified write
+ * path). Both previously (pause) or would have (resume) written
+ * `channel_products.status` directly with no connector call at all —
+ * exactly the ambiguity the status-model review flagged: Commerce OS's own
+ * record could say "paused" while the real marketplace listing stayed
+ * untouched. This mirrors `priceExecution.ts`'s `submitPriceChangeAction`
+ * idiom precisely: capability gate -> circuit-breaker-gated write -> verify
+ * -> reconcile only if verified -> complete, with the connector's own
+ * capability declared today (`writeListings: false` on every real
+ * connector) meaning this never reaches a live marketplace regardless.
+ */
+async function submitListingStatusChange(
+  input: {
+    orgId: string
+    channelProductId: string
+    productTitle: string
+    reason: string
+    targetStatus: 'active' | 'paused'
+    automationActionId: string
+    idempotencyKey: string
+  },
+  store: AutomationStore,
+  connectorLookup: ConnectorLookup,
+): Promise<{ executed: boolean }> {
+  const notifyBase = { orgId: input.orgId, entityType: 'channel_product', entityId: input.channelProductId, dedupeKey: `action:${input.automationActionId}` }
+  const verb = input.targetStatus === 'paused' ? 'paused' : 'resumed'
+
+  const info = await store.getChannelProductConnectorInfo(input.orgId, input.channelProductId)
+  if (!info || !info.externalId || !info.connectorKey) {
+    await store.completeAutomationAction(input.automationActionId, {
+      succeeded: false,
+      error: 'No marketplace listing is on file for this channel product — nothing to pause/resume externally.',
+      orgId: input.orgId, entityType: 'channel_product', entityId: input.channelProductId,
+      verificationStatus: 'not_applicable', reconciliationStatus: 'not_applicable',
+    })
+    return { executed: false }
+  }
+
+  const connector = connectorLookup(info.connectorKey)
+  if (!connector || !connector.descriptor.capabilities.writeListings) {
+    await store.completeAutomationAction(input.automationActionId, {
+      succeeded: false,
+      error: connector ? 'This connector does not support listing status writes.' : `No connector registered for "${info.connectorKey}".`,
+      orgId: input.orgId, entityType: 'channel_product', entityId: input.channelProductId,
+      verificationStatus: 'not_applicable', reconciliationStatus: 'not_applicable',
+    })
+    await store.notify({ ...notifyBase, severity: 'critical', category: 'catalogue', title: `Could not ${input.targetStatus === 'paused' ? 'pause' : 'resume'} ${input.productTitle}`, body: 'The connector does not support this write — Commerce OS has NOT changed the real listing.' })
+    return { executed: false }
+  }
+
+  const writeResult = await withMarketplaceConnectorGate(input.orgId, connector, () =>
+    connector.setListingStatus({ externalId: info.externalId!, idempotencyKey: input.idempotencyKey, status: input.targetStatus }),
+  )
+
+  if (!writeResult.ok) {
+    const detail = typeof writeResult.error === 'string' ? writeResult.error : `${writeResult.error.reason}: ${writeResult.error.detail}`
+    await store.completeAutomationAction(input.automationActionId, {
+      succeeded: false, error: detail, orgId: input.orgId, entityType: 'channel_product', entityId: input.channelProductId,
+      verificationStatus: 'failed', reconciliationStatus: 'not_applicable',
+    })
+    await store.notify({ ...notifyBase, severity: 'warning', category: 'catalogue', title: `Listing status change rejected for ${input.productTitle}`, body: detail })
+    return { executed: false }
+  }
+
+  // VERIFY — the write's own "accepted" response is never proof; read it back.
+  let verified = false
+  let verificationStatus: 'verified' | 'failed' | 'uncertain' = 'uncertain'
+  if (connector.descriptor.capabilities.verifyWrites) {
+    const verifyResult = await withMarketplaceConnectorGate(input.orgId, connector, () => connector.verifyListingState(info.externalId!))
+    if (verifyResult.ok && verifyResult.value.status === input.targetStatus) {
+      verified = true
+      verificationStatus = 'verified'
+    } else if (verifyResult.ok) {
+      // The marketplace's own state disagrees with what was submitted —
+      // a connector without a distinct "paused" concept of its own would
+      // report something other than an exact match here too, which is
+      // exactly why this stays `'failed'` rather than `'verified'` rather
+      // than guessing the two are equivalent.
+      verificationStatus = 'failed'
+    }
+  }
+
+  if (verified) {
+    await store.reconcileChannelProduct({ orgId: input.orgId, channelProductId: input.channelProductId, status: input.targetStatus === 'active' ? 'live' : 'paused' })
+  }
+
+  await store.completeAutomationAction(input.automationActionId, {
+    succeeded: verified,
+    error: verified ? null : 'The write was submitted, but the marketplace could not be confirmed to reflect it.',
+    orgId: input.orgId, entityType: 'channel_product', entityId: input.channelProductId,
+    verificationStatus, reconciliationStatus: verified ? 'matched' : verificationStatus === 'failed' ? 'discrepancy' : 'pending',
+  })
+
+  await store.notify({
+    ...notifyBase,
+    severity: verified ? 'warning' : 'warning',
+    category: 'catalogue',
+    title: verified ? `${input.productTitle} ${verb} automatically` : `${input.productTitle} ${input.targetStatus === 'paused' ? 'pause' : 'resume'} unverified`,
+    body: verified ? input.reason : 'Submitted to the marketplace, but its own reported state could not be confirmed to match. Treated as unverified, never as succeeded.',
+  })
+
+  return { executed: verified }
+}
+
+/**
+ * PRODUCT_PAUSE: a real marketplace write, gated by the same policy engine
+ * every other automated action goes through — kill switch, business
+ * settings, and capacity/rate limits all apply here now, not only to price
+ * changes. Never silently marks Commerce OS's own record "paused" without
+ * a real, capability-checked, circuit-breaker-gated connector call.
+ */
+export async function handleProductPause(job: JobRecord, store: AutomationStore, _facts: FactsLoader, connectorLookup: ConnectorLookup): Promise<JobHandlerResult> {
   if (!isPausePayload(job.payload)) {
     return { succeeded: false, error: 'Malformed payload for product_pause.', retryable: false }
   }
@@ -258,22 +372,36 @@ export async function handleProductPause(job: JobRecord, store: AutomationStore)
   const settings = await store.getAutomationSettings(job.orgId)
   const levelPermitsAuto = settings.automationLevel === 'supervised' || settings.automationLevel === 'autonomous'
 
+  const policy = evaluateAutomationPolicy({
+    actionType: 'pause_product',
+    settings,
+    domainOutcome: levelPermitsAuto ? 'auto_permitted' : 'pending_approval',
+    domainReason: payload.reason,
+    domainRequirements: [],
+    riskLevel: 'medium',
+  })
+
   const created = await store.createAutomationAction({
     orgId: job.orgId,
     idempotencyKey: `job:${job.id}`,
     actionType: 'pause_product',
     entityType: 'channel_product',
     entityId: payload.channelProductId,
-    reason: payload.reason,
+    reason: policy.reason,
     inputFacts: {},
     decision: {},
-    policy: { outcome: levelPermitsAuto ? 'allow_automatic' : 'require_approval', requirements: [], reason: payload.reason, riskLevel: 'medium' },
+    policy,
     automationLevel: settings.automationLevel,
     jobId: job.id,
   })
   if (created.alreadyExisted) return { succeeded: true }
 
   const notifyBase = { orgId: job.orgId, entityType: 'channel_product', entityId: payload.channelProductId, dedupeKey: `action:${created.id}` }
+
+  if (created.status === 'blocked') {
+    await store.notify({ ...notifyBase, severity: 'warning', category: 'catalogue', title: `Pause blocked for ${payload.productTitle}`, body: policy.reason })
+    return { succeeded: true }
+  }
 
   if (created.status === 'requires_approval') {
     await store.proposeApproval({
@@ -288,9 +416,93 @@ export async function handleProductPause(job: JobRecord, store: AutomationStore)
   }
 
   if (created.status === 'executing') {
-    await store.reconcileChannelProduct({ orgId: job.orgId, channelProductId: payload.channelProductId, status: 'paused' })
-    await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'channel_product', entityId: payload.channelProductId, reconciliationStatus: 'matched' })
-    await store.notify({ ...notifyBase, severity: 'warning', category: 'catalogue', title: `${payload.productTitle} paused automatically`, body: payload.reason })
+    await submitListingStatusChange(
+      { orgId: job.orgId, channelProductId: payload.channelProductId, productTitle: payload.productTitle, reason: payload.reason, targetStatus: 'paused', automationActionId: created.id, idempotencyKey: `pause-${payload.channelProductId}` },
+      store,
+      connectorLookup,
+    )
+  }
+
+  return { succeeded: true }
+}
+
+export interface ProductResumePayload {
+  channelProductId: string
+  entityId: string
+  productTitle: string
+  reason: string
+}
+
+function isResumePayload(p: Record<string, unknown>): boolean {
+  return typeof p.channelProductId === 'string' && typeof p.reason === 'string'
+}
+
+/**
+ * PRODUCT_RESUME: the mirror of `handleProductPause` — `resume_product`
+ * (`ACTION_CATEGORY`, `inventoryAutomation.ts`) has existed as a domain
+ * decision since Milestone 9 but had no job type or handler at all until
+ * now, so it was fully inert. Registered as `product_resume` in
+ * `worker.ts`'s `HANDLERS`.
+ */
+export async function handleProductResume(job: JobRecord, store: AutomationStore, _facts: FactsLoader, connectorLookup: ConnectorLookup): Promise<JobHandlerResult> {
+  if (!isResumePayload(job.payload)) {
+    return { succeeded: false, error: 'Malformed payload for product_resume.', retryable: false }
+  }
+  const payload = job.payload as unknown as ProductResumePayload
+  const settings = await store.getAutomationSettings(job.orgId)
+  // Resuming requires the same, or a higher, bar as pausing in the first
+  // place — never a weaker one just because it is the "undo" direction.
+  const levelPermitsAuto = settings.automationLevel === 'autonomous'
+
+  const policy = evaluateAutomationPolicy({
+    actionType: 'resume_product',
+    settings,
+    domainOutcome: levelPermitsAuto ? 'auto_permitted' : 'pending_approval',
+    domainReason: payload.reason,
+    domainRequirements: [],
+    riskLevel: 'medium',
+  })
+
+  const created = await store.createAutomationAction({
+    orgId: job.orgId,
+    idempotencyKey: `job:${job.id}`,
+    actionType: 'resume_product',
+    entityType: 'channel_product',
+    entityId: payload.channelProductId,
+    reason: policy.reason,
+    inputFacts: {},
+    decision: {},
+    policy,
+    automationLevel: settings.automationLevel,
+    jobId: job.id,
+  })
+  if (created.alreadyExisted) return { succeeded: true }
+
+  const notifyBase = { orgId: job.orgId, entityType: 'channel_product', entityId: payload.channelProductId, dedupeKey: `action:${created.id}` }
+
+  if (created.status === 'blocked') {
+    await store.notify({ ...notifyBase, severity: 'warning', category: 'catalogue', title: `Resume blocked for ${payload.productTitle}`, body: policy.reason })
+    return { succeeded: true }
+  }
+
+  if (created.status === 'requires_approval') {
+    await store.proposeApproval({
+      orgId: job.orgId, decisionType: 'resume_product', entityType: 'channel_product', entityId: payload.channelProductId,
+      title: `Resume ${payload.productTitle}`, detail: payload.reason, reasoning: payload.reason, confidence: null, estimatedImpactMinor: null,
+      automationLevelRequired: settings.automationLevel, riskLevel: 'medium', inputs: {},
+      actionPayload: { actionType: 'resume_product', entityType: 'channel_product', entityId: payload.channelProductId, reason: payload.reason, inputFacts: {} },
+      expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+    })
+    await store.notify({ ...notifyBase, severity: 'approval_required', category: 'catalogue', title: `Approval needed: resume ${payload.productTitle}`, body: payload.reason, actionUrl: '/approvals' })
+    return { succeeded: true }
+  }
+
+  if (created.status === 'executing') {
+    await submitListingStatusChange(
+      { orgId: job.orgId, channelProductId: payload.channelProductId, productTitle: payload.productTitle, reason: payload.reason, targetStatus: 'active', automationActionId: created.id, idempotencyKey: `resume-${payload.channelProductId}` },
+      store,
+      connectorLookup,
+    )
   }
 
   return { succeeded: true }

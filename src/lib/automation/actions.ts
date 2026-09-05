@@ -215,6 +215,34 @@ export async function reconcileChannelProduct(input: ChannelProductReconciliatio
   })
 }
 
+export interface ChannelProductConnectorInfo {
+  externalId: string | null
+  connectorKey: string | null
+  currentStatus: string
+}
+
+/**
+ * Milestone: execution reliability & unified write path. Resolves what an
+ * automated action needs to actually call a marketplace connector for one
+ * `channel_products` row — used by `handleProductPause`/`handleProductResume`
+ * so those jobs' own payloads only need to carry a `channelProductId`
+ * (already true today), never a second copy of `externalId`/`connectorKey`
+ * that could drift from the real row.
+ */
+export async function getChannelProductConnectorInfo(orgId: string, channelProductId: string): Promise<ChannelProductConnectorInfo | null> {
+  const supabase = createServiceSupabase()
+  const { data, error } = await supabase
+    .from('channel_products')
+    .select('external_id, status, channels(key)')
+    .eq('org_id', orgId)
+    .eq('id', channelProductId)
+    .maybeSingle()
+
+  if (error || !data) return null
+  const channel = data.channels as unknown as { key: string } | null
+  return { externalId: data.external_id, connectorKey: channel?.key ?? null, currentStatus: data.status }
+}
+
 /**
  * The advertising equivalent of `reconcileChannelProduct` (Milestone 15) —
  * same discipline: a partial patch applied only after a verified external

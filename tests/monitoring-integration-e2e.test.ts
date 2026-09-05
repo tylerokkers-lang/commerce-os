@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('server-only', () => ({}))
+
 import { fromMajor } from '@/lib/core/money'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'

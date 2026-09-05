@@ -4,6 +4,7 @@ import {
   handleProductComplianceRecheck,
   handleChannelEligibilityRecheck,
   handleProductPause,
+  handleProductResume,
   handleProductPriceReview,
 } from './handlers/productHandlers'
 import {
@@ -82,6 +83,7 @@ export const HANDLERS: Record<string, JobHandler> = {
   product_compliance_recheck: handleProductComplianceRecheck,
   channel_eligibility_recheck: handleChannelEligibilityRecheck,
   product_pause: handleProductPause,
+  product_resume: handleProductResume,
   product_price_review: handleProductPriceReview,
   marketplace_listing_sync: handleMarketplaceListingSync,
   order_processing: handleOrderProcessing,

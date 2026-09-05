@@ -11,6 +11,7 @@ export const NAV_SECTIONS = [
       { href: '/chat', label: 'Commerce Intelligence' },
       { href: '/report', label: 'Daily report' },
       { href: '/approvals', label: 'Approvals' },
+      { href: '/notifications', label: 'Notifications' },
       { href: '/automation', label: 'Automation' },
       { href: '/marketplaces', label: 'Marketplaces' },
       { href: '/advertising', label: 'Advertising' },

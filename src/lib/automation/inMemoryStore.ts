@@ -40,7 +40,17 @@ import type { Enums } from '@/lib/supabase/database.types'
  * a deployed project — documented as a production-infrastructure
  * requirement in `HANDOVER.md`.
  */
-export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number; settingsByOrg?: Record<string, AutomationSettings> }) {
+export interface InMemoryChannelProductInfo {
+  externalId: string | null
+  connectorKey: string | null
+  currentStatus: string
+}
+
+export function createInMemoryAutomationStore(options?: {
+  lockTimeoutMs?: number
+  settingsByOrg?: Record<string, AutomationSettings>
+  channelProductInfoById?: Record<string, InMemoryChannelProductInfo>
+}) {
   const lockTimeoutMs = options?.lockTimeoutMs ?? 300_000
   const jobs = new Map<string, JobRecord>()
   const jobsByIdempotencyKey = new Map<string, string>()
@@ -52,6 +62,7 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
   const settingsByOrg = new Map<string, AutomationSettings>(Object.entries(options?.settingsByOrg ?? {}))
   const approvals: (ProposeApprovalInput & { id: string; status: 'awaiting_approval' | 'approved' | 'rejected'; createdAt: string })[] = []
   const channelProductReconciliations = new Map<string, Partial<ChannelProductReconciliation>>()
+  const channelProductInfo = new Map<string, InMemoryChannelProductInfo>(Object.entries(options?.channelProductInfoById ?? {}))
   const advertisingCampaignReconciliations = new Map<string, Partial<AdvertisingCampaignReconciliation>>()
   const maintenanceRuns: MaintenanceRunRecord[] = []
 
@@ -316,6 +327,10 @@ export function createInMemoryAutomationStore(options?: { lockTimeoutMs?: number
 
     async getAutomationSettings(orgId: string): Promise<AutomationSettings> {
       return settingsByOrg.get(orgId) ?? DEMO_AUTOMATION_SETTINGS
+    },
+
+    async getChannelProductConnectorInfo(_orgId: string, channelProductId: string) {
+      return channelProductInfo.get(channelProductId) ?? null
     },
 
     async reconcileChannelProduct(input: ChannelProductReconciliation): Promise<void> {

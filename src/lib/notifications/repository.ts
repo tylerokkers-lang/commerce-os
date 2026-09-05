@@ -12,7 +12,7 @@ export async function getNotifications(limit = 25): Promise<readonly Notificatio
   const supabase = await createServerSupabase()
   const { data, error } = await supabase
     .from('notifications')
-    .select('id, severity, category, title, body, created_at, read_at, action_url')
+    .select('id, severity, category, title, body, created_at, read_at, action_url, entity_type, entity_id')
     .eq('org_id', session.orgId)
     .order('created_at', { ascending: false })
     .limit(limit)
@@ -28,6 +28,8 @@ export async function getNotifications(limit = 25): Promise<readonly Notificatio
     createdAt: row.created_at,
     readAt: row.read_at,
     actionUrl: row.action_url,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
   }))
 }
 

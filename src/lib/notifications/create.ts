@@ -49,3 +49,34 @@ export async function createNotification(input: CreateNotificationInput): Promis
     console.error('[notifications] write failed', { title: input.title, error: error.message })
   }
 }
+
+/**
+ * Milestone: execution reliability & unified write path. The missing half
+ * of the notification lifecycle — `notifications.read_at` could be set by
+ * a migration's column default alone, but nothing in this codebase ever
+ * wrote to it, so the unread count was monotonically non-decreasing in
+ * practice. Scoped to `orgId` (never a bare id lookup) so one org can never
+ * mark another's notification read.
+ */
+export async function markNotificationRead(orgId: string, notificationId: string): Promise<void> {
+  const supabase = createServiceSupabase()
+  const { error } = await supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .eq('org_id', orgId)
+    .eq('id', notificationId)
+    .is('read_at', null)
+
+  if (error) console.error('[notifications] mark-read failed', { notificationId, error: error.message })
+}
+
+export async function markAllNotificationsRead(orgId: string): Promise<void> {
+  const supabase = createServiceSupabase()
+  const { error } = await supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .eq('org_id', orgId)
+    .is('read_at', null)
+
+  if (error) console.error('[notifications] mark-all-read failed', { orgId, error: error.message })
+}

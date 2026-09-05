@@ -53,7 +53,7 @@ describe('publicationService.ts: automation control-plane additions', () => {
   it('a successful listing creation is followed by a real read-back via verifyListingState, gated by the verifyWrites capability', () => {
     const createDraftMatch = source.match(/export async function createDraft[\s\S]*?\n}\n/)
     expect(createDraftMatch![0]).toMatch(/capabilities\.verifyWrites/)
-    expect(createDraftMatch![0]).toMatch(/\.verifyListingState\(result\.value\.externalId\)/)
+    expect(createDraftMatch![0]).toMatch(/\.verifyListingState\(result\.value\.externalId!?\)/)
   })
 
   it('verification failure or uncertainty is recorded, never silently discarded, and the write is never presented as unconditionally confirmed', () => {
@@ -70,6 +70,44 @@ describe('publicationService.ts: automation control-plane additions', () => {
     const auditCallMatch = createDraftMatch![0].match(/action: 'LISTING_CREATED'[\s\S]*?\}\)/)
     expect(auditCallMatch).not.toBeNull()
     expect(auditCallMatch![0]).toMatch(/verificationStatus/)
+  })
+
+  it('all three operator-triggered writes (createDraft, publishLive, pauseListing) are gated by the real policy engine before touching a connector', () => {
+    for (const fnName of ['createDraft', 'publishLive', 'pauseListing']) {
+      const match = source.match(new RegExp(`export async function ${fnName}[\\s\\S]*?\\n}\\n`))
+      expect(match, fnName).not.toBeNull()
+      expect(match![0], fnName).toMatch(/gatePublicationAction\(/)
+    }
+  })
+
+  it('the shared policy gate actually calls evaluateAutomationPolicy — the real kill switch and business-settings checks, never a hand-rolled verdict', () => {
+    const gateMatch = source.match(/async function gatePublicationAction[\s\S]*?\n}\n/)
+    expect(gateMatch).not.toBeNull()
+    expect(gateMatch![0]).toMatch(/evaluateAutomationPolicy\(/)
+  })
+
+  it('every real connector write/verify call (createListing, setListingStatus x2, verifyListingState) is routed through the circuit breaker, never called directly', () => {
+    expect(source).not.toMatch(/(?<!withMarketplaceConnectorGate\(orgId, getShopifyConnector\(\), \(\) => )getShopifyConnector\(\)\.createListing\(/)
+    const setListingStatusCalls = source.match(/getShopifyConnector\(\)\.setListingStatus\(/g) ?? []
+    const gatedSetListingStatusCalls = source.match(/withMarketplaceConnectorGate\(orgId, getShopifyConnector\(\), \(\) => getShopifyConnector\(\)\.setListingStatus\(/g) ?? []
+    expect(setListingStatusCalls.length).toBe(2)
+    expect(gatedSetListingStatusCalls.length).toBe(2)
+  })
+
+  it('pauseListing uses a stable idempotency key, not a timestamp — a genuine retry of a failed pause must be recognised as the same action', () => {
+    const pauseMatch = source.match(/export async function pauseListing[\s\S]*?\n}\n/)
+    // The real, live statement — not the doc comment above it explaining what the old, timestamp-based key used to be.
+    expect(pauseMatch![0]).toMatch(/\n {2}const idempotencyKey = `pause-\$\{productId\}`\n/)
+  })
+
+  it('publishLive and pauseListing both verify against the marketplace before ever writing channel_products as live/paused, and refuse when unverified', () => {
+    const publishMatch = source.match(/export async function publishLive[\s\S]*?\n}\n/)
+    expect(publishMatch![0]).toMatch(/verifyListingState/)
+    expect(publishMatch![0]).toMatch(/if \(!verified\)/)
+
+    const pauseMatch = source.match(/export async function pauseListing[\s\S]*?\n}\n/)
+    expect(pauseMatch![0]).toMatch(/verifyListingState/)
+    expect(pauseMatch![0]).toMatch(/if \(!verified\)/)
   })
 
   it('never fails a whole listing creation just because verification could not run — accepted is not conflated with confirmed, but recording is unconditional', () => {

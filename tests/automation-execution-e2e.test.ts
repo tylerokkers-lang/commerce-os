@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fromMajor } from '@/lib/core/money'
+
+// Milestone: execution reliability. `priceExecution.ts` now imports the
+// circuit-breaker gate (`marketplaces/connectors/executionGate.ts`), which
+// is `server-only` (it can call `createServiceSupabase`) — same technique
+// every other server-only-adjacent test file in this repo already uses.
+vi.mock('server-only', () => ({}))
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { executePriceChange } from '@/lib/automation/priceExecution'
 import { executeSupplierSwitch } from '@/lib/automation/supplierSwitchExecution'

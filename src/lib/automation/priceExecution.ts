@@ -4,6 +4,7 @@ import type { AutomationStore } from './store'
 import type { AutomationSettings } from './settingsTypes'
 import type { PolicyResult } from './types'
 import type { MarketplaceConnector } from '@/lib/marketplaces/connectors/types'
+import { withMarketplaceConnectorGate } from '@/lib/marketplaces/connectors/executionGate'
 import type { ProductDecision } from '@/lib/core/domain'
 
 /**
@@ -189,23 +190,34 @@ export async function submitPriceChangeAction(input: PriceSubmitInput, store: Au
     return { executed: false }
   }
 
-  const writeResult = await input.connector.updateListingPrice({
-    externalId: input.externalId,
-    priceMinor: input.newPriceMinor,
-    idempotencyKey: input.idempotencyKey,
-  })
+  // Milestone: execution reliability — real circuit-breaker enforcement.
+  // The connector's own capability was already checked above; this is the
+  // separate, orthogonal question of "has this connector been failing
+  // repeatedly, and should we even try right now."
+  const writeResult = await withMarketplaceConnectorGate(input.orgId, input.connector, () =>
+    input.connector.updateListingPrice({
+      externalId: input.externalId,
+      priceMinor: input.newPriceMinor,
+      idempotencyKey: input.idempotencyKey,
+    }),
+  )
 
   if (!writeResult.ok) {
+    // The circuit breaker's own block message is a bare string; a real
+    // connector rejection is the usual `WriteFailure` shape. Normalised
+    // here so every downstream consumer sees one consistent detail string
+    // regardless of which of the two stopped this call.
+    const detail = typeof writeResult.error === 'string' ? writeResult.error : `${writeResult.error.reason}: ${writeResult.error.detail}`
     await store.completeAutomationAction(input.automationActionId, {
       succeeded: false,
-      error: `${writeResult.error.reason}: ${writeResult.error.detail}`,
+      error: detail,
       orgId: input.orgId,
       entityType: 'channel_product',
       entityId: input.channelProductId,
       verificationStatus: 'failed',
       reconciliationStatus: 'not_applicable',
     })
-    await store.notify({ ...notifyBase, severity: 'warning', category: 'pricing', title: `Price update rejected for ${input.channelProductId}`, body: writeResult.error.detail })
+    await store.notify({ ...notifyBase, severity: 'warning', category: 'pricing', title: `Price update rejected for ${input.channelProductId}`, body: detail })
     return { executed: false }
   }
 
@@ -213,7 +225,7 @@ export async function submitPriceChangeAction(input: PriceSubmitInput, store: Au
   let verified = false
   let verificationStatus: 'verified' | 'failed' | 'uncertain' = 'uncertain'
   if (input.connector.descriptor.capabilities.verifyWrites) {
-    const verifyResult = await input.connector.verifyListingState(input.externalId)
+    const verifyResult = await withMarketplaceConnectorGate(input.orgId, input.connector, () => input.connector.verifyListingState(input.externalId))
     if (verifyResult.ok && verifyResult.value.priceMinor === input.newPriceMinor) {
       verified = true
       verificationStatus = 'verified'

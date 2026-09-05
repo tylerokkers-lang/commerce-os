@@ -295,6 +295,13 @@ export interface AutomationStore {
   /** The advertising equivalent of `reconcileChannelProduct` (Milestone 15) — same SUBMIT -> VERIFY -> RECONCILE discipline, never called speculatively. */
   reconcileAdvertisingCampaign(input: AdvertisingCampaignReconciliation): Promise<void>
   /**
+   * Milestone: execution reliability & unified write path. What
+   * `handleProductPause`/`handleProductResume` need to actually call a
+   * marketplace connector for one `channel_products` row — `null` when the
+   * row cannot be found at all (the action should block, never guess).
+   */
+  getChannelProductConnectorInfo(orgId: string, channelProductId: string): Promise<{ externalId: string | null; connectorKey: string | null; currentStatus: string } | null>
+  /**
    * Milestone 17 — every `automation_actions` row still `status: 'executing'`
    * and created before `olderThanIso`, restricted to `actionTypes` (the
    * domains that actually have a real provider write + verify path;

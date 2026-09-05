@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('server-only', () => ({}))
+
 import { fromMajor } from '@/lib/core/money'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import { CONFIGURED_AUTOMATION_SETTINGS as DEMO_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import { shopifyDemoConnector } from '@/lib/marketplaces/connectors/shopifyDemo'
+import { demoShopifyListings } from '@/lib/demo/marketplaceData'
 import type { RedundancyRequest } from '@/lib/suppliers/redundancy'
 import type { OrderPipelineInput } from '@/lib/orders/pipeline'
 
@@ -81,8 +85,12 @@ describe('job handler registry', () => {
     expect(chained).toBeTruthy()
   })
 
-  it('PRODUCT_PAUSE executes and reconciles the channel product to paused', async () => {
-    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, automationLevel: 'autonomous' } } })
+  it('PRODUCT_PAUSE calls the real connector, verifies the marketplace reflects it, and only then reconciles', async () => {
+    const realListing = demoShopifyListings()[0]
+    const store = createInMemoryAutomationStore({
+      settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, automationLevel: 'autonomous' } },
+      channelProductInfoById: { 'cp-3': { externalId: realListing.externalId, connectorKey: 'shopify_demo', currentStatus: 'live' } },
+    })
     const facts = createInMemoryFactsLoader()
 
     await store.enqueueJob({ orgId: ORG_A, jobType: 'product_pause', payload: { channelProductId: 'cp-3', entityId: 'prod-3', productTitle: 'Widget', reason: 'Out of stock, no alternative supplier.' } })
@@ -90,6 +98,43 @@ describe('job handler registry', () => {
 
     expect(store.getState().channelProductReconciliations['cp-3']?.status).toBe('paused')
     expect(store.getState().actions[0].status).toBe('succeeded')
+  })
+
+  it('PRODUCT_PAUSE never reconciles when no marketplace listing is on file — it must not silently mark Commerce OS "paused" while the real listing is untouched', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, automationLevel: 'autonomous' } } })
+    const facts = createInMemoryFactsLoader()
+
+    await store.enqueueJob({ orgId: ORG_A, jobType: 'product_pause', payload: { channelProductId: 'cp-3-no-listing', entityId: 'prod-3', productTitle: 'Widget', reason: 'Out of stock, no alternative supplier.' } })
+    await runWorkerBatch(store, facts, connectors, 'worker-1')
+
+    expect(store.getState().channelProductReconciliations['cp-3-no-listing']).toBeUndefined()
+    expect(store.getState().actions[0].status).toBe('failed')
+  })
+
+  it('PRODUCT_RESUME calls the real connector, verifies, and reconciles to live', async () => {
+    const realListing = demoShopifyListings()[0]
+    const store = createInMemoryAutomationStore({
+      settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, automationLevel: 'autonomous' } },
+      channelProductInfoById: { 'cp-4': { externalId: realListing.externalId, connectorKey: 'shopify_demo', currentStatus: 'paused' } },
+    })
+    const facts = createInMemoryFactsLoader()
+
+    await store.enqueueJob({ orgId: ORG_A, jobType: 'product_resume', payload: { channelProductId: 'cp-4', entityId: 'prod-4', productTitle: 'Widget', reason: 'Back in stock.' } })
+    await runWorkerBatch(store, facts, connectors, 'worker-1')
+
+    expect(store.getState().channelProductReconciliations['cp-4']?.status).toBe('live')
+    expect(store.getState().actions[0].status).toBe('succeeded')
+  })
+
+  it('PRODUCT_RESUME requires autonomous level — supervised only proposes approval', async () => {
+    const store = createInMemoryAutomationStore({ settingsByOrg: { [ORG_A]: { ...DEMO_AUTOMATION_SETTINGS, automationLevel: 'supervised' } } })
+    const facts = createInMemoryFactsLoader()
+
+    await store.enqueueJob({ orgId: ORG_A, jobType: 'product_resume', payload: { channelProductId: 'cp-4b', entityId: 'prod-4b', productTitle: 'Widget', reason: 'Back in stock.' } })
+    await runWorkerBatch(store, facts, connectors, 'worker-1')
+
+    expect(store.getState().channelProductReconciliations['cp-4b']).toBeUndefined()
+    expect(store.getState().approvals).toHaveLength(1)
   })
 
   it('PRODUCT_PAUSE requests approval instead of pausing directly at a lower automation level', async () => {

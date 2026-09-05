@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+
+// Milestone: execution reliability. The worker's handlers transitively
+// import the circuit-breaker gate (`server-only`) — same technique every
+// other server-only-adjacent test file in this repo already uses.
+vi.mock('server-only', () => ({}))
+
 import { fromMajor } from '@/lib/core/money'
 import { createInMemoryAutomationStore } from '@/lib/automation/inMemoryStore'
 import { runWorkerBatch } from '@/lib/automation/worker'

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { requireWriteAccess } from '@/lib/security/session'
 import { captureCandidate, importCandidate, rejectCandidate } from '@/lib/suppliers/discovery/ingestion'
 import { getConnector } from '@/lib/suppliers/connectors/registry'
+import { withSupplierConnectorGate } from '@/lib/suppliers/connectors/executionGate'
 import type { CaptureFormState, QueueActionState, CjDiscoveryState } from './state'
 
 /**
@@ -162,7 +163,12 @@ export async function captureFromCjAction(_previous: CaptureFormState, formData:
   const connector = getConnector('cjdropshipping')
   if (!connector || !connector.isConfigured()) return { status: 'error', message: 'CJdropshipping is not configured.', fieldErrors: {} }
 
-  const detail = await connector.readProductDetail(productRef, { destinationCountry: 'GB' })
+  // Milestone: execution reliability — real circuit-breaker enforcement
+  // when a supplier is already selected; unchanged direct call otherwise
+  // (nothing stable yet to track breaker state against).
+  const detail = supplierId
+    ? await withSupplierConnectorGate(session.orgId, supplierId, connector, () => connector.readProductDetail(productRef, { destinationCountry: 'GB' }))
+    : await connector.readProductDetail(productRef, { destinationCountry: 'GB' })
   if (!detail.ok) return { status: 'error', message: detail.error, fieldErrors: {} }
 
   const primaryVariant = detail.value.variants[0]
@@ -177,7 +183,9 @@ export async function captureFromCjAction(_previous: CaptureFormState, formData:
   let sourceUrl = detail.value.productUrl
   let sourceUrlType: 'product' | 'search' | null = sourceUrl ? 'product' : null
   if (!sourceUrl && connector.descriptor.capabilities.resolvesProductSourceLink) {
-    const link = await connector.getProductSourceLink({ productRef, supplierSku: detail.value.supplierSku })
+    const link = supplierId
+      ? await withSupplierConnectorGate(session.orgId, supplierId, connector, () => connector.getProductSourceLink({ productRef, supplierSku: detail.value.supplierSku }))
+      : await connector.getProductSourceLink({ productRef, supplierSku: detail.value.supplierSku })
     if (link.ok) {
       sourceUrl = link.value.url
       sourceUrlType = link.value.type

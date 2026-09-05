@@ -302,6 +302,9 @@ export interface NotificationItem {
   createdAt: string
   readAt: string | null
   actionUrl: string | null
+  /** What real entity this notification is about, e.g. `{entityType: 'channel_product', entityId: '...'}` — the source/action reference a viewer can trace back to a real record, not just a title string. Optional: demo fixtures predate this field. */
+  entityType?: string | null
+  entityId?: string | null
 }
 
 export interface AuditEvent {

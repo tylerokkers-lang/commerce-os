@@ -5,7 +5,15 @@ import { usePathname } from 'next/navigation'
 import { APP_NAME, NAV_SECTIONS } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 
-export function Sidebar({ orgName, unreadCount }: { orgName: string; unreadCount: number }) {
+/**
+ * Milestone: execution reliability & unified write path. `unreadCount` was
+ * always the pending-*approvals* count, badged only on the `/approvals`
+ * link — a real naming collision an audit flagged, since "unread" also
+ * means something distinct and real on `notifications`. Renamed here to
+ * `pendingApprovalsCount`, and a genuinely separate `unreadNotificationCount`
+ * added for the new `/notifications` link's own badge.
+ */
+export function Sidebar({ orgName, pendingApprovalsCount, unreadNotificationCount }: { orgName: string; pendingApprovalsCount: number; unreadNotificationCount: number }) {
   const pathname = usePathname()
 
   return (
@@ -36,9 +44,14 @@ export function Sidebar({ orgName, unreadCount }: { orgName: string; unreadCount
                     )}
                   >
                     <span>{item.label}</span>
-                    {item.href === '/approvals' && unreadCount > 0 ? (
+                    {item.href === '/approvals' && pendingApprovalsCount > 0 ? (
                       <span className="tabular rounded-full bg-caution px-1.5 py-0.5 text-[0.6875rem] font-semibold text-white">
-                        {unreadCount}
+                        {pendingApprovalsCount}
+                      </span>
+                    ) : null}
+                    {item.href === '/notifications' && unreadNotificationCount > 0 ? (
+                      <span className="tabular rounded-full bg-caution px-1.5 py-0.5 text-[0.6875rem] font-semibold text-white">
+                        {unreadNotificationCount}
                       </span>
                     ) : null}
                   </Link>

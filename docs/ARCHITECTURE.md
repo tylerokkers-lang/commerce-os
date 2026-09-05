@@ -814,6 +814,50 @@ that a page rendered.
 The service role key bypasses RLS and is used solely by trusted server-side
 automation.
 
+## The four status systems
+
+Milestone: execution reliability & unified write path. An audit found four
+distinct "what state is this thing in" enums, individually well-documented
+and gated, with no single place that explained how they relate. This is that
+place — read it before adding a fifth, or before writing any code that reads
+one of these and assumes it answers a question it was never designed to
+answer.
+
+| Column | What it represents | Owning module | Transitions | Kind of state |
+|---|---|---|---|---|
+| `products.stage` (`product_stage`) | How far this product has progressed through Commerce OS's own discovery-to-trading pipeline — a maturity/position fact. | `products/lifecycle.ts` | Restrictive `ALLOWED` graph (`planTransition`); append-only `product_stage_transitions`. | **Business state.** Never touched by a marketplace read or write. |
+| `products.decision` / `channel_product_decisions` (`product_decision`) | Whether the *operator* currently permits Commerce OS to act on this product at all (overall, and per channel). | `products/decision.ts`, `products/decisionGate.ts`, `products/channelDecision.ts` | Any value to any other (a permission flag, not a workflow); append-only `*_transitions`. | **Decision state (intent).** A statement about what the operator has allowed, not about what has happened. `add`/`test` are the only values `decisionGate.ts` treats as "may proceed" — nothing else about this column implies eligibility, profitability, or compliance passed. |
+| `channel_products.workflow_state` (`marketplace_listing_state`) | Where a specific listing sits in Commerce OS's own publication workflow — discovered → evaluating → approved → ready_to_list → pending_approval → published → paused/ended. | `marketplaces/listingLifecycle.ts` | Restrictive `ALLOWED` graph (`planListingTransition`); append-only `channel_listing_transitions`. | **Execution/workflow state**, tracked by Commerce OS. `published`/`paused` here mean "Commerce OS attempted and, per `channel_listing_transitions`' own evidence column, verified this transition" — see the rule below. |
+| `channel_products.status` (`channel_listing_status`) | The coarse, UI-facing category the rest of the app renders (`not_listed/draft/review_required/blocked/testing/live/paused/removed`). | Written only by the same functions that write `workflow_state` (`publicationService.ts`) or reconcile a verified external change (`automation/actions.ts`'s `reconcileChannelProduct`) — never a third, independent writer. | Not a state machine of its own; a coarser projection of `workflow_state`, written in lockstep by convention, not by a database constraint. | **Claimed external state** — what Commerce OS currently believes the marketplace itself shows. |
+
+**The rule that matters:** `channel_products.status`/`workflow_state` may only
+ever move to `live`/`published` or `paused` as the result of a real connector
+call whose result was independently read back and confirmed
+(`MarketplaceConnector.verifyListingState`) — never from an internal decision
+alone, no matter how confident that decision is. This was a real, live bug
+until this milestone: `handleProductPause`'s own doc comment used to call its
+write "a real, verified local write" while never once calling a connector —
+Commerce OS's own record could say a listing was paused while the real
+Shopify listing stayed untouched and orderable. `handleProductPause`/
+`handleProductResume` (`automation/handlers/productHandlers.ts`) and
+`publishLive`/`pauseListing` (`marketplaces/shopify/publicationService.ts`)
+now all follow the same SUBMIT → VERIFY → RECONCILE shape `priceExecution.ts`
+already used for price writes: capability check → circuit-breaker-gated
+connector call → read the listing back → reconcile `status`/`workflow_state`
+**only if verified** → record the real outcome, honestly, as
+`verified`/`failed`/`uncertain` — an internal `product_decision` of `add` or
+an `automation_action` marked `succeeded` must never be read, by any future
+code, as proof a marketplace listing is actually live or actually paused.
+
+`overrideSellingPrice` (`publicationService.ts`) is a known, documented
+exception, not yet fixed: it writes `channel_products.price_minor` directly
+with no connector call, correct when used pre-publication to set the price a
+future `createDraft` will use, but capable of silently diverging Commerce
+OS's price record from a marketplace's real price if called against an
+already-`published` listing. Restricting it to pre-publish states, or routing
+it through `priceExecution.ts`'s real pipeline once a listing is live, is
+flagged as follow-up work.
+
 ## Data access
 
 Every read goes through a repository that branches on `session.isDemo` and

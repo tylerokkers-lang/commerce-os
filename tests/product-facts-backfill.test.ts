@@ -18,10 +18,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
 
 const createServerSupabaseMock = vi.fn()
-vi.mock('@/lib/supabase/server', () => ({ createServerSupabase: () => createServerSupabaseMock() }))
+// Milestone: execution reliability. The circuit-breaker gate
+// (`suppliers/connectors/executionGate.ts`) calls `createServiceSupabase`
+// to read/record connector state — a bare stub reporting "no row yet" (the
+// gate's own, deliberate "never tracked before, treat as fresh/healthy"
+// case, not "unknown") so these tests exercise the real backfill logic
+// rather than being silently fail-closed by an unmocked dependency.
+const circuitBreakerServiceStub = {
+  from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }) }) }),
+  rpc: () => Promise.resolve({ error: null }),
+}
+vi.mock('@/lib/supabase/server', () => ({
+  createServerSupabase: () => createServerSupabaseMock(),
+  createServiceSupabase: () => circuitBreakerServiceStub,
+}))
 
 const getConnectorMock = vi.fn()
-vi.mock('@/lib/suppliers/connectors/registry', () => ({ getConnector: (key: string) => getConnectorMock(key) }))
+// Milestone: execution reliability. `executionGate.ts` imports the real,
+// pure `canConnectorRunNow` from this same module — mocking the whole
+// module (as this file already did, to stub `getConnector`) would strip it
+// out for every importer, so it's re-exported here unchanged rather than
+// stubbed, keeping the real gating logic under test too.
+vi.mock('@/lib/suppliers/connectors/registry', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/suppliers/connectors/registry')>('@/lib/suppliers/connectors/registry')
+  return { ...actual, getConnector: (key: string) => getConnectorMock(key) }
+})
 
 function makeSelectChain(row: unknown) {
   const chain: Record<string, unknown> = {}

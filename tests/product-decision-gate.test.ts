@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+
+// Milestone: execution reliability. `priceExecution.ts` now imports the
+// circuit-breaker gate (`marketplaces/connectors/executionGate.ts`), which
+// is `server-only` — same technique every other server-only-adjacent test
+// file in this repo already uses.
+vi.mock('server-only', () => ({}))
+
 import { decisionPermitsExecution, decisionBlocksExecution, decisionBlockReason, EXECUTION_PERMITTED_DECISIONS } from '@/lib/products/decisionGate'
 import { assessPublicationReadiness, type PublicationGateInput } from '@/lib/marketplaces/publicationGate'
 import { assessCompliance } from '@/lib/compliance/rules'

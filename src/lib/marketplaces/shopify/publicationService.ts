@@ -20,7 +20,11 @@ import { checkPriceOverride, type PriceOverrideResult } from './priceOverride'
 import type { TablesUpdate } from '@/lib/supabase/database.types'
 import { classifyActionRisk } from '@/lib/automation/riskClassification'
 import { buildDryRunResult, type DryRunResult } from '@/lib/automation/dryRun'
+import { evaluateAutomationPolicy } from '@/lib/automation/policyEngine'
+import { createAutomationAction, completeAutomationAction } from '@/lib/automation/actions'
+import { withMarketplaceConnectorGate } from '../connectors/executionGate'
 import type { PolicyRequirement, PolicyResult } from '@/lib/automation/types'
+import type { AutomationRiskLevel } from '@/lib/automation/types'
 
 /** This business's primary sales destination today — Shopify UK-first, per Phase 8/9's own design. Never hard-coded anywhere else; every other call site reads it from here. */
 const PRIMARY_DESTINATION_COUNTRY = 'GB'
@@ -365,6 +369,58 @@ interface Actor {
   label: string | null
 }
 
+/**
+ * Milestone: execution reliability & unified write path. Every operator-
+ * triggered Shopify write (`createDraft`, `publishLive`, `pauseListing`)
+ * now records a real `automation_actions` row and is evaluated by the same
+ * `evaluateAutomationPolicy` choke point every autonomous action already
+ * goes through — the kill switch, the fail-closed unknown-automation-state
+ * check, and the business-settings-configured gate all apply here too, not
+ * only to scheduled jobs. The operator's own explicit click is what makes
+ * the domain outcome `'auto_permitted'` (the eligibility/state-machine
+ * checks that already ran are the real domain decision); the policy layer
+ * below can still refuse it for a reason the operator's click cannot see
+ * or override — exactly the same relationship `priceExecution.ts` has
+ * between a domain engine's verdict and the policy engine's own checks.
+ */
+async function gatePublicationAction(
+  orgId: string,
+  actionType: 'publish_product' | 'pause_product',
+  productId: string,
+  reason: string,
+  riskLevel: AutomationRiskLevel,
+  idempotencyKey: string,
+): Promise<Result<{ actionId: string }, string>> {
+  const settings = await getAutomationSettingsForOrg(orgId)
+  const policy = evaluateAutomationPolicy({
+    actionType,
+    settings,
+    domainOutcome: 'auto_permitted',
+    domainReason: reason,
+    domainRequirements: [],
+    riskLevel,
+  })
+
+  const created = await createAutomationAction({
+    orgId,
+    idempotencyKey,
+    actionType,
+    entityType: 'channel_product',
+    entityId: productId,
+    reason: policy.reason,
+    inputFacts: {},
+    decision: {},
+    policy,
+    automationLevel: settings.automationLevel,
+    actorType: 'user',
+  })
+
+  if (created.status !== 'executing') {
+    return err(created.alreadyExisted && created.status === 'succeeded' ? 'This action has already been completed.' : `Blocked: ${policy.reason}`)
+  }
+  return ok({ actionId: created.id })
+}
+
 async function recordListingTransition(
   orgId: string,
   channelProductId: string,
@@ -420,10 +476,21 @@ export async function createDraft(orgId: string, productId: string, selectedPric
     return err(`Not eligible for Shopify publication: ${preview.eligibility.blockingReasons.join(' ')}`)
   }
 
+  // Milestone: execution reliability & unified write path — the policy
+  // choke point (kill switch, business-settings-configured, risk), checked
+  // immediately before any connector call. Draft creation is reversible
+  // and never customer-visible, so its own risk is classified `'low'`
+  // (never `'unknown'`, unlike `dryRunCreateShopifyDraft`'s honestly
+  // uncommitted classification for a preview that hasn't decided to act).
+  const gated = await gatePublicationAction(orgId, 'publish_product', productId, 'Operator requested a Shopify draft.', 'low', `draft-${productId}`)
+  if (!gated.ok) return gated
+  const { actionId } = gated.value
+
   // The capability gate — never call a marketplace write method when its
   // capability is declared false, exactly matching every other write in
   // this codebase (see the JSDoc on MarketplaceConnector.createListing).
   if (!getShopifyConnector().descriptor.capabilities.createListings) {
+    await completeAutomationAction(actionId, { succeeded: false, error: 'Shopify write access is not configured — createListings capability is false.', orgId, entityType: 'channel_product', entityId: productId, verificationStatus: 'not_applicable', reconciliationStatus: 'not_applicable' })
     await recordAudit({
       orgId,
       action: 'CHANNEL_SYNC_FAILED',
@@ -440,11 +507,13 @@ export async function createDraft(orgId: string, productId: string, selectedPric
     return err('Shopify write access is not configured (IMPLEMENTED: yes, CONFIGURED: no, VERIFIED: no) — see Settings → Integrations for exactly what is missing.')
   }
 
-  const result = await getShopifyConnector().createListing(payload)
+  const result = await withMarketplaceConnectorGate(orgId, getShopifyConnector(), () => getShopifyConnector().createListing(payload))
 
   if (!result.ok) {
+    const detail = typeof result.error === 'string' ? result.error : result.error.detail
+    await completeAutomationAction(actionId, { succeeded: false, error: detail, orgId, entityType: 'channel_product', entityId: productId, verificationStatus: 'failed', reconciliationStatus: 'not_applicable' })
     await writeChannelProductRow(orgId, channelId, productId, existingListing?.id ?? null, {
-      sync_error: result.error.detail,
+      sync_error: detail,
       last_synced_at: new Date().toISOString(),
     })
     await recordAudit({
@@ -456,10 +525,10 @@ export async function createDraft(orgId: string, productId: string, selectedPric
       actorUserId: actor.userId,
       actorLabel: actor.label,
       result: 'failure',
-      error: result.error.detail,
-      reason: `Shopify draft creation failed: ${result.error.reason}.`,
+      error: detail,
+      reason: `Shopify draft creation failed.`,
     })
-    return err(`Shopify draft creation failed: ${result.error.detail}`)
+    return err(`Shopify draft creation failed: ${detail}`)
   }
 
   // VERIFY — Milestone: automation control plane. `createListing`'s own
@@ -471,13 +540,24 @@ export async function createDraft(orgId: string, productId: string, selectedPric
   // "cannot confirm," never presented as a rejection of the write itself.
   let verificationStatus: 'verified' | 'failed' | 'uncertain' | 'not_applicable' = 'not_applicable'
   if (result.value.externalId && getShopifyConnector().descriptor.capabilities.verifyWrites) {
-    const verifyResult = await getShopifyConnector().verifyListingState(result.value.externalId)
+    const verifyResult = await withMarketplaceConnectorGate(orgId, getShopifyConnector(), () => getShopifyConnector().verifyListingState(result.value.externalId!))
     if (verifyResult.ok) {
       verificationStatus = verifyResult.value.priceMinor === selectedPriceMinor ? 'verified' : 'failed'
     } else {
       verificationStatus = 'uncertain'
     }
   }
+
+  await completeAutomationAction(actionId, {
+    succeeded: true,
+    error: null,
+    orgId,
+    entityType: 'channel_product',
+    entityId: productId,
+    externalRef: result.value.externalId,
+    verificationStatus,
+    reconciliationStatus: verificationStatus === 'verified' ? 'matched' : verificationStatus === 'failed' ? 'discrepancy' : 'pending',
+  })
 
   const writeResult = await writeChannelProductRow(orgId, channelId, productId, existingListing?.id ?? null, {
     external_id: result.value.externalId,
@@ -536,7 +616,13 @@ export async function publishLive(orgId: string, productId: string, actor: Actor
   const transitionPlan = planListingTransition({ from: listing.workflow_state, to: 'published', reason: 'Owner explicitly triggered live publication.' })
   if (!transitionPlan.ok) return err(transitionPlan.error)
 
+  const idempotencyKey = `publish-${productId}`
+  const gated = await gatePublicationAction(orgId, 'publish_product', productId, 'Owner explicitly triggered live publication.', 'medium', idempotencyKey)
+  if (!gated.ok) return gated
+  const { actionId } = gated.value
+
   if (!getShopifyConnector().descriptor.capabilities.writeListings) {
+    await completeAutomationAction(actionId, { succeeded: false, error: 'Shopify write access is not configured — writeListings capability is false.', orgId, entityType: 'channel_product', entityId: productId, verificationStatus: 'not_applicable', reconciliationStatus: 'not_applicable' })
     await recordAudit({
       orgId, action: 'CHANNEL_SYNC_FAILED', entityType: 'channel_product', entityId: productId,
       actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
@@ -546,16 +632,46 @@ export async function publishLive(orgId: string, productId: string, actor: Actor
     return err('Shopify write access is not configured (IMPLEMENTED: yes, CONFIGURED: no, VERIFIED: no) — publication was not attempted against Shopify.')
   }
 
-  const idempotencyKey = `publish-${productId}`
-  const result = await getShopifyConnector().setListingStatus({ externalId: listing.external_id, idempotencyKey, status: 'active' })
+  const result = await withMarketplaceConnectorGate(orgId, getShopifyConnector(), () => getShopifyConnector().setListingStatus({ externalId: listing.external_id!, idempotencyKey, status: 'active' }))
 
   if (!result.ok) {
+    const detail = typeof result.error === 'string' ? result.error : result.error.detail
+    await completeAutomationAction(actionId, { succeeded: false, error: detail, orgId, entityType: 'channel_product', entityId: productId, verificationStatus: 'failed', reconciliationStatus: 'not_applicable' })
     await recordAudit({
       orgId, action: 'CHANNEL_SYNC_FAILED', entityType: 'channel_product', entityId: productId,
       actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
-      result: 'failure', error: result.error.detail, reason: `Live publication failed: ${result.error.reason}.`,
+      result: 'failure', error: detail, reason: `Live publication failed.`,
     })
-    return err(`Live publication failed: ${result.error.detail}`)
+    return err(`Live publication failed: ${detail}`)
+  }
+
+  // VERIFY — Milestone: execution reliability. Never assume the write
+  // call's own "accepted" response is proof; read the listing back.
+  let verified = false
+  let verificationStatus: 'verified' | 'failed' | 'uncertain' = 'uncertain'
+  if (getShopifyConnector().descriptor.capabilities.verifyWrites) {
+    const verifyResult = await withMarketplaceConnectorGate(orgId, getShopifyConnector(), () => getShopifyConnector().verifyListingState(listing.external_id!))
+    if (verifyResult.ok && verifyResult.value.status === 'active') {
+      verified = true
+      verificationStatus = 'verified'
+    } else if (verifyResult.ok) {
+      verificationStatus = 'failed'
+    }
+  }
+
+  await completeAutomationAction(actionId, {
+    succeeded: verified, error: verified ? null : 'The write was submitted, but the marketplace could not be confirmed to reflect it.',
+    orgId, entityType: 'channel_product', entityId: productId,
+    verificationStatus, reconciliationStatus: verified ? 'matched' : verificationStatus === 'failed' ? 'discrepancy' : 'pending',
+  })
+
+  if (!verified) {
+    await recordAudit({
+      orgId, action: 'CHANNEL_SYNC_FAILED', entityType: 'channel_product', entityId: productId,
+      actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
+      result: 'failure', error: 'Unverified after submission.', reason: 'Live publication submitted but could not be confirmed against Shopify — Commerce OS has NOT marked this live.',
+    })
+    return err('Publication was submitted, but the marketplace could not be confirmed to reflect it — treated as unverified, not as succeeded. Commerce OS has not marked this listing live.')
   }
 
   await supabase.from('channel_products').update({ status: 'live', workflow_state: 'published', last_synced_at: new Date().toISOString(), sync_error: null }).eq('id', listing.id)
@@ -563,7 +679,7 @@ export async function publishLive(orgId: string, productId: string, actor: Actor
   await recordAudit({
     orgId, action: 'LISTING_PUBLISHED', entityType: 'channel_product', entityId: productId,
     actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label,
-    reason: 'Product published live on Shopify by explicit owner action.',
+    reason: 'Product published live on Shopify by explicit owner action, verified against the marketplace.',
   })
 
   return ok(true)
@@ -577,16 +693,53 @@ export async function pauseListing(orgId: string, productId: string, reason: str
   const transitionPlan = planListingTransition({ from: listing.workflow_state, to: 'paused', reason })
   if (!transitionPlan.ok) return err(transitionPlan.error)
 
+  // Milestone: execution reliability. A stable idempotency key — the
+  // previous `pause-${productId}-${Date.now()}` produced a fresh key on
+  // every call, so a genuine retry of a failed pause could never be
+  // recognised as the same action, unlike every other write in this file.
+  const idempotencyKey = `pause-${productId}`
+  const gated = await gatePublicationAction(orgId, 'pause_product', productId, reason, 'medium', idempotencyKey)
+  if (!gated.ok) return gated
+  const { actionId } = gated.value
+
   if (!getShopifyConnector().descriptor.capabilities.writeListings) {
+    await completeAutomationAction(actionId, { succeeded: false, error: 'Shopify write access is not configured — writeListings capability is false.', orgId, entityType: 'channel_product', entityId: productId, verificationStatus: 'not_applicable', reconciliationStatus: 'not_applicable' })
     return err('Shopify write access is not configured (IMPLEMENTED: yes, CONFIGURED: no, VERIFIED: no) — pause was not attempted against Shopify.')
   }
 
-  const result = await getShopifyConnector().setListingStatus({ externalId: listing.external_id, idempotencyKey: `pause-${productId}-${Date.now()}`, status: 'paused' })
-  if (!result.ok) return err(`Pause failed: ${result.error.detail}`)
+  const result = await withMarketplaceConnectorGate(orgId, getShopifyConnector(), () => getShopifyConnector().setListingStatus({ externalId: listing.external_id!, idempotencyKey, status: 'paused' }))
+  if (!result.ok) {
+    const detail = typeof result.error === 'string' ? result.error : result.error.detail
+    await completeAutomationAction(actionId, { succeeded: false, error: detail, orgId, entityType: 'channel_product', entityId: productId, verificationStatus: 'failed', reconciliationStatus: 'not_applicable' })
+    return err(`Pause failed: ${detail}`)
+  }
+
+  // VERIFY — never assume the write call's own "accepted" response is proof.
+  let verified = false
+  let verificationStatus: 'verified' | 'failed' | 'uncertain' = 'uncertain'
+  if (getShopifyConnector().descriptor.capabilities.verifyWrites) {
+    const verifyResult = await withMarketplaceConnectorGate(orgId, getShopifyConnector(), () => getShopifyConnector().verifyListingState(listing.external_id!))
+    if (verifyResult.ok && verifyResult.value.status === 'paused') {
+      verified = true
+      verificationStatus = 'verified'
+    } else if (verifyResult.ok) {
+      verificationStatus = 'failed'
+    }
+  }
+
+  await completeAutomationAction(actionId, {
+    succeeded: verified, error: verified ? null : 'The write was submitted, but the marketplace could not be confirmed to reflect it.',
+    orgId, entityType: 'channel_product', entityId: productId,
+    verificationStatus, reconciliationStatus: verified ? 'matched' : verificationStatus === 'failed' ? 'discrepancy' : 'pending',
+  })
+
+  if (!verified) {
+    return err('Pause was submitted, but the marketplace could not be confirmed to reflect it — treated as unverified, not as succeeded. Commerce OS has not marked this listing paused.')
+  }
 
   await supabase.from('channel_products').update({ status: 'paused', workflow_state: 'paused', last_synced_at: new Date().toISOString() }).eq('id', listing.id)
   await recordListingTransition(orgId, listing.id, listing.workflow_state, 'paused', reason, actor)
-  await recordAudit({ orgId, action: 'LISTING_PAUSED', entityType: 'channel_product', entityId: productId, actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label, reason })
+  await recordAudit({ orgId, action: 'LISTING_PAUSED', entityType: 'channel_product', entityId: productId, actorType: 'user', actorUserId: actor.userId, actorLabel: actor.label, reason: `${reason} (verified against the marketplace)` })
 
   return ok(true)
 }

@@ -117,7 +117,17 @@ export interface MarketplaceListingSnapshot {
   externalId: string
   channelProductRef: string
   title: string
-  status: 'active' | 'draft' | 'archived' | 'removed'
+  /**
+   * `'paused'` added alongside `MarketplaceConnector.setListingStatus`'s
+   * write-side value of the same name (Milestone: execution reliability) —
+   * a real, pre-existing gap where a connector could be asked to write
+   * `'paused'` but had no corresponding value to ever read back and
+   * confirm it. A connector whose provider genuinely has no distinct
+   * "paused" state of its own should map its closest real equivalent here
+   * explicitly (as `shopifyDemo.ts` now does), never silently drop the
+   * distinction.
+   */
+  status: 'active' | 'draft' | 'archived' | 'removed' | 'paused'
   priceMinor: number
   currency: string
   stockQty: number | null
