@@ -35,9 +35,9 @@ export const RECHECK_FOR_REQUIREMENT: Readonly<Record<string, RecheckKind>> = {
   // that same assessment.
   supplier_approved: 'lifecycle_facts',
   supplier_facts_fresh: 'lifecycle_facts',
-  // Intelligence is only ever recomputed by a human today (import, or the
-  // "recalculate" action) — there is no job that can refresh it, so this
-  // resolves to a notification rather than work the system can do itself.
+  // Recomputed through the real computeProductIntelligence engine via the
+  // candidate_intelligence_refresh job (handlers/productHandlers.ts) —
+  // never a second scoring system, and never guessed.
   intelligence_fresh: 'product_intelligence',
   meets_minimum_score: 'product_intelligence',
 }
