@@ -1,4 +1,5 @@
 import { AUTONOMOUS_STAGE_PATH } from '@/lib/products/candidateGateState'
+import { resolveBusinessConfiguration } from '@/lib/automation/settingsTypes'
 import type { Monitor, MonitorContext, MonitorRunOutcome } from '../eventTypes'
 import type { ProductStage } from '@/lib/core/domain'
 
@@ -22,10 +23,25 @@ import type { ProductStage } from '@/lib/core/domain'
  * autonomous pre-launch path is a candidate whose facts may have changed
  * since the last cycle. What stops this from producing an endless stream of
  * duplicate work is the dedupe key, not a narrow trigger condition — it is
- * keyed on the facts that would change the answer (stage plus the freshness
- * anchor of the intelligence), so an unchanged candidate produces exactly
- * one event no matter how many cycles run, and a candidate whose facts have
- * genuinely moved produces exactly one more.
+ * keyed on the facts that would change the answer (stage, the freshness
+ * anchor of the intelligence, AND the organisation's own automation
+ * readiness), so an unchanged candidate produces exactly one event no
+ * matter how many cycles run, and a candidate whose facts have genuinely
+ * moved produces exactly one more.
+ *
+ * `orgAutomationReady` exists because of a genuine incident this milestone's
+ * audit found in production: five real candidates were reviewed once while
+ * `business_settings` had zero rows, correctly blocked, and their events
+ * were left `open` (nothing in this codebase ever calls `resolveEvent` —
+ * `domain_events.dedupe_key` is unique, so an open event with an unchanged
+ * key can never be recreated). Once the settings were saved, `stage` and
+ * the intelligence freshness anchor were STILL unchanged, so without this
+ * fix the exact same five candidates would have been silently stuck at
+ * "blocked, unknown automation state" forever — the org-level condition
+ * that caused the block would have resolved with no code path left able to
+ * notice. Including the org's own readiness in the key makes that specific
+ * resolution a genuinely new fact, exactly like a stage change or a
+ * re-scored candidate.
  */
 
 export interface CandidateIntelligenceSubject {
@@ -63,6 +79,15 @@ export const candidateIntelligenceMonitor: Monitor<CandidateIntelligenceSubject>
         // notification would not repeat every cycle.
         if (intel.recommendation.freshness === 'unavailable') continue
 
+        // Mirrors exactly the three organisation-level requirements
+        // `productHandlers.ts`'s `isGloballyBlocked` checks against the real
+        // policy result: automation state known, not paused, and every
+        // required business setting present. Computed directly from
+        // `ctx.settings` (already available to every monitor) rather than
+        // running the real policy engine here — this module only ever
+        // decides whether a review is due, never the review's own verdict.
+        const orgAutomationReady = ctx.settings.automationStateKnown && !ctx.settings.automationPaused && resolveBusinessConfiguration(ctx.settings).configured
+
         const result = await ctx.events.createEvent({
           orgId: ctx.orgId,
           eventType: 'CANDIDATE_LIFECYCLE_REVIEW_DUE',
@@ -76,15 +101,21 @@ export const candidateIntelligenceMonitor: Monitor<CandidateIntelligenceSubject>
             recommendation: intel.recommendation.value,
             recommendationAsOf: intel.recommendation.asOf,
             freshness: intel.recommendation.freshness,
+            orgAutomationReady,
           },
           // Keyed on everything that would change the review's answer: the
-          // stage it is being reviewed from, and the intelligence's own
-          // freshness anchor. An unchanged candidate therefore dedupes
-          // across every subsequent cycle; a candidate that has just
-          // advanced, or been re-scored, is a genuinely new condition and
-          // gets exactly one new review. This is what makes the loop
-          // continuous without being repetitive.
-          dedupeKey: `candidate-review:${subject.productId}:${subject.channel}:${subject.stage}:${intel.recommendation.asOf ?? 'never'}`,
+          // stage it is being reviewed from, the intelligence's own
+          // freshness anchor, AND whether the organisation's own automation
+          // state currently permits anything to happen at all. An
+          // unchanged candidate in an unchanged organisation therefore
+          // dedupes across every subsequent cycle; a candidate that has
+          // just advanced, been re-scored, OR whose organisation just
+          // became (or stopped being) ready is a genuinely new condition
+          // and gets exactly one new review. This is what makes the loop
+          // continuous without being repetitive — and what stops it from
+          // getting permanently stuck the moment a block was ever caused by
+          // something outside the candidate's own facts.
+          dedupeKey: `candidate-review:${subject.productId}:${subject.channel}:${subject.stage}:${intel.recommendation.asOf ?? 'never'}:${orgAutomationReady}`,
         })
 
         if (!result.deduplicated) {

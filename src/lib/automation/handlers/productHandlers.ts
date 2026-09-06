@@ -2,6 +2,7 @@ import { evaluateProductMonitoring } from '../monitoring'
 import { evaluatePublicationAutomation } from '../publicationAutomation'
 import { executePriceChange, type PriceExecutionInput } from '../priceExecution'
 import { evaluateAutomationPolicy } from '../policyEngine'
+import { resolveBusinessConfiguration } from '../settingsTypes'
 import { calculateProfitability } from '@/lib/profitability'
 import { assessCompliance, type ComplianceContext } from '@/lib/compliance/rules'
 import { assessAmazonCapability, assessShopifyCapability } from '@/lib/suppliers/scoring'
@@ -255,7 +256,19 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
       complianceFreshness: verdicts.compliance.freshness,
       profitabilityVerdict: verdicts.profitability.value,
       profitabilityFreshness: verdicts.profitability.freshness,
-      businessSettingsConfigured: settings.businessSettingsConfigured,
+      // Milestone: production first-run verification. `settings.businessSettingsConfigured`
+      // is true whenever ANY business_settings row exists, regardless of
+      // whether the required commercial fields inside it are filled in —
+      // exactly the row-exists/fields-complete distinction
+      // `resolveBusinessConfiguration` exists to draw. This gate's own
+      // label says "All required business settings are on file"; only
+      // `resolveBusinessConfiguration(settings).configured` actually means
+      // that. Passing the raw flag would let a row with, say, a null
+      // `import_duty_pct` read as PASS here while every other engine
+      // (`recommendProduct`, the profitability gate) correctly treats it
+      // as unconfigured — precisely the "configured thresholds silently
+      // replaced" class of bug this phase's audit was asked to find.
+      businessSettingsConfigured: resolveBusinessConfiguration(settings).configured,
     },
     settings,
   )
@@ -302,9 +315,9 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
     // recheck that could resolve it so the next cycle can retry — but only
     // when the refusal is about this candidate rather than about the whole
     // organisation's state (see `isGloballyBlocked`).
-    if (advance.blockedOnlyByUnknowns && !isGloballyBlocked(policy, settings)) {
+    if (advance.blockedOnlyByUnknowns && !isGloballyBlocked(policy)) {
       await enqueueRechecks(job, store, payload, rechecks, anchors)
-    } else if (gateState.failedKeys.length > 0 && !isGloballyBlocked(policy, settings)) {
+    } else if (gateState.failedKeys.length > 0 && !isGloballyBlocked(policy)) {
       await store.notify({
         orgId: job.orgId, severity: 'warning', category: 'discovery',
         title: `Candidate blocked: ${payload.productId}`,
@@ -326,7 +339,7 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
 
   if (!advance.to) {
     await store.completeAutomationAction(created.id, { succeeded: true, orgId: job.orgId, entityType: 'product', entityId: payload.productId })
-    if (advance.blockedOnlyByUnknowns && !isGloballyBlocked(policy, settings)) await enqueueRechecks(job, store, payload, rechecks, anchors)
+    if (advance.blockedOnlyByUnknowns && !isGloballyBlocked(policy)) await enqueueRechecks(job, store, payload, rechecks, anchors)
     return { succeeded: true }
   }
 
@@ -389,12 +402,19 @@ export async function handleCandidateLifecycleReview(job: JobRecord, store: Auto
  * automation dashboard, and in every `automation_actions` row's own policy
  * result.
  */
-function isGloballyBlocked(
-  policy: { requirements: readonly { key: string; satisfied: boolean }[] },
-  settings: { businessSettingsConfigured: boolean },
-): boolean {
-  const killSwitched = policy.requirements.some((r) => (r.key === 'automation_not_paused' || r.key === 'automation_state_known') && !r.satisfied)
-  return killSwitched || !settings.businessSettingsConfigured
+function isGloballyBlocked(policy: { requirements: readonly { key: string; satisfied: boolean }[] }): boolean {
+  // Milestone: production first-run verification. Previously took a second,
+  // separate `settings.businessSettingsConfigured` argument and checked the
+  // raw "a row exists" flag directly — a different fact from the policy
+  // engine's own `business_settings_configured` requirement (which
+  // correctly checks `resolveBusinessConfiguration(settings).configured`,
+  // "every required field is filled in"). Two sources of truth for the same
+  // question could disagree; reading the policy's own already-computed
+  // requirement is the one place this can never drift from what the policy
+  // engine itself decided.
+  return policy.requirements.some(
+    (r) => (r.key === 'automation_not_paused' || r.key === 'automation_state_known' || r.key === 'business_settings_configured') && !r.satisfied,
+  )
 }
 
 /**

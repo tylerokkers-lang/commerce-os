@@ -10,7 +10,7 @@ import { createInMemoryFactsLoader } from '@/lib/automation/inMemoryFactsLoader'
 import { runWorkerBatch } from '@/lib/automation/worker'
 import { dryRunCandidateLifecycleReview, describeMarketplaceExecution } from '@/lib/automation/dryRun'
 import { assembleCandidateGateState, planCandidateAdvance } from '@/lib/products/candidateGateState'
-import { DEMO_AUTOMATION_SETTINGS, UNKNOWN_STATE_AUTOMATION_SETTINGS } from '@/lib/automation/settingsTypes'
+import { DEMO_AUTOMATION_SETTINGS, UNKNOWN_STATE_AUTOMATION_SETTINGS, resolveBusinessConfiguration } from '@/lib/automation/settingsTypes'
 import { CONFIGURED_AUTOMATION_SETTINGS } from './helpers/automationSettings'
 import { fromMajor } from '@/lib/core/money'
 import type { LifecycleHandlerDeps } from '@/lib/automation/handlers/productHandlers'
@@ -528,6 +528,94 @@ describe('the real production fact pattern (business_settings empty)', () => {
     // notification would contradict its own title.
     expect(blocked[0].body).not.toMatch(/is satisfied by current, fresh facts/)
     expect(blocked[0].body).toBe(s.getState().actions[0].policyResult.reason)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Production first-run verification — the exact incident found in
+// production: five real candidates were reviewed once while
+// business_settings had zero rows, correctly blocked, and left an `open`
+// domain event each (dedupe_key is unique; nothing ever calls
+// `resolveEvent`). Once the settings were saved, stage and the intelligence
+// freshness anchor were still unchanged, so without the fix below the same
+// five candidates would have stayed stuck at "blocked, unknown automation
+// state" forever, with no code path able to notice the organisation had
+// become ready.
+// ---------------------------------------------------------------------------
+
+describe('an org-level block resolves (business settings first saved) without getting the candidate stuck', () => {
+  function subjectAt(stage: CandidateIntelligenceSubject['stage'] = 'discovered'): CandidateIntelligenceSubject {
+    return { productId: PRODUCT, stage, channel: CHANNEL, supplierId: SUPPLIER }
+  }
+  function intelFacts() {
+    return createInMemoryFactsLoader({
+      productIntelligence: { [PRODUCT]: { recommendation: 'unconfigured', recommendationReason: 'No business settings saved.', computedAt: FRESH } },
+    })
+  }
+
+  it('reproduces the incident, then proves the fix: the same stage and intelligence anchor still earns a new review once the org becomes ready', async () => {
+    const events = createInMemoryEventStore()
+    const s = store(UNKNOWN_STATE_AUTOMATION_SETTINGS)
+    const notReadyCtx: MonitorContext = { orgId: ORG, store: s, events, facts: intelFacts(), connectors: () => undefined, settings: UNKNOWN_STATE_AUTOMATION_SETTINGS, now: NOW }
+
+    // Cycle 1: organisation not ready (the real incident's starting state).
+    const first = await candidateIntelligenceMonitor.run(notReadyCtx, [subjectAt()])
+    expect(first.eventsCreated).toBe(1)
+
+    // Cycle 2: STILL not ready, same stage, same intelligence anchor —
+    // this must dedupe exactly as before the fix. Proves the fix did not
+    // turn every unchanged cycle into duplicate work.
+    const stillNotReady = await candidateIntelligenceMonitor.run(notReadyCtx, [subjectAt()])
+    expect(stillNotReady.eventsCreated).toBe(0)
+    expect(stillNotReady.eventsDeduplicated).toBe(1)
+
+    // Cycle 3: business_settings now saved (the real fix landing) — stage
+    // and intelligence anchor are IDENTICAL to cycle 1. Before this
+    // milestone's fix, this would also have deduplicated forever.
+    const readyCtx: MonitorContext = { ...notReadyCtx, settings: CONFIGURED_AUTOMATION_SETTINGS, facts: intelFacts() }
+    const nowReady = await candidateIntelligenceMonitor.run(readyCtx, [subjectAt()])
+    expect(nowReady.eventsCreated, 'the organisation becoming ready must count as a genuinely new fact, or the candidate is stuck forever').toBe(1)
+    expect(nowReady.eventsDeduplicated).toBe(0)
+
+    // And the loop still correctly dedupes going forward once ready.
+    const stillReady = await candidateIntelligenceMonitor.run(readyCtx, [subjectAt()])
+    expect(stillReady.eventsCreated).toBe(0)
+    expect(stillReady.eventsDeduplicated).toBe(1)
+
+    expect(s.getState().jobs.filter((j) => j.jobType === 'candidate_lifecycle_review').length).toBe(2)
+  })
+
+  it('the org-readiness signal reflects settings.automationPaused and automationStateKnown too, not only the configured-fields check', async () => {
+    const events = createInMemoryEventStore()
+    const pausedButConfigured = { ...CONFIGURED_AUTOMATION_SETTINGS, automationPaused: true }
+    const ctxPaused: MonitorContext = { orgId: ORG, store: store(pausedButConfigured), events, facts: intelFacts(), connectors: () => undefined, settings: pausedButConfigured, now: NOW }
+    const whilePaused = await candidateIntelligenceMonitor.run(ctxPaused, [subjectAt()])
+    expect(whilePaused.eventsCreated).toBe(1)
+
+    const ctxResumed: MonitorContext = { ...ctxPaused, settings: CONFIGURED_AUTOMATION_SETTINGS, facts: intelFacts() }
+    const afterResume = await candidateIntelligenceMonitor.run(ctxResumed, [subjectAt()])
+    expect(afterResume.eventsCreated, 'resuming automation must also count as a new fact, not only saving settings the first time').toBe(1)
+  })
+})
+
+describe('the gate state reads the real "all required fields present" fact, not merely "a settings row exists"', () => {
+  it('a settings row that exists but is missing a required field must NOT read as configured', async () => {
+    const s = store({ ...CONFIGURED_AUTOMATION_SETTINGS, importDutyPct: null }) // A row exists (businessSettingsConfigured: true on the raw type) but one required field is null.
+    await enqueueReview(s)
+    await runReview(s, facts({ stage: 'compliance_review' }))
+
+    // Must NOT advance: `resolveBusinessConfiguration` correctly reports
+    // this as unconfigured, and the gate must agree — reading the raw
+    // "a row exists" flag instead would have incorrectly reported PASS here.
+    expect(s.getState().productStageChanges).toEqual([])
+    expect(s.getState().actions[0].policyResult.outcome).not.toBe('allow_automatic')
+  })
+
+  it('the same incomplete-row settings genuinely differ from a fully configured row on the gate itself', () => {
+    const incomplete = { ...CONFIGURED_AUTOMATION_SETTINGS, importDutyPct: null }
+    const complete = CONFIGURED_AUTOMATION_SETTINGS
+    expect(resolveBusinessConfiguration(incomplete).configured).toBe(false)
+    expect(resolveBusinessConfiguration(complete).configured).toBe(true)
   })
 })
 
