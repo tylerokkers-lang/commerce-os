@@ -32,7 +32,21 @@ const CHANNEL = 'shopify'
  * the same interfaces production uses, never mocks of the decision itself.
  */
 
-const NOW = new Date('2026-09-06T12:00:00Z')
+// Real current time, not a fixed past date. Several tests below drive the
+// decision through the real job handler (`runWorkerBatch` ->
+// `handleCandidateLifecycleReview`), which calls
+// `facts.loadProductIntelligenceFacts(orgId, productId)` without passing a
+// clock — so the in-memory facts loader's own `now: Date = new Date()`
+// default resolves to the REAL wall-clock time at test-run, not whatever
+// fixed `NOW` this file declares. A hardcoded past `NOW` therefore drifts
+// stale relative to that internal default the moment real time advances
+// past the shortest freshness window in play (`profitabilityVerdict`, 24h)
+// — confirmed: this file failed this exact way on unmodified `739f8a9`,
+// with zero relation to any code change, purely because real time had
+// moved on. `now()` here keeps every "fresh" fixture genuinely fresh
+// relative to both this file's own explicit-`now` assertions and the
+// facts loader's internal default, for as long as this suite exists.
+const NOW = new Date()
 const FRESH = NOW.toISOString()
 const LONG_AGO = new Date(NOW.getTime() - 1000 * 60 * 60 * 24 * 120).toISOString() // 120 days: stale for every window in play.
 

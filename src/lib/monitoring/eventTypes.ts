@@ -108,11 +108,39 @@ export interface EventStore {
   getMonitorConfigNumber(orgId: string, configKey: string, defaultValue: number): Promise<number>
 }
 
-/** True when enough time has passed since the last completed run — the pure due/not-due decision, testable without a database. */
-export function isMonitorDue(lastRunCompletedAt: string | null, intervalMinutes: number, now: Date): boolean {
+/**
+ * Milestone: production scheduling fix. A monitor that only ever runs from
+ * one daily cron drifts later each time it actually does real work — it is
+ * last in the sequential registry order, so processing real subjects (real
+ * candidates, real supplier lookups) pushes its own `completedAt` a few
+ * seconds past the cron's fixed daily start time. The next day, that same
+ * fixed-time cron then arrives a few seconds BEFORE the exact 24h mark,
+ * reads as "not yet due", and skips — after which `completedAt` is frozen
+ * at the older timestamp, so the day after THAT is comfortably overdue and
+ * it runs again. Confirmed directly in production (`monitor_runs`,
+ * `candidate_intelligence`): completed 2026-09-06 03:56:55.058, due
+ * 2026-09-07 03:56:55.058, cron started 03:56:24.463 (29.2s early, skipped);
+ * completed 2026-09-08 03:56:53.715, due 2026-09-09 03:56:53.715, cron
+ * started 03:56:24.508 (29.2s early, skipped again) — a stable ~48h
+ * effective cadence instead of the intended 24h, not a one-off.
+ *
+ * `MONITOR_DUE_GRACE_MINUTES` absorbs exactly that drift: a monitor within
+ * this tolerance of its exact due time is treated as due now, rather than
+ * skipped for a full extra cycle. 2 minutes is ~4x the observed ~30s drift
+ * — enough margin for normal cron-dispatch jitter, and small enough
+ * (0.14% of a 24h interval, 13% of the shortest registered interval,
+ * `supplierMonitor`'s 15 minutes) that it does not materially loosen any
+ * monitor's cadence. This changes only WHEN a monitor's own review runs;
+ * it does not touch what that review decides — no gate, no risk
+ * classification, no lifecycle rule, no capability flag.
+ */
+export const MONITOR_DUE_GRACE_MINUTES = 2
+
+/** True when enough time has passed since the last completed run (within `MONITOR_DUE_GRACE_MINUTES` of the exact boundary) — the pure due/not-due decision, testable without a database. */
+export function isMonitorDue(lastRunCompletedAt: string | null, intervalMinutes: number, now: Date, graceMinutes: number = MONITOR_DUE_GRACE_MINUTES): boolean {
   if (!lastRunCompletedAt) return true
   const dueAt = new Date(lastRunCompletedAt).getTime() + intervalMinutes * 60_000
-  return now.getTime() >= dueAt
+  return now.getTime() >= dueAt - graceMinutes * 60_000
 }
 
 export interface MonitorDescriptor {

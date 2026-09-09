@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createInMemoryEventStore } from '@/lib/monitoring/inMemoryEventStore'
-import { isMonitorDue } from '@/lib/monitoring/eventTypes'
+import { isMonitorDue, MONITOR_DUE_GRACE_MINUTES } from '@/lib/monitoring/eventTypes'
 
 const ORG_A = 'org-a'
 const ORG_B = 'org-b'
@@ -98,5 +98,48 @@ describe('monitor due/not-due scheduling (pure)', () => {
   it('a monitor is due well past its interval', () => {
     const lastRun = new Date(now.getTime() - 60 * 60_000).toISOString()
     expect(isMonitorDue(lastRun, 15, now)).toBe(true)
+  })
+
+  /**
+   * Milestone: production scheduling fix. Reproduces the exact recurring
+   * production incident (`candidate_intelligence`, org
+   * 7fd32963-70b7-42af-b965-3a02bde3f7b1): a monitor whose own completion
+   * drifts a few seconds past a fixed daily cron's start time gets skipped
+   * the very next day by that same margin, then only catches up the day
+   * after — an effective ~48h cadence instead of the intended 24h. Both
+   * real occurrences (2026-09-06 -> 2026-09-07, 2026-09-08 -> 2026-09-09)
+   * measured a ~29.2s gap.
+   */
+  describe('the recurring near-miss this milestone fixes (real production timings)', () => {
+    const dailyIntervalMinutes = 24 * 60
+    // 2026-09-08 03:56:53.715 -> due 2026-09-09 03:56:53.715; the real cron
+    // started 2026-09-09 03:56:24.508 — 29.207s early.
+    const lastCompleted = '2026-09-08T03:56:53.715Z'
+    const realCronStart = new Date('2026-09-09T03:56:24.508Z')
+
+    it('without the grace tolerance, the real cron start would have missed it (documents the bug being fixed)', () => {
+      expect(isMonitorDue(lastCompleted, dailyIntervalMinutes, realCronStart, 0)).toBe(false)
+    })
+
+    it('with the default grace tolerance, the real cron start is treated as due', () => {
+      expect(isMonitorDue(lastCompleted, dailyIntervalMinutes, realCronStart)).toBe(true)
+    })
+
+    it('a monitor genuinely not due — comfortably outside the grace window — still is not due', () => {
+      const wayEarly = new Date(new Date(lastCompleted).getTime() + dailyIntervalMinutes * 60_000 - 2 * 60 * 60_000) // 2 hours before the boundary.
+      expect(isMonitorDue(lastCompleted, dailyIntervalMinutes, wayEarly)).toBe(false)
+    })
+
+    it('the grace tolerance is a small, fixed constant, not proportional to the interval', () => {
+      expect(MONITOR_DUE_GRACE_MINUTES).toBe(2)
+    })
+
+    it('a monitor exactly at the edge of the grace window is due; one second earlier it is not', () => {
+      const dueAt = new Date(lastCompleted).getTime() + dailyIntervalMinutes * 60_000
+      const edgeOfGrace = new Date(dueAt - MONITOR_DUE_GRACE_MINUTES * 60_000)
+      const justBeforeGrace = new Date(edgeOfGrace.getTime() - 1000)
+      expect(isMonitorDue(lastCompleted, dailyIntervalMinutes, edgeOfGrace)).toBe(true)
+      expect(isMonitorDue(lastCompleted, dailyIntervalMinutes, justBeforeGrace)).toBe(false)
+    })
   })
 })
