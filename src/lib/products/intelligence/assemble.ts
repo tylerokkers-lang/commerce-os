@@ -54,8 +54,24 @@ export interface ProductIntelligenceResult {
   computedAt: string
 }
 
-async function loadSupplierOffer(orgId: string, supplierId: string, productId: string) {
-  const supabase = await createServerSupabase()
+/**
+ * Milestone: production first-run verification — fix identified by
+ * auditing why five real candidates' recomputed intelligence read
+ * "no supplier cost is on file for this channel yet" despite a real
+ * `supplier_products` row existing for every one of them. This helper
+ * independently called `createServerSupabase()` (session-scoped, RLS-
+ * enforced) regardless of which client the caller had already resolved —
+ * unlike every other read in `computeProductIntelligence`, which correctly
+ * uses the injected `client` when one is supplied. In a background job
+ * (`candidate_intelligence_refresh`, no user session) that query is
+ * RLS-blocked and returns no rows, not an error, so the failure was
+ * silent. `channelReadiness.ts`'s equivalent `loadSupplierOffer` already
+ * took `supabase` as its first parameter; this one was simply never
+ * updated to match when `computeProductIntelligence` itself was made
+ * background-job-safe. Now takes the resolved client explicitly, exactly
+ * like that one does.
+ */
+async function loadSupplierOffer(supabase: ReadinessClient, orgId: string, supplierId: string, productId: string) {
   const { data } = await supabase
     .from('supplier_products')
     .select('unit_cost_minor, shipping_cost_minor, currency, lead_time_days, stock_qty, in_stock')
@@ -115,7 +131,7 @@ export async function computeProductIntelligence(
     }
   }
 
-  const supplierOffer = supplierId ? await loadSupplierOffer(orgId, supplierId, productId) : null
+  const supplierOffer = supplierId ? await loadSupplierOffer(supabase, orgId, supplierId, productId) : null
 
   const { data: supplierRow } = supplierId
     ? await supabase
